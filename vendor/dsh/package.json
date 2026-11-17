@@ -1,0 +1,14 @@
+{
+  "name": "pentest-platform-dsh-runtime",
+  "private": true,
+  "description": "项目自带的 DSH CLI（封装在项目内，不依赖桌面安装）。版本在这里钉死：升级 DSH 只改这一行，然后跑 install.cmd。pnpm 也自带一份——DSH 的插件管理（`dsh plugin`）靠 PATH 上的 pnpm 干活，而桌面版那份的 pnpm 在它自己的 primary-runtime 里，与这里无关。",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sdk-app": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.2.1-rc.2",
+    "pnpm": "11.28.5"
+  }
+}

@@ -1,0 +1,59 @@
+# 运行期产物：数据库、证书、节点身份、导出物都不进版本库。
+#
+# 特别是 *.key：data/pki 下的 ca.key 是整套运行体系的信任根，
+# 一旦提交就等于把签发权交出去，绝不能让 .gitignore 漏掉它。
+# `data/` 整棵是运行期状态（数据库、证书、装进来的工具、WSL 发行版），
+# 但 `data/skills/` 是**产品内容**：平台启动时把它们当内置技能手册读，
+# 打包脚本里也是唯一一条 DATA_KEEP。整个 `data/` 排除掉，clone 下来
+# 技能列表会是空的，而症状看起来像「导入功能坏了」。
+data/*
+!data/skills/
+*.db
+*.db-journal
+*.db-wal
+*.key
+*.crt
+*.csr
+*.ext
+*.srl
+identity.json
+*-export.html
+out/
+
+__pycache__/
+*.pyc
+.venv/
+
+# 项目自带的 DSH（用 vendor/dsh/install.cmd 装；node_modules 不进仓库）
+vendor/dsh/node_modules/
+
+# 对话工作区：模型在会话里写的脚本、下载、缓存。删掉不影响平台状态（证据在
+# 数据库里），但它会随每一轮对话长出新目录，所以既不进版本库、也不打交付包。
+workspace/
+
+# AgentTeams 的默认状态目录。平台会把 stateDir 改到 data/agent-teams（跟着 data/ 走），
+# 但插件在别处（cwd 不是项目根时）仍可能按默认值落一份；兜底不把团队状态带进仓库。
+.agent-teams/
+
+# `dsh plugin` 每次操作留下的锁文件（进程退掉就失效，内容无意义）。
+.dsh-ops-update-*.lock
+
+# 开发期的临时树：探针脚本、截图与 DOM 转储、下载缓存、渲染夹具。
+# 它们只对**这一台机器上正在查的那件事**有意义；与 workspace/ 同理，
+# 既不进版本库也不打交付包（打包脚本另有 EXCLUDED_PREFIXES，两处各管一边）。
+.scratch/
+.dsh-vision-toolkit/
+.render-fixture/
+
+# 测试与启动产生的运行日志。
+*.log
+.suite_full.log
+
+# 打包清单：由 tools/make_handoff_zip.py 生成（脚本里叫 GENERATED_TOP），
+# 盘上那份只是给人看的副本，内容随每次打包漂移。
+索引.md
+
+# 隧道客户端：54 MB 的单文件二进制，缺失时平台会打印官方下载地址。
+# 放在交付包里有意义（收包人不用另装），放在版本库里只会让每次 clone 都
+# 多拖 54 MB，而且它与本项目的代码没有对应关系。
+tools/cloudflared.exe

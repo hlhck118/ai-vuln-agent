@@ -1,0 +1,60 @@
+# 基于 AI 智能体的自动化漏洞发掘系统 —— 配置示例
+# 复制为 config.toml 后按实际环境修改。默认值即"离线可跑通"的保守配置。
+
+[run]
+name = "demo"
+output_dir = "out"
+max_file_bytes = 524288
+headless = true
+
+[tools]
+enabled = ["builtin_rules", "repo_map", "ast_graph", "sandbox_exec",
+           "poc_generator", "external_sast"]
+# 外部静态分析工具为"能力增强项"，未安装时自动降级为内置规则引擎
+codeql_path = ""
+semgrep_path = ""
+fuzzer_path = ""
+
+[model]
+# provider = "heuristic"     纯离线确定性推理，无需模型即可跑通全流程（演示默认）
+# provider = "openai_compat" 接入私有化大模型（vLLM / Ollama / TGI / 一体机）
+provider = "heuristic"
+# 私有化部署：OpenAI 兼容接口。切换 provider 后生效。
+base_url = "http://127.0.0.1:8000/v1"
+model = "deepseek-r1-distill"
+api_key_env = "VULNAGENT_API_KEY"
+temperature_hypothesis = 0.7
+temperature_verdict = 0.2
+fallback_to_heuristic = true
+
+# 云端模型默认关闭：只有显式打开并填写 cloud_model 才会外发请求。
+# 打开前必须确认样本不含未公开漏洞信息（《网络产品安全漏洞管理规定》第九条）。
+allow_cloud = false
+cloud_base_url = "https://api.example.com/v1"
+cloud_model = ""
+
+[budget]
+max_rounds = 8
+max_tool_calls = 60
+max_tokens = 400000
+max_hypotheses_per_slice = 3
+max_slices = 100
+concurrency = 4
+
+[sandbox]
+# subprocess = 原型默认（临时目录 + 子进程 + 超时）
+# docker     = 生产建议（--network none + 只读挂载 + 资源与进程数限额）
+backend = "subprocess"
+docker_image = "python:3.12-slim"
+timeout_s = 20
+memory_mb = 512
+allow_network = false
+max_output_bytes = 65536
+# 请求容器后端但运行时不可用时，是否允许降级为进程级。
+# 生产必须设为 false：宁可任务失败，也不要把不可信用例放进宿主进程。
+allow_fallback = true
+
+[memory]
+enabled = true
+db_path = "memory/cases.db"
+top_k = 3

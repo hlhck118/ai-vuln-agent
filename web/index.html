@@ -1,0 +1,1741 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 渗透测试平台</title>
+<!-- 外观：**必须在这里、在样式表之前，而且必须是内联的**。
+     挪到 DOMContentLoaded 等于等首屏画完再改色——深色主题的使用者每次刷新都会先看到
+     一帧午夜外观、再闪成玻璃色。换成外部 js 同样不成立：多一次网络往返，那一帧照样在。
+     这里落三个属性（主题 / 重点色 / 磨砂）。**磨砂也在这**：它虽然是材质不是配色，
+     但晚一帧生效同样看得见——22px 的模糊在首帧是 0，界面的层次会跳一下。
+     下面那组字面量与 web/theme.js 的六个常量必须一致，契约测试逐字比对；
+     对不上时的症状是"上次选的那项没记住"，而两处代码各自看都没问题。
+     三份 id 列表（主题 / 重点色 / 磨砂）同样在那里核对。 -->
+<script>
+(function () {
+  var apply = function (attr, ids, key, fallback) {
+    var pick = fallback;
+    try {
+      var saved = localStorage.getItem(key);
+      if (ids.indexOf(saved) >= 0) pick = saved;
+    } catch (err) {
+      /* 隐私模式 / 企业策略下读取即抛。用默认档继续，不能让整页起不来。 */
+    }
+    document.documentElement.setAttribute(attr, pick);
+  };
+  apply('data-theme', ['glass', 'midnight', 'paper', 'terminal', 'contrast'], 'pentest.theme', 'glass');
+  apply('data-accent', ['theme', 'blue', 'indigo', 'cyan', 'purple', 'magenta'], 'pentest.accent', 'theme');
+  apply('data-frost', ['theme', 'off', 'soft', 'mid', 'strong'], 'pentest.frost', 'theme');
+})();
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 通知栈：错误条与截断提示共用的一块浮层，浮在**输入卡片正上方**。
+     两者都是全局通知——换到漏洞页、资产页、设置页时也必须看得见，所以不能挂进
+     某一个页签的流里。而"浮在输入卡片上方"没有纯 CSS 的写法：卡片上沿的位置由
+     输入框行数、目录展开、选项行决定，只有测量才知道。位置由 app.js 的
+     `syncNoticeAnchor()` 写进 `--notice-bottom`；没有输入卡片时退回页面顶部。
+     压层低于模态遮罩（z-index 40），高于页签内容。 -->
+<div id="notice-stack" class="notice-stack" data-anchor="top">
+  <div id="error-bar" class="error-bar hidden" role="alert">
+    <span class="error-icon" aria-hidden="true">!</span>
+    <span id="error-text" class="error-text"></span>
+    <button id="error-close" class="icon-btn" type="button" aria-label="关闭错误提示">×</button>
+  </div>
+  <!-- 图被截断时的醒目提示 -->
+  <div id="truncate-banner" class="truncate-banner hidden" role="status">图仅展示窗口内的记录</div>
+</div>
+
+<!-- 登录门：未认证时只显示这一块，控制台整体不渲染（避免先渲染再遮罩） -->
+<section id="auth-gate" class="auth-gate" aria-label="登录控制台">
+  <div class="auth-card">
+    <!-- 登录门上的字标。图标（那个 28px 的圆角方块）已取消，现在是两层文字：
+         中文主体 + 一行英文。样式与理由见 style.css 的 `.brand-lockup` 那一段。 -->
+    <div class="auth-brand">
+      <span class="brand-lockup">
+        <span class="brand-cn">AI 渗透测试平台</span>
+        <span class="brand-en">AI Pentest Platform</span>
+      </span>
+    </div>
+
+    <p class="auth-loading" id="auth-loading">正在检查登录状态…</p>
+
+    <!-- 首次部署：创建初始管理员 -->
+    <form id="auth-setup-form" class="auth-form hidden" autocomplete="off">
+      <h1 class="auth-title">创建管理员账号</h1>
+      <p class="auth-hint" id="auth-setup-hint">首次使用需要创建管理员，密码至少 10 位。</p>
+      <label class="field-label" for="auth-setup-username">用户名</label>
+      <input id="auth-setup-username" class="input auth-input" type="text" placeholder="admin" autocomplete="username" spellcheck="false">
+      <label class="field-label" for="auth-setup-password">密码（至少 10 位）</label>
+      <input id="auth-setup-password" class="input auth-input" type="password" autocomplete="new-password">
+      <label class="field-label" for="auth-setup-confirm">确认密码</label>
+      <input id="auth-setup-confirm" class="input auth-input" type="password" autocomplete="new-password">
+      <p class="auth-message hidden" id="auth-setup-message" role="alert"></p>
+      <button id="auth-setup-submit" class="btn auth-submit" type="submit">创建并进入</button>
+    </form>
+
+    <!-- 已有账号：登录 -->
+    <form id="auth-login-form" class="auth-form hidden" autocomplete="off">
+      <h1 class="auth-title">登录</h1>
+      <p class="auth-hint" id="auth-login-hint">控制台需要登录后才能访问。</p>
+      <label class="field-label" for="auth-login-username">用户名</label>
+      <input id="auth-login-username" class="input auth-input" type="text" autocomplete="username" spellcheck="false">
+      <label class="field-label" for="auth-login-password">密码</label>
+      <input id="auth-login-password" class="input auth-input" type="password" autocomplete="current-password">
+      <p class="auth-message hidden" id="auth-login-message" role="alert"></p>
+      <button id="auth-login-submit" class="btn auth-submit" type="submit">登录</button>
+    </form>
+  </div>
+</section>
+
+<!-- 控制台外壳：只有认证通过后才取消 hidden -->
+<div id="console-shell" class="console-shell hidden">
+
+<!-- 左侧导航栏：竖向、按用途分两段（功能 / 系统），共十五个页签。
+     改版前是八个并列页签横排在顶栏下面。八个标签挤在一行里不是主要问题，主要
+     问题是它们其实分两类：**这一次操作里在干的事**（控制台 / 仪表盘 / 链路 / 漏洞 /
+     资产 / 流量 / 重发 / 报告 / 任务 / 部署 / 工作空间）、**与作业无关的系统管理**
+     （审批记录 / 日志 / 设置 / 使用说明）。中间曾另立过「产出」一段，后来并回
+     功能段：报告与任务读的都是当前目标跑出来的东西，拆出去反而让人以为它们
+     是另一类入口。横排看不出这个分层，分了段就看出来了。 -->
+<aside class="rail">
+
+  <!-- 左侧栏的字标：与登录门那一处**同构**（同一组 class，尺寸由 `.rail-brand`
+       收窄）。两处都不再带图标。 -->
+  <div class="rail-brand">
+    <span class="brand-lockup">
+      <span class="brand-cn">AI 渗透测试平台</span>
+      <span class="brand-en">AI Pentest Platform</span>
+    </span>
+  </div>
+
+  <!-- 九项各有一枚 16px 线性图标，**内联 SVG**：没有图标字体、没有 CDN —— 这套界面
+       要能在断网的内网里跑，外链图标会在那种环境里掉成方框。图形只做"扫一眼认出是
+       哪一页"，名字仍由文字给，所以每枚图标都 `aria-hidden`（读屏不会把图形念一遍）。
+       样式（尺寸 / 描边 / `currentColor`）见 style.css 的 `.tab-ico`。 -->
+  <nav class="rail-nav" role="tablist" aria-label="主导航">
+    <div class="rail-group">
+      <div class="rail-group-label">功能</div>
+      <!-- 对话排最前、默认打开：它是这个工作台的第一页，不是并列功能之一。
+           其余页签的定位相应降级为"查看状态"——下单这件事统一走自然语言。
+           「入口」徽章已撕：第一页本身就是入口，再挂一个牌子只是同义重复。 -->
+      <button class="tab active" type="button" role="tab" data-tab="dsh"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M7.5 9.4 11 12.75l-3.5 3.35M12.6 16.1h4"/></svg>控制台</button>
+      <!-- 「仪表盘」紧跟控制台：控制台是**干活的地方**（一屏放这一轮的全部消息），
+           仪表盘是**概览**（一屏放全部规模读数、最近任务、高危漏洞）。两者分开是
+           因为它们互不替代，塞进同一页就得二选一。
+           默认页仍是控制台——对话排最前这条定位没有变，改动只是让"现在有什么"
+           不必再滚进某一页去找。 -->
+      <button class="tab" type="button" role="tab" data-tab="dashboard"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.4" y="3.4" width="7.2" height="7.2" rx="1.6"/><rect x="13.4" y="3.4" width="7.2" height="7.2" rx="1.6"/><rect x="3.4" y="13.4" width="7.2" height="7.2" rx="1.6"/><rect x="13.4" y="13.4" width="7.2" height="7.2" rx="1.6"/></svg>仪表盘</button>
+      <button class="tab" type="button" role="tab" data-tab="graph"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6.5" r="2.5"/><circle cx="18" cy="17.5" r="2.5"/><path d="M8.4 10.9 15.6 7.4M8.4 13.1l7.2 3.5"/></svg>探索链路</button>
+      <button class="tab" type="button" role="tab" data-tab="findings"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 4.2 19 6.6v5.1c0 3.9-2.7 6.7-7 8.3-4.3-1.6-7-4.4-7-8.3V6.6z"/><path d="M12 9.2v4M12 15.9h.01"/></svg>漏洞<span class="tab-badge" id="badge-findings"></span></button>
+      <button class="tab" type="button" role="tab" data-tab="assets"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.4 19.6 7.3v9.4L12 20.6 4.4 16.7V7.3z"/><path d="M4.4 7.3 12 11.2l7.6-3.9M12 11.2v9.4"/></svg>资产<span class="tab-badge" id="badge-assets"></span></button>
+      <!-- 「流量」与「请求重发」是一对：前者是**已经发出去过**的请求，后者是
+           "再发一条，或者把上面某一条改一个字段再发"。两块读的是同一张表
+           （`traffic`），流量页点"重发"就把原文带进重发页——分开只是因为
+           一屏同时放两份长正文（请求 + 响应）会挤。 -->
+      <button class="tab" type="button" role="tab" data-tab="traffic"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.6 7.6h12.8M12.4 3.6l4 4-4 4"/><path d="M20.4 16.4H7.6M11.6 12.4l-4 4 4 4"/></svg>流量</button>
+      <button class="tab" type="button" role="tab" data-tab="repeater"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4.4 9.6h13.2"/><path d="M14.2 6.2l3.4 3.4-3.4 3.4"/><path d="M19.6 16.4H6.4"/></svg>请求重发</button>
+      <button class="tab" type="button" role="tab" data-tab="report"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6.4 3.6h7.2l4 4v12.8H6.4z"/><path d="M13.6 3.6v4h4M9.2 12h5.6M9.2 15.6h5.6"/></svg>报告</button>
+      <!-- 「任务」从部署页拆出来独立成页。它是**作业的执行面**——下发什么、跑到哪、
+           基线长什么样；而「部署」回答的是"这台机器装好没有"。拆之前它挂在部署页
+           的第三张卡里，想看一个正在跑的任务要先进部署页再往下滚三屏。 -->
+      <button class="tab" type="button" role="tab" data-tab="jobs"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7.2h.01M8 7.2h12M4 12h.01M8 12h12M4 16.8h.01M8 16.8h12"/></svg>任务<span class="tab-badge" id="badge-jobs"></span></button>
+      <button class="tab" type="button" role="tab" data-tab="setup"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.6" y="4.4" width="16.8" height="6.6" rx="2"/><rect x="3.6" y="13" width="16.8" height="6.6" rx="2"/><path d="M7 7.7h.01M7 16.3h.01"/></svg>部署</button>
+      <!-- 「工作区」不是作业的一部分，但它也不是系统管理：它是**这一轮对话
+           在盘上留下的东西**，与"谁在用这台机器"无关。放在功能组末尾，
+           与 artex 同一位置。 -->
+      <button class="tab" type="button" role="tab" data-tab="workspace"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.6 7.4A2 2 0 0 1 5.6 5.4h4l2 2.2h6.8a2 2 0 0 1 2 2v8.8a2 2 0 0 1-2 2H5.6a2 2 0 0 1-2-2z"/></svg>工作空间</button>
+    </div>
+
+    <div class="rail-group">
+      <div class="rail-group-label">系统</div>
+      <!-- 「审批记录」是审查单的独立视图。它此前只活在对话里那几张卡片上，
+           而"这次任意命令执行是谁点的头"是一个**事后**问题——事后翻一屏
+           聊天记录找一张卡片，是这个界面最不该有的摩擦。 -->
+      <button class="tab" type="button" role="tab" data-tab="approvals"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6.4 4.4h11.2v15.2H6.4z"/><path d="M9.2 9.2h5.6M9.2 12.8h5.6M9.2 16.4h3"/></svg>审批记录</button>
+      <!-- 「日志」读的是 `data/access.log` 的尾部（管理员）。它是**部署自检
+           之外**唯一能回答"外面到底发生了什么事"的地方。 -->
+      <button class="tab" type="button" role="tab" data-tab="logs"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.2 5.2h13.6v13.6H5.2z"/><path d="M8 9h8M8 12.4h8M8 15.8h5"/></svg>日志</button>
+      <button class="tab" type="button" role="tab" data-tab="settings"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7.4h7.9M18.1 7.4h1.9M4 16.6h2.3M12.5 16.6h8.1"/><circle cx="15" cy="7.4" r="2.5"/><circle cx="9.4" cy="16.6" r="2.5"/></svg>设置</button>
+      <button class="tab" type="button" role="tab" data-tab="guide"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 6.6C10.3 5.1 7.8 4.3 4.6 4.3v13.9c3.2 0 5.7.8 7.4 2.3 1.7-1.5 4.2-2.3 7.4-2.3V4.3c-3.2 0-5.7.8-7.4 2.3z"/><path d="M12 6.6v13.9"/></svg>使用说明</button>
+    </div>
+  </nav>
+
+  <!-- 栏脚**只放账号事实**。这里原来挂着两颗控件，都撤掉了，理由是同一条：
+       栏脚是常驻区，而它们描述的都不是"当前这个人是谁"。
+
+       一、只读的范围读数（`#stat-engagement`，写成「目标 <作业名>」）。它和对话
+       侧边栏那块「目标」说同一件事，而且说得更差：侧边栏给的是"这个目标扫了什么"
+       （地址 / 端口 / 任务数 / 漏洞数），栏脚这颗只重复作业名——会话自动建的目标
+       一律叫「渗透目标」，于是它长年显示「目标 渗透目标」，两个词同义，读起来像
+       一句没填完的占位符。
+
+       二、全局「刷新」（`#refresh-btn` → `refreshAll()`）。它做两件事，而两件都
+       不该由这里的一颗按钮承担：
+         * **换用户 / 重新登录后重载整站**——这条路径由代码直接调 `refreshAll()`
+           （`boot.js` 换用户后、`chat.js` 删掉当前目标后），从来不经过这颗按钮；
+         * **手动让当前页变新**——这件事属于**那一页自己**，部署页早就是这么做的
+           （`#setup-refresh` 在它自己的 `.ph-actions` 里）。而原先靠栏脚这颗的
+           只有链路页与报告页：它们都不自动刷新（链路会打断缩放与平移，报告要自己
+           重画目录），`graphLoaded` / `report` 的去重又让"切走再切回"不重取。
+           所以补在**它们各自的页头**（`#graph-refresh` / `#report-refresh`），
+           而不是在全局栏脚留一颗"刷新你当前碰巧在的那一页"的按钮。 -->
+  <div class="rail-foot">
+    <div class="rail-user">
+      <span class="rail-user-name" id="topbar-user" title="当前登录用户">未登录</span>
+      <button id="password-open" class="btn sm" type="button">修改密码</button>
+      <button id="logout-btn" class="btn sm danger" type="button">退出登录</button>
+    </div>
+  </div>
+
+</aside>
+
+<!-- 工作区：一列，顶部是当前页的页头，下面是面板。
+     图被截断的提示不在这里——它是全局通知，和错误条一起挂在 `#notice-stack`
+     里，浮在输入卡片上方（见文件顶部）。放在这里的话，它会挤掉页头的槽位，
+     而且离开链路页就看不见了，可漏洞与报告读的是同一份被截断的图。 -->
+<div class="workspace">
+
+<main class="panels">
+
+  <!-- 页签 1：控制台（工作台的第一页：所有命令通过自然语言下达） -->
+  <section id="panel-dsh" class="panel active">
+    <!-- 页头三槽：标题 / 状态 / 操作，下面再一条会话配置行。
+         拆成两行是因为这一页的头部装不进一行：三个选择器 + 三个动作 + 两个读数，
+         1440px 上量出来约 1480px。硬塞的结果是换行成三行（比它替换掉的两条
+         横条还高），所以拆成"页头一行 + 配置行一行"——和链路 / 漏洞页的
+         "页头 + 筛选行"是同一个形状，不另发明一种。
+         配置行放**下面**：先"这是哪一页、能做什么"，再"这一轮按什么口径跑"。 -->
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">控制台</h1>
+      </div>
+
+      <div class="ph-status">
+        <span class="muted" id="chat-meta">正在加载…</span>
+      </div>
+
+      <!-- 动作槽里只剩一件与"会话列表"有关的动作。上面那句"约 1480px"是在
+           「可用能力」「技能手册」还挂在这里时量的——它们已搬进输入框**内**的左下角
+           （见 .chat-field-tabs；展开出来的内容在输入框正上方）：挂在动作槽时，点完
+           要往下穿过一整个消息列表去找内容区，而入口贴着输入框就不需要找。
+           两个入口搬走之后这一行确实松了，**但没有并回一行**：同页两行结构已经
+           和链路 / 漏洞页的"页头 + 筛选行"对齐，为省 40px 再破一次形状不划算。
+
+           **「新建对话」已经搬到对话记录卡头上**（用户原话："把新建会话放到对话
+           记录右边"）：新建这件事的对象就是那一列，按钮贴着自己的列表比挂在页头
+           少走一段视线。留在这里的「刷新会话」不同——它重拉的是列表、会话选项、
+           模型状态与当前对话**四份东西**，是整页的动作，不属于某一列。 -->
+      <div class="ph-actions">
+        <button id="chat-refresh" class="btn sm" type="button">刷新会话</button>
+      </div>
+    </header>
+
+    <!-- 会话三项**不再同处一行**。页面顶部只留 Agent：它是"这批活按什么口径跑"，
+         一轮对话从头发到尾是同一个值，属于会话级约定，和"我在哪一页"是一类东西。
+         模型与权限是**每轮都可能动**的旋钮，已搬到输入框正下方那一行的**右侧**（.chat-actions）：
+         它们和「发送」是同一次动作的两半——调完立刻发，中间不该隔着一整个消息列表。
+         分开之后右面那句提示仍然解释"跟随默认 / 已选 / 已失效"三种状态，只是它
+         现在主要对着 Agent 说话（另两项的状态由它们自己那行显示）。 -->
+    <div class="page-config">
+      <div class="ph-config" id="chat-entry">
+        <label class="field-label" for="chat-agent">Agent</label>
+        <select id="chat-agent" class="select sm-select" aria-label="Agent 预设"></select>
+      </div>
+      <span class="muted" id="chat-entry-hint">正在加载会话选项…</span>
+    </div>
+
+    <div class="chat-body">
+      <!-- 左栏是**导航栏**，两块，**对话记录在前、目标在后**（用户原话："把对话
+           记录放在第一，把新建会话放到对话记录右边"）：
+           ① 对话记录 → 只列**当前目标**名下的对话（点一条在主区打开）。它的卡头
+             右侧就是「新建对话」：新建这件事的对象就是那一列，按钮贴着自己的列表，
+             比挂在页头少走一段视线；
+           ② 目标 → 选中它，决定漏洞 / 资产 / 报告的范围。
+           ③ 任务与 ④ 子智能体**搬到了右栏**（原话："左侧栏放对话、目标，右侧
+           放任务、子智能体"）：它们回答的是"我正在等什么"，读的时候要跟右边那份
+           详情对着看，并排才成立；搁在这一栏里就得跟导航抢那 296px 宽。
+
+           ①② 的头都是按钮，可以折起来（见 fold.js）。
+
+           子智能体与主区的重复是**有意的，而且是被要求的**：子智能体区块仍在派活
+           的那条消息下方，右栏这份是"滚动到别处之后还能看见的那一眼"。曾经把它
+           从这里删掉的理由是"两处详细程度不同，对不上时谁也没法信自己那份"——
+           那条理由现在靠**同一个渲染函数**消掉：两处都调 `subagentBlock()`，不存在
+           第二种详细程度，也就无从对不上。 -->
+      <aside class="chat-side">
+        <!-- 对话记录在**滚动区里**，按内容取高度，条数多了整段滚。不改成百分比
+             槽位：一块**空着**也照样吃满槽位（量过：把正文换成一句空态，高度
+             201.5 → 201.5 一像素不变），装满的又在槽位里自己滚（量过：任务从 4 行
+             加到 12 行，高度 223.2 → 223.2 也不变）。**高度分配因此与内容完全
+             脱钩**。 -->
+        <div class="chat-side-scroll">
+          <div class="chat-side-block chat-side-sessions" id="chat-side-sessions" data-fold-part="sessions">
+            <!-- 卡头是一个**行**：左边折叠按钮（点它折起来），右边「新建对话」。
+                 新建那颗不能塞进折叠头里面：折叠头必须自成一体的一颗按钮——
+                 fold.js 按 `data-fold` 找它、把 aria-expanded 挂在它身上，里面再套
+                 一颗按钮既不合语义，点击也会被折叠的监听吞掉。所以多包一层
+                 `.panel-head-row`，两颗按钮**平级**。 -->
+            <div class="panel-head-row">
+              <button class="panel-head fold-head" type="button" data-fold="sessions">
+                对话记录<span class="panel-head-hint" id="chat-sessions-hint">全部对话</span>
+                <span class="fold-mark" aria-hidden="true"></span>
+              </button>
+              <button id="chat-new" class="btn sm" type="button">新建对话</button>
+            </div>
+            <div class="panel-body" id="chat-sessions"></div>
+          </div>
+        </div>
+
+        <!-- 目标块**不参与滚动**：它的职责就是"一直看得见"——整栏一起滚的话，
+             它会被长对话列表顶走，而这一栏里真正在读的就是它的东西。它自己带一个
+             上限（见 style.css），超了在自己内部滚。排在对话记录之后（原话："把
+             对话记录放在第一"），所以它现在常驻在栏底。 -->
+        <div class="chat-side-block chat-side-goals" id="chat-side-goals" data-fold-part="goals">
+          <button class="panel-head fold-head" type="button" data-fold="goals">
+            目标<span class="panel-head-hint">决定漏洞 / 资产 / 报告</span>
+            <span class="fold-mark" aria-hidden="true"></span>
+          </button>
+          <div class="panel-body" id="chat-goals"></div>
+        </div>
+      </aside>
+
+      <!-- 分栏线：宽度可拖。它同时是那条 hairline 本身——样式表里 .chat-side
+           的 border-right 已经撤掉，避免出现两条并排的线。role=separator +
+           tabindex 是为了键盘也能调（方向键），否则"可调节"只对鼠标成立。 -->
+      <div class="split-handle" data-split="chat" role="separator"
+           aria-orientation="vertical" tabindex="0" aria-label="拖动调整对话上下文栏宽度"></div>
+
+      <div class="chat-main">
+        <div class="chat-log" id="chat-log"></div>
+
+        <div class="chat-compose">
+          <!-- 审查单**不在这里**了：它现在画在对话记录里、那一轮气泡的位置上
+               （DSH 桌面端也是这样，审批卡出现在对话里而不是输入框上方）。
+               这个位置在 t80 之前挂的是 `#chat-review-slot`；挪走以后输入框上方
+               只剩两条"状态行"（上面的模型告警与自动继续倒计时），卡片不再把
+               输入框往下推。 -->
+          <!-- 目录内容区：两颗入口展开出来的那一格，在输入框**正上方**。
+               入口原先挂在页头的动作槽里——点完「可用能力」，视线要往下穿过一整
+               个消息列表去找内容区。现在入口贴在输入框里（见 .chat-field-tabs），
+               展开出来的内容就在输入框正上方：手不用离开输入框。
+               **默认收起**（data-dock="none"）：这一页唯一的操作目标是输入框，
+               一进来就压着二十多张能力卡片在上面，等于把目标推下去。点一下展开、
+               再点一下收起——两颗按钮自己就是开关，不必再找第三个控件。
+               模式用**一个枚举**（view.dock）而不是两个布尔：两个布尔有 4 种组合
+               而只有 3 种合法，"两个都开"得靠"后点的关掉先点的"来维持，那正是
+               状态错乱的来源（现在正好是三种：none / tools / skills）。
+               模式写在自己的 data-dock 上——样式表的模式块用属性选择器而不是再加
+               一个类，理由见 style.css：同特异性的两条规则谁赢只看源码顺序，那个
+               坑改版前踩过一次（.tab-entry）。
+               **卡片样式在这一格自己身上，不在外层容器**：收起就是 display: none，
+               同一个元素一起消失。若卡片还在外层，收起后会留下一个带边框和背景的
+               空盒子——那看起来像"点了按钮没反应"。
+               「提示」这一格已撤掉：它推荐的话正是能力目录里那几句，两格内容大
+               半重合，却要多点一次才能确认；它唯一独有的是"哪四条最常用"，而那
+               件事本来就该由目录的排序承担。
+               **收起有三条路**：再点一次同一颗按钮、点坞**以外的任何位置**、按 Esc。
+               前两条由按钮自己与一个文档级 `click` 监听负责（落在坞内就什么都不做，
+               见 chat.js 的 `insideDock`），Esc 是它的键盘等价物。三条路都只改
+               `view.dock` 这一个枚举，没有第二个"展开"状态可以跟它不一致。
+               ⚠️ **t93：这一格搬进了卡片里面**（`.chat-field` 的第一个子节点），并
+               脱出文档流（`position: absolute; bottom: 100%`）。它留在
+               `.chat-compose` 里的时候被卡片整块盖住：卡片用
+               `margin-top: calc(-1 * var(--chat-overlap))` 往上叠进记录区，而这一格
+               排在卡片**之前**的流里，于是卡片画在它上面。真页面实测（1452×900，
+               桩会话 + 同源代理）：坞 555.6..739.6、卡片 331.6..768，`elementFromPoint`
+               在坞的顶/中/底三点全部命中卡片里的 `textarea` —— 用户能看见的只有卡片
+               上沿外面那一条缝。**在文档流里怎么调都救不了**：卡片是底锚定的
+               （`card.bottom = compose.bottom - 16px`），把卡片的负外边距调小只会等量
+               抬高 `compose.top`，卡片的绝对位置一动不动；把外边距归零让坞真正占位，
+               compose 会涨到 660px、记录区塌到 10px（808 高的窗口、436 高的卡片）。
+               所以坞必须**不在流里**：现在它是卡片上沿的一张浮层，打开时不再压缩记录区，
+               而是让对话文字停在它上面（`app.js` 的 `syncChatTail()` 把记录区末尾的
+               内边距量到坞的上沿）。 -->
+          <!-- 输入区：**一圈套住输入框与控件的框**（圆角 + 1px 描边，见 style.css
+               的 .chat-field），输入框和那一排控件是同一个框里的两行。
+               为什么要有这一层：textarea 是替换元素，里面放不进任何子节点——要
+               让控件和输入框同处一框，只能让它们做兄弟、由这一层做框。
+               **框里没有面**（t63，用户要求"整个卡片背景应该是透明的"），所以它
+               压在对话记录上时是透明的：滚动时对话从它背后经过，透过它可以读到
+               那些字。框**整张**压在记录区上：叠进的深度就是框自己的高度
+               （--chat-overlap 一个变量同时供两侧使用：记录区的底边内边距，以及
+               这一层的负外边距），记录区的盒子于是伸到框的下沿附近（差的是
+               .chat-compose 的上内边距 12px）。滚到底时最后一行字停在框的上沿
+               之上——那是 padding-bottom 那条不等式给的（叠进深度 + 渐隐长度）。
+               `rows` 只是样式表还没到位时的兜底，真正的下限在 CSS 的 min-height
+               里——两处都写，是因为 HTML 属性与 CSS 谁也拿不到对方的值；只留 rows
+               的话，字号或行高一动，默认高度就跟着飘，而那时没有人会想到要回来改
+               这个数字。 -->
+          <!-- t78：「未启用模型…」这句**搬出卡片**，挂在卡片正上方。官方输入区里没有
+               这种提示行——它是"这一格现在不能发"的部署级告警，占页面上的位置而不是
+               输入框里的位置；留在动作行里会和选择器抢同一行宽度（窄窗口下把发送键
+               挤出卡片，1436 宽时已经能看见它压在边界外）。id 不变，chat.js 照旧
+               往里写；空着时靠 `:empty` 收起，不占一行。 -->
+          <div class="chat-notice muted" id="chat-model"></div>
+          <!-- 自动继续的状态行：与上面那条告警同一层，也挂在卡片**上方**。
+               它只在"这一轮失败之后、下一次自动发送之前"出现，说出**还要等几秒**
+               以及为什么等 —— 一次没有解释的自动重发，看起来就是界面自己在乱动。 -->
+          <div class="chat-auto-note" id="chat-auto-note" hidden>
+            <span id="chat-auto-text"></span>
+            <button id="chat-auto-cancel" class="chat-auto-cancel" type="button">不继续</button>
+          </div>
+          <!-- 排队任务（这一轮还在跑时又排下的那几条）：挂在卡片**上方**、
+               输入框前面。
+               为什么不进卡片：`.chat-field` 是 flex-wrap 的框，列表塞进去会参与
+               它的高度，而记录区的叠进深度 `--chat-overlap` 正是按框高算的——
+               预览里能看见记录区从列表底下穿过去。
+               为什么也不进记录区：排队是"接下来要干什么"，与输入框是同一件事；
+               进记录区之后一滚上去就看不见了，而那正是回来找它的地方。
+               `hidden` 是初始态：没有排队时整块不存在（连边距都没有），卡片高度
+               与叠进深度一动不动；有排队时由 chat.js 摘掉 hidden。这里不用
+               `:empty` 收起，因为里面有一个标题行，正文空不空都看得见。
+               行内的第二颗按钮在两种状态间换名：「插话发送」（这一轮还在跑，
+               送进当前这一轮）与「现在发送」（没在跑，立刻开这一条）。 -->
+          <div class="chat-queue" id="chat-queue" hidden>
+            <div class="chat-queue-head">
+              <span class="chat-queue-title" id="chat-queue-title">排队中</span>
+              <span class="chat-queue-hint" id="chat-queue-hint"></span>
+            </div>
+            <ul class="chat-queue-list" id="chat-queue-list"></ul>
+          </div>
+          <!-- 选项面板（模型问"要哪几件"时出现，见 chat.js 的 renderChoice）。
+               ⚠️ t94：**搬出卡片、挂到输入框上方**（用户要求「输入框中的任务选择放到
+               输入框上方」）。t89 时它在卡片里面，理由是"与输入框是同一件事"；代价是
+               卡片的高度要跟着一块条数不定的面板长（`--chat-choice-h` + 两条 `:has()`），
+               而面板自己还有 max-height 与内部滚动——两个上限一起压同一张卡片时，
+               `--chat-field-floor` 那条下限算式就不再是"卡片至少多高"，而是"面板能把
+               卡片压到多高"，记录区的叠进深度跟着失真。
+               搬出来之后它只是**一条普通的流内兄弟**：高度自己决定，卡片回到它那两行
+               的算式上，叠进深度也不必再跟着面板走（`measureChoice()` 与
+               `--chat-choice-h` 一起退场）。
+               位置在这一层（`.chat-compose` 之内、`#chat-queue` 之后、卡片之前）：
+               与排队块同一层，于是"卡片要吃掉多少留白"只有一套规则——见 style.css
+               里 `.chat-choice` 与 `.chat-queue:has(+ .chat-choice:not([hidden]))` 两条。
+               为什么不是记录区：一滚上去就看不见了，而等待中的选择必须一直看得见。
+               `hidden` 是初始态：没有待选时整块不存在，卡片位置一动不动。
+               ⚠️ t99（用户要求「不再使用任务选择框内的发送，去掉这个按钮，统一使用
+               输入框中的发送」）：面板里**没有发送键**。整批（勾中的几件 + 「其他」里
+               手写的几行）由输入框那一颗发：`sendPrimary()` 先看有没有勾选，有就走
+               `sendChoice()`；那颗键的名字也跟着件数走（`syncSendName()` 写成
+               「发送所选（N 件）」），所以"按一下会发出去几件"仍然问得出来。 -->
+          <div class="chat-choice" id="chat-choice" role="group"
+               aria-label="可选的下一步" hidden></div>
+          <div class="chat-field">
+            <!-- t93：坞搬进卡片里、脱出文档流（理由与实测见上面那一段注释）。
+                 位置在这里而不是卡片末尾：它是 tab 序里"展开出来的内容"，读屏与
+                 Tab 键都该先在坞里走、再到输入框；视觉位置由 CSS 的
+                 `bottom: 100%` 决定，与 DOM 顺序无关。 -->
+            <div class="chat-quick" id="chat-quick" data-dock="none"></div>
+            <textarea id="chat-input" class="input chat-input" rows="4"
+                      placeholder="描述你要做的事，例如：扫描 10.0.0.0/24 的暴露面"
+                      aria-label="对话输入" spellcheck="false"></textarea>
+            <!-- 两颗目录入口在卡片最后一行、**靠左**（那一行的右侧是模型/权限/发送，
+                 见下边 .chat-actions；紧挨着它们的是「自动继续」那颗开关）。它们**不是**
+                 输入框的一部分，只是同处一张卡片：
+                 键盘走到它们身上时焦点离开 textarea，与"点了一下按钮"的预期一致。
+                 计数写在按钮里（可用能力 24 / 技能手册 5）：留在别处就等于同一件
+                 事在两处显示，数字对不上时没人知道该信哪一份。
+                 不用 role="tab" / tablist：那个角色要求方向键在组内移动（roving
+                 tabindex），只声明角色而不实现键盘，读屏会念出"标签页"却按不动。
+                 aria-pressed 是普通按钮，Tab / Enter 原生可用。 -->
+            <div class="chat-field-tabs">
+              <button id="chat-tools" class="dock-tab" type="button" aria-pressed="false"><svg
+                  class="dock-tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g fill="none"
+                  stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="4" y="4" width="6.5"
+                  height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4"
+                  y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5"
+                  rx="1.6"/></g></svg>能力<span class="dock-count" id="chat-tools-count"></span></button>
+              <button id="chat-skills" class="dock-tab" type="button" aria-pressed="false"><svg
+                  class="dock-tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g fill="none"
+                  stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 5.6c0-.9.7-1.6 1.6-1.6H10v16H5.6C4.7 20 4 19.3 4 18.4Z"/>
+                  <path d="M20 5.6c0-.9-.7-1.6-1.6-1.6H14v16h4.4c.9 0 1.6-.7 1.6-1.6Z"/></g></svg>技能<span class="dock-count" id="chat-skills-count"></span></button>
+              <!-- 「自动继续」那颗开关：紧挨着两颗目录入口，同处这一行。
+                   ⚠️ t82 把它从右边那一行（模型 / 权限 / 发送）挪出来。原因是右边
+                   那一行自己的宽度约 465px，而卡片的内容宽在 1440 下只有 390px
+                   （详情栏开着时聊天列只有 414px）——整行溢出卡片，发送键落在卡片
+                   外面、权限 chip 被切掉。这一颗占 106px，挪到左边之后右边只剩约
+                   359px，一个不少地放进卡片。语义上也更顺：右边那一行是"这一轮
+                   怎么跑、现在发不发"，而它管的是"这一轮失败之后要不要自己再发
+                   一句继续"，属于跑完之后的事。
+                   ⚠️ 它必须**在这一格里面**、不能只做它的邻居：`.chat-field` 是
+                   `flex-wrap: wrap` 的容器，折行发生在收缩**之前**——两个邻居的
+                   自然宽（条目 167 + 开关 98）在 360px 视口下超过那一行的 256px，
+                   于是被折成两行，卡片就比 `--chat-field-floor` 高出一整行（28px），
+                   记录区的叠进深度随之错位。装进这一格之后由它自己 `nowrap` +
+                   开关 `min-width: 0` 来收缩，行高恒等于 `--chat-dock-row`。
+                   开关**不落库**（chat.js 里不许出现 localStorage：三项选择的唯一
+                   真相源在服务端，另存一份就是第二份真相；这一项只是"这台机器这
+                   一页"的偏好，刷新回默认开）。 -->
+              <!-- ⚠️ `aria-label` 与 `title` 不能省：卡片窄到 522px 以下时
+                   `.chat-auto-label` 会被 `@container chat-field` 收起来，
+                   那时这颗开关在界面上只剩一个胶囊——名字只能来自这两个属性。 -->
+              <button id="chat-auto" class="chat-auto" type="button" aria-pressed="true"
+                      aria-label="自动继续" title="自动继续">
+                <span class="chat-auto-label">自动继续</span>
+                <span class="chat-auto-switch" aria-hidden="true"></span>
+              </button>
+            </div>
+            <!-- 模型 / 权限 / 发送：这一轮**怎么跑、现在发不发**。
+                 ⚠️ t88（用户要求「输入框下面几个选项并成一行」）：这一格**不再独占
+                 一行**（t82 的 `flex: 1 0 100%` 会把左边的目录入口挤到上面去）。现在
+                 它与 `.chat-field-tabs` 同处卡片最后一行，靠 `.chat-actions` 的
+                 `margin-left: auto` 推到行尾。这一行装不装得下随卡片宽度变，所以有
+                 一串**逐级让位**（先让模型名、只剩图标，再让权限档的名字，最后让目录
+                 入口的计数）——阈值全是量出来的，见 style.css 的 `@container chat-field`
+                 那一段，不要在这里另写一套数。
+                 ⚠️ 模型那一格外面多包了一层 `<span class="chat-model">`：它要当
+                 `container-type: inline-size` 的容器，选择器才查得到"我现在有多窄"
+                 （一个元素查不到自己的宽度）。里面仍只用 span、不嵌 div——这一行
+                 "有哪些旋钮"的契约按行内顶层子元素取，嵌套 div 会把取整行的那段截断。
+                 ⚠️ 「模型」那两个字**不印了**（t88 用户要求）：一个下拉里装着模型名，
+                 那本身就是它的标签；`aria-label` 仍是「模型选择」，读屏不受影响。
+                 `#chat-model` 平时是**空的**：全局启用项的名字只印一处，就是模型
+                 选择器的占位符（「跟随全局启用项（DeepSeek · deepseek-flash）」），
+                 同一行里再印一遍只是重复。它只剩一个职责——**"一个模型都不存在"
+                 时开口**；而那条必须留在最左：那是唯一说出"给出去设置的路"的一句。
+                 **「发送」与「停止」是同一颗按钮**（`#chat-send`）：空闲时它叫发送
+                 （↑，圆形 + 强调色填充），跑着的时候它叫停止（■，换成 danger 那一对
+                 底色/墨色）——**几何一点不动**，换的只有图标、名字与配色。
+                 ⚠️ 名字**必须跟着状态走**：只有图标的按钮，`aria-label` / `title` 是它
+                 唯一的名字，念着「发送」而去停止与"点错了"没有区别。所以这两个属性
+                 由 chat.js 的 setSending 一起维护，不再静态写死在这里。
+                 权限那颗 chip 照 DSH 桌面端做（点开是向上弹的菜单），但原生 `#chat-policy`
+                 仍是唯一真相源：fillSelect / commitEntry / 发送带 policyId 全都不动，
+                 chip 只是它的皮。 -->
+            <div class="chat-actions">
+              <span class="spacer"></span>
+              <span class="chat-model">
+                <!-- t100：`<select>` 退成**真相源**（`fillSelect` / `commitEntry` / 发送带
+                     modelId 都读它），被钉成 1px 的隐形层；看见的是下面这颗 chip，点开是
+                     **页内**自绘的菜单。为什么不留在原生弹出层里：它的行底色由 UA 拿我们
+                     给的 `option` 底去配它自己的高亮（实测一行是画布的蓝灰、一行是 UA 的
+                     灰），而 `<option>` 里放不进 DOM、伪元素也不渲染 —— 「选择的模型后面
+                     增加 √」在原生的列表里画不出来。换成页内菜单之后两件事都能做，
+                     还与紧挨着的权限 chip 同一套形状（那颗早就是这么做的）。 -->
+                <select id="chat-model-select" class="chat-model-native"
+                        aria-label="模型选择" tabindex="-1"></select>
+                <button id="chat-model-btn" class="chat-model-btn" type="button"
+                        aria-haspopup="menu" aria-expanded="false" aria-label="模型选择">
+                  <span class="chat-model-name" id="chat-model-name"></span>
+                  <svg class="chat-model-chev" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8"
+                          stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <span class="chat-model-menu" id="chat-model-menu" role="menu" hidden></span>
+              </span>
+              <span class="chat-policy">
+                <select id="chat-policy" class="chat-policy-native" aria-label="权限档" tabindex="-1"></select>
+                <button id="chat-policy-btn" class="chat-policy-btn" type="button"
+                        aria-haspopup="menu" aria-expanded="false" aria-label="权限档">
+                  <svg class="chat-policy-ico" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3.2 19 6v5.4c0 4.1-2.9 7.4-7 9.1-4.1-1.7-7-5-7-9.1V6l7-2.8Z"
+                          fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                    <path d="m9 11.8 2.1 2.2L15 9.8" fill="none" stroke="currentColor"
+                          stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span class="chat-policy-name" id="chat-policy-name"></span>
+                  <svg class="chat-policy-chev" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8"
+                          stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <span class="chat-policy-menu" id="chat-policy-menu" role="menu" hidden></span>
+              </span>
+              <button id="chat-send" class="btn chat-send" type="button"
+                      aria-label="发送" title="发送"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 分栏线：右侧详情栏的宽度。和左边那条是同一个机制（split.js 按
+           `data-split` 找手柄、按 `pane` 找被拖的那一栏），拖动方向由"栏在
+           手柄哪一边"现场判定，所以它放在消息流右边就自然往右拖。 -->
+      <div class="split-handle" data-split="detail" role="separator"
+           aria-orientation="vertical" tabindex="0" aria-label="拖动调整详情栏宽度"></div>
+
+      <!-- 右侧栏：**任务与子智能体两块**，每一块自己就地展开被点中的那一行。
+           以前这里还有一片「详情正文」（`.chat-detail-body`），点中的任务 / 子智能体
+           / 目标都渲染到那一片里去。那一层已经拿掉了（用户原话："右侧边栏取消详情
+           内容，把功能放到任务和子智能体中，详细内容在这两个框中直接显示"）：
+           在一张列表里点一行，详细内容却出现在列表**下面**的另一片区域，中间隔着
+           一整个列表——点第 1 条和第 5 条，视线都要重新找一次落点。现在详情就跟在
+           被点中那一行**正下方**，行和它的展开面是一件事。
+           栏头因此只剩一个作用：说明"现在展开的是哪一条"（类型 + 标题 + 收起）。
+           收起有三条路：右上角 ×、Esc、以及收起后再点任何一项都会**重新拉开**——
+           否则收起就是一条单向路。点选同一项不收起：点选＝看它，收起是另一件事。 -->
+      <aside class="chat-detail" id="chat-detail" aria-label="详情">
+        <header class="chat-detail-head">
+          <span class="chat-detail-kind" id="chat-detail-kind">详情</span>
+          <span class="chat-detail-title" id="chat-detail-title">未选中</span>
+          <span class="spacer"></span>
+          <button class="chat-detail-close" id="chat-detail-close" type="button"
+                  aria-label="收起详情栏" title="收起详情栏（Esc）">×</button>
+        </header>
+
+        <!-- 任务与子智能体：从**左栏搬过来**的（原话："左侧栏放对话、目标，
+             右侧放任务、子智能体"）。它们回答"我正在等什么"，而且现在**自己也装
+             详情**——点一行，那一条的展开面就插在它正下方（`renderJobDetail` /
+             `renderSubagentDetail` 收一个 host 参数，host 就是这两块各自的列表）。
+
+             为什么不再有单独一层正文：那一片归 `renderDetail()` 独占，每画一次都先
+             `clear()`，所以两块列表必须另起一层躲着它；现在正文没了，剩下这一层
+             `.chat-detail-rail` 仍然留着——它是这一栏的滚动区，两块各自按内容取高。
+
+             折叠与卡片样式照旧沿用 `chat-side-block` / `fold-head`：折叠机制只有
+             一份（fold.js 按 `data-fold-part` 找块），卡样式也只有一份，改名不会
+             让它更清楚，只会让 `#chat-side-subagent-list` 那三条 id 选择器落空。
+
+             `panel-body` 里既放行也放展开面：行是 `button`，展开面是它后面的
+             `div.chat-detail-inline`——**兄弟关系**，不是父子（按钮里不能套块级内容）。 -->
+        <div class="chat-detail-rail">
+          <div class="chat-side-block chat-side-jobs" id="chat-side-jobs" data-fold-part="jobs">
+            <button class="panel-head fold-head" type="button" data-fold="jobs">
+              任务<span class="panel-head-hint" id="chat-side-jobs-hint">正在加载…</span>
+              <span class="fold-mark" aria-hidden="true"></span>
+            </button>
+            <div class="panel-body" id="chat-side-job-list"></div>
+          </div>
+
+          <div class="chat-side-block chat-side-subagents" id="chat-side-subagents" data-fold-part="subagents">
+            <button class="panel-head fold-head" type="button" data-fold="subagents">
+              子智能体<span class="panel-head-hint" id="chat-side-subagents-hint">跟选中目标</span>
+              <span class="fold-mark" aria-hidden="true"></span>
+            </button>
+            <div class="panel-body" id="chat-side-subagent-list"></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 页签 3：探索链路。这是**全局证据图**：全部 engagement 合在一起，
+       不再要求先选一个目标（每个节点自己带着归属，点开详情能看到）。
+       合并的代价是节点数：22 个目标合起来 1207 个，而它们按分列布局铺开是
+       2190 × 50184 px —— 适配窗口后是一条竖线。所以「节点上限」是必需的控件
+       而不是可选项，默认 200（宽高比约 1 : 4.6，与单个目标同一量级）。 -->
+  <section id="panel-graph" class="panel">
+    <!-- 页头三槽。节点 / 边 / 丢弃这三个读数**搬到了这里**：它们描述的是这张图
+         （窗口切完之后还剩多少），改版前挂在全局顶栏上——于是对话页的顶上也
+         在报节点数，而那一页根本不显示图。读数放在它描述的东西旁边。 -->
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">探索链路</h1>
+        <span class="ph-sub">全部目标合并的全局证据图</span>
+      </div>
+
+      <div class="ph-status">
+        <span class="stat" id="stat-nodes" title="意图 / 事实 / 漏洞 / 资产 节点总数">节点 0</span>
+        <span class="stat" id="stat-edges" title="关系边总数">边 0</span>
+        <!-- 曾经这里有一个「节点上限」下拉框（200 / 500 / 1000 / 全部），默认 200。
+             撤掉它是因为它挡住的正是这个页签唯一要做的事：**看全部**。当初设窗口的
+             理由是"全量上千节点铺开是一条竖线"，而那条理由要靠缩放解决——现在上限
+             跟着每张图算，「适应窗口」看全貌、滚轮从 **600% 这个基准**往上还能再放
+             大五倍（3000%）。留一个默认砍掉八成节点的窗口，只会让人以为链路本来就
+             是断的。
+             这两个读数照旧留着：`丢弃 0 · 拒绝 0` 现在是一条**不该被打破的保证**，
+             真出现非零就说明服务端截了，而不是"窗口设小了"。 -->
+        <span class="stat" id="stat-truncated" title="窗口外被丢弃 / 拒绝的记录（不再限制节点数，因此应当恒为 0）">丢弃 0 · 拒绝 0</span>
+      </div>
+
+      <div class="ph-actions">
+        <!-- 本页**现在会自己更新**（§3.15）：节点与目标的指纹一变就整图重取，但
+             `renderGraph` 只在画布还没量到尺寸时摆正视角，重取之后缩放 / 平移 / 选中
+             一律保留；新节点落在视野外时画布上那条 `#graph-stale` 提示才出现。
+             这颗「刷新链路」仍然有用：自动刷新可以关（左边那颗芯片），失败后的手动
+             重试也靠它。 -->
+        <button id="graph-auto" class="chip on" type="button" aria-pressed="true"
+                title="数据一变就自动重取（视角保留；你手动缩放 / 拖动过之后，新节点不会把视图拽走）">自动刷新</button>
+        <button id="graph-refresh" class="btn sm" type="button"
+                title="立即重新取一次链路数据（自动刷新关掉时这是唯一入口）">刷新链路</button>
+        <button id="zoom-out" class="btn sm" type="button" title="缩小">缩小</button>
+        <button id="zoom-in" class="btn sm" type="button" title="放大">放大</button>
+        <button id="zoom-fit" class="btn sm" type="button" title="适应窗口">适应窗口</button>
+        <span class="zoom-level" id="zoom-level">600%</span>
+      </div>
+    </header>
+
+    <!-- 类型芯片单独一行：它有十个上下，塞进页头会把标题挤没。
+         它也只能出现在链路页——别的页没有"节点类型"这回事。 -->
+    <div class="page-filters">
+      <span class="toolbar-label">节点类型</span>
+      <div class="kind-filters" id="kind-filters"></div>
+    </div>
+    <div class="graph-body">
+      <div class="graph-canvas" id="graph-canvas">
+        <!-- 对齐方式取 `xMinYMin`，不是默认的居中：viewBox 是一整张布局（竖长），
+             居中会在画布左侧留出一条与缩放无关的空带（实测 945px 宽的画布上空 377px），
+             整张图看起来"没有从左上角开始"。左上对齐后布局原点就是画布原点，缩放、
+             拖动与「适应窗口」都从同一个角出发；`toUserSpace` 也不再要被裁掉的那段偏移。 -->
+        <svg id="graph-svg" class="graph-svg hidden" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet"></svg>
+        <div class="empty" id="graph-empty">正在加载链路数据…</div>
+        <!-- 只在"有变化、而视角被保留"时出现（见 `setGraphStale`）：点它 = 接受一次
+             重新适配。它不是刷新按钮——数据已经取回来了，只差"看不见"。 -->
+        <button class="graph-stale hidden" id="graph-stale" type="button"
+                title="把视角重新适配到新布局（缩放与平移会重置）">链路已更新 · 点这里适应窗口</button>
+      </div>
+
+      <!-- 分栏线：节点详情栏原先固定 360px，而它装的是一整段原始字段（JSON 可以
+           很长），固定宽度只能靠换行硬扛。 -->
+      <div class="split-handle" data-split="graph" role="separator"
+           aria-orientation="vertical" tabindex="0" aria-label="拖动调整节点详情栏宽度"></div>
+
+      <aside class="side-panel" id="node-detail">
+        <div class="panel-head">节点详情<span class="panel-head-hint">全部原始字段</span></div>
+        <div class="panel-body" id="node-detail-body"></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 页签 3：漏洞 -->
+  <section id="panel-findings" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">漏洞</h1>
+        <span class="ph-sub">按目标看，或看全部目标的分组结果：已证实与未证实分开列出</span>
+      </div>
+      <div class="ph-status">
+        <input id="finding-search" class="input" type="search" placeholder="搜索标题 / 描述 / 资产 / ID" aria-label="搜索漏洞">
+      </div>
+    </header>
+    <div class="split">
+      <!-- 目标栏：漏洞原来是"只看当前目标"的一页，多个目标同时渗透时只能来回切。
+           这一栏把目标摆出来，第一行是「全部目标」——选中它之后右边的列表按目标
+           分组，一屏能看完所有目标各自的结论。
+           宽度可拖（--split-findings），也能折起来（fold.js，与资产树同一套）。 -->
+      <div class="split-pane findings-side" id="findings-side" data-fold-part="findings">
+        <button class="panel-head fold-head" type="button" data-fold="findings">
+          目标<span class="panel-head-hint">点一行只看它</span>
+          <span class="fold-mark" aria-hidden="true"></span>
+        </button>
+        <div class="panel-body findings-targets" id="findings-targets"></div>
+      </div>
+      <!-- 分栏线：目标名长短差别很大（IP / 域名 / 一长串 URL），固定宽度在短名字
+           上浪费、在长名字上把目标截成前八个字符。 -->
+      <div class="split-handle" data-split="findings" data-fold-part="findings" role="separator"
+           aria-orientation="vertical" tabindex="0" aria-label="拖动调整目标栏宽度"></div>
+
+      <div class="split-pane findings-main">
+        <!-- 严重度芯片单独一行：八档严重度带计数，塞进页头会把标题挤没 -->
+        <div class="page-filters">
+          <span class="toolbar-label">严重度</span>
+          <div class="severity-filters" id="severity-filters"></div>
+        </div>
+        <div class="card-list" id="findings-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 页签 4：资产 -->
+  <section id="panel-assets" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">资产</h1>
+        <span class="ph-sub">当前目标的资产树，点一项看详情</span>
+      </div>
+    </header>
+    <div class="split">
+      <!-- 资产目录可以折起来（同样走 fold.js，与侧栏四块共用一套机制）。
+           **折叠不碰宽度**：`--split-assets` 一个字节都不动，所以展开时回到的
+           就是你上次拖好的那个宽度，不需要额外记住"折叠前多宽"。
+           折起时这一栏收缩成一个只有标题的窄条、拖拽条一并隐藏（没有可拖的东西），
+           让出来的差不多 400px 全给右边那份详情——那正是这一页最常读的东西。 -->
+      <div class="split-pane tree-pane" id="asset-tree-pane" data-fold-part="assets">
+        <button class="panel-head fold-head" type="button" data-fold="assets">
+          资产树<span class="panel-head-hint">按 parentId 层级</span>
+          <span class="fold-mark" aria-hidden="true"></span>
+        </button>
+        <div class="panel-body" id="asset-tree"></div>
+      </div>
+      <!-- 分栏线：资产树的深度随目标变化（有的根域下就三层，有的上百个端点），
+           固定 480px 在浅树上浪费、在深树上逼出横向滚动。
+           它同时是折叠的部件之一：树折起来之后这条线没有可拖的对象，
+           而 split.js 对不可见的手柄本来就有一个早退，不用它知道折叠这回事。 -->
+      <div class="split-handle" data-split="assets" data-fold-part="assets" role="separator"
+           aria-orientation="vertical" tabindex="0" aria-label="拖动调整资产树宽度"></div>
+
+      <div class="split-pane">
+        <div class="panel-head">资产详情</div>
+        <div class="panel-body" id="asset-detail"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 页签 5：报告 -->
+  <section id="panel-report" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">报告</h1>
+        <span class="ph-sub">按任务归档，点一次执行看它自己那一份</span>
+      </div>
+      <div class="ph-status">
+        <span class="muted" id="report-meta"></span>
+      </div>
+      <div class="ph-actions">
+        <!-- 左侧目录每 10 秒跟着任务列表自己长（`renderReportSide`），但**正文不会**：
+            它按任务取一次就停在那一刻，而"这个任务跑完了没有、跑出了什么"恰恰是
+            盯着这一页时最想知道的。这一颗补的就是那一下，它换掉了原先栏脚那颗
+            全局「刷新」（理由见栏脚注释）。 -->
+        <button id="report-refresh" class="btn sm" type="button"
+                title="重新取一次当前报告（目录会自动更新，正文不会）">刷新报告</button>
+        <button id="report-copy" class="btn sm" type="button">复制</button>
+        <button id="report-download" class="btn sm" type="button">下载 .md</button>
+      </div>
+    </header>
+    <div class="split">
+      <!-- 任务报告目录：**每个任务一篇**，点一条读那一次执行自己的报告。
+           它与「任务」页读的是同一批数据（`/jobs`，由 app.js 持有），但回答的是
+           另一个问题：任务页说"跑到哪了"，这里说"跑出了什么、白纸黑字是怎么写的"。
+
+           目录列的是**全部任务**，不只当前目标名下那些——一个目标的报告往往是
+           "这几次执行合起来说了什么"，而判断一份报告可信度的第一步，恰恰是能一次
+           看到全部执行记录（哪几次失败了、有没有重跑、重跑写脏了没有）。所以每一行
+           都把目标写在脸上，跨目标的那几条不会看起来像"这个目标的任务"。
+
+           可以折起来（走 fold.js，与侧栏四块、资产树共用一套机制）。折叠**不碰宽度**：
+           `--split-report` 一个字节都不动，展开时回到的就是你上次拖好的那个宽度。 -->
+      <div class="split-pane report-side" id="report-side-pane" data-fold-part="report-side">
+        <button class="panel-head fold-head" type="button" data-fold="report-side">
+          任务报告<span class="panel-head-hint" id="report-side-hint">按任务归档</span>
+          <span class="fold-mark" aria-hidden="true"></span>
+        </button>
+        <div class="panel-body" id="report-side"></div>
+      </div>
+      <!-- 分栏线：同时也归折叠管（fold 之后没有可拖的对象，split.js 对不可见手柄
+           本来就有一个早退，不需要它知道折叠这回事）。 -->
+      <div class="split-handle" data-split="report" data-fold-part="report-side" role="separator"
+           aria-orientation="vertical" tabindex="0" aria-label="拖动调整任务报告栏宽度"></div>
+
+      <div class="split-pane">
+        <!-- 卡头写的是**当前显示的是哪一份文档**。少了它，目录里点了一条之后正文换掉了、
+           而页头那行读数只写了字数——读者无从确认自己看的是汇总还是某一次执行。 -->
+        <!-- 名字装在一个 span 里而不是直接当卡头的文本：只有元素才能吃
+             `text-overflow: ellipsis`，而目标是完整路径时有 60 多个字符。 -->
+        <div class="panel-head" id="report-doc-head">
+          <span class="doc-name" id="report-doc-name">本目标汇总</span>
+        </div>
+        <article class="markdown" id="report-body"></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- 页签 6：任务（作业的执行面：下发什么、跑到哪、基线是什么）。
+       从部署页拆出来独立成页。**「部署」回答"这台机器装好没有"，「任务」回答
+       "活干得怎么样"**，是两件不同的事——合成一页之后，想看一眼正在跑的任务要
+       先进部署页、再往下滚三屏，而那是这个工作台最高频的动作之一。 -->
+  <section id="panel-jobs" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">任务</h1>
+        <span class="ph-sub">执行记录</span>
+      </div>
+      <div class="ph-status">
+        <span class="muted" id="jobs-auto-hint">切入本页签后自动刷新</span>
+      </div>
+      <div class="ph-actions">
+        <button id="jobs-refresh" class="btn sm" type="button">刷新任务</button>
+        <button id="jobs-clear" class="btn sm ghost" type="button">清空已结束</button>
+        <button id="jobs-clear-all" class="btn sm danger" type="button">一键清空</button>
+      </div>
+    </header>
+
+    <div class="setup-body">
+
+      <!-- 任务列表：刷新按钮在页头（页头是页面的操作槽），进入本页签后 10 秒自动刷新 -->
+      <section class="setup-card">
+        <div class="panel-head">任务列表</div>
+        <p class="muted jobs-message" id="jobs-message"></p>
+        <div class="panel-body" id="job-list"></div>
+        <!-- 面板由 renderJobs 建在对应那一行里（见 app.js 的 jobLogPanel）。
+             正文存在 state.jobLog.lines，所以列表整体重建时它会跟着重建，
+             而承载它的 SSE 连接挂在 state 上、不受重建影响。 -->
+      </section>
+
+    </div>
+  </section>
+
+  <!-- 页签 7：部署（浏览器即部署控制台，替代原 Docker 部署路径） -->
+  <section id="panel-setup" class="panel">
+    <!-- 执行节点读数搬到这里：它是**部署状态**（这台机器接进来几个节点），
+         改版前挂在全局顶栏上，于是每一页顶上都在报执行节点数。 -->
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">部署</h1>
+        <span class="ph-sub">这台机器的安装状态与接入凭据</span>
+      </div>
+      <div class="ph-status">
+        <span class="stat" id="stat-executors" title="执行节点状态">
+          <span class="dot offline" id="stat-executor-dot"></span><span id="stat-executor-text">执行节点 --</span>
+        </span>
+        <span class="muted" id="setup-meta">尚未加载</span>
+      </div>
+      <div class="ph-actions">
+        <button id="setup-refresh" class="btn sm" type="button">刷新部署信息</button>
+      </div>
+    </header>
+
+    <div class="setup-body">
+
+      <!-- 自检：引擎 / 凭据 / TLS / 数据库 / 静态资源 -->
+      <section class="setup-card wide">
+        <div class="panel-head">部署自检<span class="panel-head-hint">ok 正常 / warn 警告 / fail 失败</span></div>
+        <div class="panel-body" id="setup-checks"></div>
+      </section>
+
+      <!-- 部署信息：地址、监听、数据库、引擎、鉴权 -->
+      <section class="setup-card">
+        <div class="panel-head">部署信息<span class="panel-head-hint">点击地址可复制</span></div>
+        <div class="panel-body" id="setup-info"></div>
+      </section>
+
+      <!-- 外部工具：检测 / 安装 / 删除。**独立成卡，不并进「部署自检」**：
+           自检回答"现在有没有"（一大串只读结论），这张卡要回答"能不能装、
+           装在哪、谁装的"，而且它是这一个页签里唯一会**改这台机器**的地方
+           （往项目目录下载可执行文件、对 WSL 发行版执行 apt）。 -->
+      <section class="setup-card wide" id="tools-card">
+        <div class="panel-head">外部工具
+          <span class="panel-head-hint" id="tools-summary">加载中…</span>
+          <span class="spacer"></span>
+          <!-- 适配器表在 data/tools.json 里。**排在「重新检测」左边**：改配置是
+               先决动作，检测是验证动作，读的顺序应当和做的顺序一致。 -->
+          <button id="tools-config" class="btn sm" type="button"
+                  title="用系统默认程序打开 data/tools.json（不存在会先生成）">配置文件</button>
+          <!-- 重探：detect() 有缓存，手工装完/换版本之后需要一个"再看一眼"的入口 -->
+          <button id="tools-check" class="btn sm" type="button">重新检测</button>
+        </div>
+        <div class="panel-body" id="tools-panel"></div>
+      </section>
+
+      <!-- 侵入授权（第三道闸）。**独立成卡而不是并进上面的部署信息**，因为
+           它与其中的「探测范围」最容易被读成同一件事，而两者回答的是两个不同的
+           问题：能连哪些地址 / 能改变哪些目标的状态。
+           `GET /api/v1/authz` 早就逐类返回了 enabled / flag / limits / 白名单，
+           此前没有任何界面消费它——"侵入授权没有图形面板"曾是文档里的已知限制。 -->
+      <section class="setup-card wide" id="authz-card">
+        <div class="panel-head">侵入授权
+          <span class="panel-head-hint" id="authz-summary">加载中…</span>
+          <span class="spacer"></span>
+          <span class="muted">第三道闸 · 默认全部关闭</span>
+        </div>
+        <div class="panel-body" id="authz-panel"></div>
+      </section>
+
+      <!-- 多机执行：把「节点接入」与「节点列表」合成一块。**默认展开**——
+           它原本是折叠的，理由是"远程接入不是必经步骤，别占视野"。那个理由的问题
+           在于它没把**已经在跑的节点**算进去：折叠起来之后，一个在线节点只以
+           "共 N 个 · 在线 M"出现在一行摘要里，而节点列表本身要看就得先点开。
+           "这一节是可选的"与"这一节的**内容**要藏起来"是两件事，前者仍然成立：
+           单机部署不配任何节点也能跑，正文第一句就写着。 -->
+      <details class="setup-card wide setup-optional" id="multi-node" open>
+        <summary class="panel-head">
+          多机执行（可选）
+          <span class="panel-head-hint" id="executor-count"></span>
+          <span class="spacer"></span>
+          <span class="muted" id="executor-summary">正在加载…</span>
+        </summary>
+        <div class="panel-body">
+          <p class="muted">本机节点已经在跑任务，单机部署不需要这一节。要让另一台机器
+            分担扫描时，填节点名生成一次性接入命令，在那台机器上执行后即在此上线。</p>
+          <div class="form-row">
+            <label class="field-label" for="enroll-name">节点名</label>
+            <input id="enroll-name" class="input" type="text" placeholder="例如 node-hangzhou-01" autocomplete="off">
+            <label class="field-label" for="enroll-token">注册凭据</label>
+            <input id="enroll-token" class="input" type="password" placeholder="控制面启用时填写" autocomplete="off">
+            <button id="enroll-btn" class="btn" type="button">生成接入命令</button>
+          </div>
+          <p class="muted" id="enroll-hint">令牌只在生成时返回一次，请立即保存。</p>
+          <div id="enroll-result"></div>
+          <div class="panel-head">节点列表
+            <span class="spacer"></span>
+            <span class="muted" id="executor-message"></span>
+          </div>
+          <div id="executor-list"></div>
+        </div>
+      </details>
+
+    </div>
+  </section>
+
+  <!-- 页签 8：设置（分五组：Agent 预设 / 模型配置 / 权限档 / 插件市场 / 用户管理） -->
+  <section id="panel-settings" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">设置</h1>
+        <span class="ph-sub">全局默认，按会话生效的项在「控制台」页头</span>
+      </div>
+      <div class="ph-status">
+        <span class="muted" id="settings-meta">尚未加载</span>
+      </div>
+      <div class="ph-actions">
+        <button id="settings-refresh" class="btn sm" type="button">刷新</button>
+      </div>
+    </header>
+
+    <!-- 分组导航：一次只显示一组。
+         设置项从三项涨到五组之后，一屏纵向长列表会让"模型配置在哪"变成需要滚动
+         寻找的问题；分组把"我改的这项属于哪一类"变成一次点击。
+
+         「外观」排在第一，而且是**默认落在的那一组**：五组里只有它既与作业无关、
+         也与权限无关（它只改本机这一份视图，普通操作员也能改）。排在四组管理项
+         之后，会让人以为改外观也需要管理员；而它是使用者会反复回来找的那一项，
+         第一次打开设置就看得见才合理。 -->
+    <nav class="settings-nav" role="tablist" aria-label="设置分组" id="settings-nav">
+      <button class="settings-nav-btn active" type="button" role="tab" data-settings-group="appearance">外观</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="agents">Agent 预设</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="models">模型配置</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="policies">权限档</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="dsh">运行通道</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="scan">扫描执行</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="review">工具审批</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="plugins">插件市场</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="mcp">MCP 服务</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="skills">Skills</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="users">用户管理</button>
+    </nav>
+
+    <div class="settings-body">
+
+      <!-- 外观：五组里唯一既与作业无关、也与权限无关的一项——它只改本机这一份视图，
+           不写服务端任何配置，所以普通操作员也能改，改完立刻生效、不需要刷新。
+           预览卡片用的是各主题自己的三个色值（见 web/theme.js 的 swatch），
+           因此**不必先切过去就能看出它长什么样**。 -->
+      <section class="setup-card wide" data-settings-group="appearance">
+        <div class="panel-head">外观
+          <span class="panel-head-hint">只影响这台机器上的显示</span>
+          <span class="spacer"></span>
+          <span class="muted" id="theme-current">尚未加载</span>
+        </div>
+        <div class="panel-body">
+          <div class="theme-grid" id="theme-grid" role="group" aria-label="外观主题"></div>
+          <p class="muted" id="theme-note"></p>
+
+          <!-- 重点色：五档 + 跟随主题。它是**跨主题**的——选一次，五套主题一起跟着变。
+               所以这一排的色点画的是同一档在深浅两族里的两个值：当前主题是亮色就画亮族，
+               是深色就画深族（见 web/theme.js 的 ACCENTS.dark / .light）。 -->
+          <div class="settings-subhead">重点色</div>
+          <div class="accent-row" id="accent-row" role="group" aria-label="重点色"></div>
+          <p class="muted" id="accent-note"></p>
+
+          <!-- 磨砂：四档 + 跟随主题。它只影响**模糊半径与饱和度**，不动任何配色——
+               磨砂是材质，不是主题。非玻璃主题本来就没有材质，档位对它们等于没写，
+               所以下面那行说明会明说这件事。 -->
+          <div class="settings-subhead">磨砂</div>
+          <div class="frost-row" id="frost-row" role="group" aria-label="磨砂强度"></div>
+          <p class="muted" id="frost-note"></p>
+        </div>
+      </section>
+
+      <!-- Agent 预设：对话助手的作业口径。切换全局默认仅管理员可做，普通操作员
+           只读可见——口径决定产出的解释方式，用的人必须知道当前在哪一档。
+           会话级的选择在「控制台」页签的入口条上，两处是"默认值"与"本次生效"的关系。 -->
+      <section class="setup-card wide" data-settings-group="agents">
+        <div class="panel-head">Agent 预设
+          <span class="panel-head-hint">对话助手的作业口径</span>
+          <span class="spacer"></span>
+          <span class="muted" id="agent-mode-current">尚未加载</span>
+          <button id="agent-new" class="btn sm hidden" type="button">新建预设</button>
+        </div>
+        <div class="panel-body">
+          <div id="agent-modes-list" class="mode-list"></div>
+          <p class="muted" id="agent-mode-note">模式只决定助手的作业口径与单轮步数预算，
+            不改变探测作用域、工具集与审计记录。</p>
+
+          <!-- 自定义预设的新建 / 编辑表单。只在点「新建预设」或某张卡片上的「编辑」
+               时展开——它是一屏表单，常驻会让"现在有哪些预设"这件事要先滚过一屏。
+               三种来源共用它：内置与插件来源保存出来的是一层**覆盖**，见下面那条
+               说明条。 -->
+          <form id="agent-form" class="settings-form hidden" autocomplete="off">
+            <div class="settings-subhead" id="agent-form-title">新建 Agent 预设</div>
+            <p class="muted hidden" id="agent-form-scope"></p>
+            <div class="form-row">
+              <label class="field-label" for="agent-label">预设名称</label>
+              <input id="agent-label" class="input text-input" type="text" maxlength="60" placeholder="例如 内网横向专项" autocomplete="off">
+              <label class="field-label" for="agent-handle">标识</label>
+              <span class="id-prefix" id="agent-handle-prefix">custom-</span>
+              <input id="agent-handle" class="input id-input" type="text" maxlength="32" placeholder="lateral" autocomplete="off" spellcheck="false">
+            </div>
+            <p class="muted" id="agent-handle-hint">标识会写进数据库与会话记录，
+              <strong>创建后不可修改</strong>（改名字不会改标识）。留空则按名称自动生成；
+              中文名挤不出标识，需要手动填一个英文短名。</p>
+            <div class="form-row">
+              <label class="field-label" for="agent-summary">一句话说明</label>
+              <input id="agent-summary" class="input text-input" type="text" maxlength="200" placeholder="显示在会话入口的下拉框里" autocomplete="off">
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="agent-note">适用场合</label>
+              <input id="agent-note" class="input text-input" type="text" maxlength="200" placeholder="可选：什么时候该用这一档" autocomplete="off">
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="agent-steps">单轮步数预算</label>
+              <input id="agent-steps" class="input num-input" type="number" step="1" min="1" max="99999" value="6">
+              <span class="muted">1–99999。一步可能是一次工具调用，而下发任务是真的会建任务；
+                上限已按本部署的设置抬到事实上不设限，实际代价是每一次调用一趟模型往返。</span>
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="agent-skills">技能手册清单</label>
+              <select id="agent-skills" class="select multi-select" multiple size="6"></select>
+            </div>
+            <p class="muted" id="agent-skills-hint">不勾选 = 全部手册。勾选之后只把这几份写进系统提示，
+              省掉用不上的那批；本地 <code>data/skills</code> 的手册始终可用。按住 Ctrl 多选。</p>
+            <div class="form-row">
+              <label class="field-label" for="agent-prompt">作业口径</label>
+            </div>
+            <div class="form-row">
+              <textarea id="agent-prompt" class="input prompt-input" rows="10" placeholder="这一段会成为系统提示里「当前 Agent 预设」的正文，每一轮对话都会下发。写清取向：覆盖优先还是达成优先、先做什么后做什么、结论该按什么组织、汇报口径如何。"></textarea>
+            </div>
+            <p class="muted" id="agent-prompt-hint"><span id="agent-prompt-count">0 字</span>，每一轮对话都会随系统提示下发——长度直接乘以对话轮数。
+              <strong>没有字数上限</strong>：写多长由你判断，代价是每一轮都按这个长度付一次。
+              这一段只影响取向，不改变探测作用域、工具集与审计记录。</p>
+            <p class="notice hidden" id="agent-form-message"></p>
+            <div class="form-row">
+              <button id="agent-submit" class="btn" type="submit">保存预设</button>
+              <button id="agent-cancel" class="btn sm hidden" type="button">取消</button>
+            </div>
+          </form>
+
+          <!-- 破甲注入（`dsh-purge` 并进来的那一半）。**放在 Agent 预设卡里**而不是
+               单开一个分组：它决定的是"这一轮按什么口径说话"，与 Agent 预设是同一个
+               问题的两个面（口径正文 / 口径之外的注入段）。单开一组会让使用者先猜到
+               "原来还有一处能改措辞"。
+               三件事都属于**部署口径**（对所有会话一致），所以只有管理员能改。 -->
+          <div class="settings-subhead">破甲注入（dsh-purge）</div>
+          <p class="muted" id="purge-hint">注入段进系统提示，**不限字数**
+            （`dsh-purge` 的原词两万五千字就照原样收）；拒答重试与自动续写改的是
+            步循环。三者都**不改**权限档、作用域与侵入授权——工具照旧会被拒。</p>
+          <div class="form-row">
+            <label class="hub-verified" for="purge-enabled">
+              <input id="purge-enabled" type="checkbox"> 启用注入段
+            </label>
+            <label class="field-label" for="purge-retry">拒答重试</label>
+            <input id="purge-retry" class="input num-input" type="number" min="0" max="9" value="0">
+            <label class="field-label" for="purge-continue">自动续写</label>
+            <input id="purge-continue" class="input num-input" type="number" min="0" max="9" value="0">
+            <label class="field-label" for="purge-continue-text">续写词</label>
+            <input id="purge-continue-text" class="input text-input" type="text" maxlength="200" placeholder="继续">
+          </div>
+          <p class="muted">重试与续写**各占一步**预算（不是白送的）：一轮步数上限不变，
+            它们只是把预算花在"让它把话说完"上。</p>
+          <div class="form-row">
+            <label class="field-label" for="purge-inject">注入段正文</label>
+          </div>
+          <div class="form-row">
+            <textarea id="purge-inject" class="input prompt-input" rows="6"
+                      placeholder="从 dsh-purge 里取，或自己写。留空 = 不注入（开关开着也一样）"></textarea>
+          </div>
+          <p class="muted" id="purge-state">—</p>
+          <p class="notice hidden" id="purge-message"></p>
+          <div class="form-row">
+            <button id="purge-save" class="btn" type="button">保存破甲设置</button>
+          </div>
+
+          <p class="notice hidden" id="agent-mode-message"></p>
+        </div>
+      </section>
+
+      <!-- 模型配置：卡片列表 + 新建/编辑表单 -->
+      <section class="setup-card wide" data-settings-group="models">
+        <div class="panel-head">模型配置<span class="panel-head-hint">协议 / 端点 / 密钥来源 / 启用状态</span></div>
+        <div class="panel-body">
+          <div id="models-list" class="models-list"></div>
+
+          <div class="settings-subhead" id="model-form-title">新建模型配置</div>
+          <form id="model-form" class="settings-form" autocomplete="off">
+            <div class="form-row">
+              <label class="field-label" for="model-preset">服务商预设</label>
+              <select id="model-preset" class="select sm-select">
+                <option value="">（自定义 / 不套用预设）</option>
+              </select>
+              <span class="muted" id="model-preset-hint">选中预设会自动填入协议、端点与模型名</span>
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="model-name">配置名称</label>
+              <input id="model-name" class="input text-input" type="text" placeholder="例如 生产 DeepSeek" autocomplete="off">
+              <label class="field-label" for="model-provider">协议</label>
+              <select id="model-provider" class="select sm-select">
+                <option value="openai_compat">OpenAI 兼容（/v1/chat/completions）</option>
+                <option value="deepseek">DeepSeek 官方（/chat/completions）</option>
+                <option value="anthropic">Anthropic（原生 Messages API）</option>
+                <option value="ollama">Ollama（原生 /api/chat）</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="model-base-url">Base URL</label>
+              <input id="model-base-url" class="input" type="text" placeholder="例如 https://api.deepseek.com（官方不带 /v1）" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="model-model">模型名</label>
+              <input id="model-model" class="input" type="text" placeholder="例如 deepseek-flash" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="form-row hidden" id="model-thinking-row">
+              <label class="field-label" for="model-thinking">思考模式</label>
+              <select id="model-thinking" class="select sm-select">
+                <option value="">跟随官方默认（开启）</option>
+                <option value="disabled">关闭（更快、更省）</option>
+                <option value="enabled">开启（显式要求）</option>
+              </select>
+              <label class="field-label" for="model-reasoning-effort">reasoning_effort</label>
+              <select id="model-reasoning-effort" class="select sm-select">
+                <option value="">官方默认（high）</option>
+                <option value="low">low — 想得少一些</option>
+                <option value="high">high</option>
+                <option value="max">max — 想得最多</option>
+                <option value="none">none — 等于关闭思考</option>
+              </select>
+            </div>
+            <p class="muted hidden" id="model-thinking-hint">思考模式下 temperature 与 top_p 不生效（官方定义），
+              且推理 token 计入 maxTokens——思考开着时 maxTokens 建议不低于 4096，否则预算会被推理吃光、回答为空。</p>
+            <div class="form-row">
+              <label class="field-label" for="model-key-source">密钥来源</label>
+              <select id="model-key-source" class="select sm-select">
+                <option value="env">环境变量</option>
+                <option value="file">文件</option>
+                <option value="inline">直接填写（明文保存）</option>
+                <option value="none">不使用密钥</option>
+              </select>
+              <span class="muted" id="model-key-hint"></span>
+            </div>
+            <div class="form-row hidden" id="model-key-ref-row">
+              <label class="field-label" for="model-key-ref" id="model-key-ref-label">变量 / 文件路径</label>
+              <input id="model-key-ref" class="input" type="text" placeholder="例如 DEEPSEEK_API_KEY" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="form-row hidden" id="model-key-inline-row">
+              <label class="field-label" for="model-key-inline">API Key</label>
+              <input id="model-key-inline" class="input" type="password" placeholder="编辑时留空表示不修改" autocomplete="new-password">
+            </div>
+            <p class="token-warning hidden" id="model-key-warning">直接填写密钥会把明文保存在控制面数据库里。生产环境建议改用环境变量或文件。</p>
+            <div class="form-row">
+              <label class="field-label" for="model-temperature">temperature</label>
+              <input id="model-temperature" class="input num-input" type="number" step="0.1" min="0" max="2" placeholder="0.2">
+              <label class="field-label" for="model-max-tokens">maxTokens</label>
+              <input id="model-max-tokens" class="input num-input" type="number" step="1" min="1" placeholder="4096">
+              <label class="field-label" for="model-timeout">timeoutS</label>
+              <input id="model-timeout" class="input num-input" type="number" step="1" min="1" placeholder="60">
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="model-note">备注</label>
+              <input id="model-note" class="input text-input" type="text" placeholder="可选：用途 / 限额 / 联系人" autocomplete="off">
+            </div>
+            <p class="notice hidden" id="model-form-message"></p>
+            <div class="form-row">
+              <button id="model-submit" class="btn" type="submit">保存配置</button>
+              <button id="model-cancel" class="btn sm hidden" type="button">取消编辑</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- 权限档：说明四档各能做什么，并设全局默认值。
+           这里是**默认值**；某个会话具体用哪一档，在「控制台」的入口条上选。 -->
+      <section class="setup-card wide" data-settings-group="policies">
+        <div class="panel-head">权限档
+          <span class="panel-head-hint">默认档位；实际以各会话入口所选的为准</span>
+          <span class="spacer"></span>
+          <span class="muted" id="policy-current">尚未加载</span>
+        </div>
+        <div class="panel-body">
+          <div id="policy-list" class="mode-list"></div>
+          <p class="muted" id="policy-note">权限档是<strong>收窄器</strong>：它只决定会话里
+            的 Agent 能发起哪一类动作，绝不会放宽探测作用域门禁——把档位调到最高，
+            越界目标一样会被拒绝。装插件这类会影响整个部署的动作，另需管理员身份。</p>
+          <p class="notice hidden" id="policy-message"></p>
+        </div>
+      </section>
+
+      <!-- 运行通道：决定"这一轮的对话由谁的循环执行"。
+           它是**部署口径**（对所有会话一致），所以只对管理员可改、且默认关闭；
+           打开之前会先把"能不能开"摊开说（缺启动器/缺补丁时指明缺哪一个）。 -->
+      <section class="setup-card wide" data-settings-group="dsh">
+        <div class="panel-head">运行通道
+          <span class="panel-head-hint">打开后，对话的模型循环、工具执行与上下文压缩都在 DSH 里跑</span>
+        </div>
+        <div class="panel-body">
+          <p class="muted" id="dsh-runtime-hint">尚未加载</p>
+          <div class="form-row">
+            <label class="field-label" for="dsh-runtime-mode">运行通道</label>
+            <select id="dsh-runtime-mode" class="select sm-select">
+              <option value="off">平台原生循环（默认）</option>
+              <option value="sdk">DSH 运行通道</option>
+            </select>
+            <button class="btn" type="button" id="dsh-runtime-save">保存</button>
+          </div>
+          <p class="muted" id="dsh-runtime-state">—</p>
+          <p class="muted" id="dsh-integration-note">DSH 集成在这个项目里只有一条路：
+            <strong>平台的对话页交给项目自己拉起的 DSH 会话去跑</strong>（上面那条开关）。
+            平台工具随这条通道一起挂进去（运行时补丁写在平台自己的 DSH home 下）；
+            装插件只装界面，不会把它们带进你自己的 DSH。权限档、作用域与侵入授权
+            照旧在平台侧判。</p>
+          <p class="notice hidden" id="dsh-message"></p>
+        </div>
+      </section>
+
+      <!-- 扫描执行：决定"一次扫描由谁跑"。与上面那条运行时通道相邻但不相同——
+           那条说的是**对话**由谁执行，这条说的是**扫描**由谁执行。
+           两条路的证据强度不一样，所以这里必须把差别写在卡片上，而不是只给一个下拉框：
+           推理引擎没有修复版可对照，它的结论只会落「未证实（静态）」。
+           与运行时通道同一条分工：部署口径、只对管理员可改。 -->
+      <section class="setup-card wide" data-settings-group="scan">
+        <div class="panel-head">扫描执行
+          <span class="panel-head-hint">一次扫描由谁跑：确定性流水线，或 DSH 会话只读审计</span>
+        </div>
+        <div class="panel-body">
+          <p class="muted" id="scan-engine-hint">尚未加载</p>
+          <div class="form-row">
+            <label class="field-label" for="scan-engine-mode">扫描引擎</label>
+            <select id="scan-engine-mode" class="select sm-select">
+              <option value="vulnagent">发掘引擎（vulnagent，默认）</option>
+              <option value="dsh">推理引擎（DSH 会话）</option>
+            </select>
+            <button class="btn" type="button" id="scan-engine-save">保存</button>
+          </div>
+          <p class="muted" id="scan-engine-state">—</p>
+          <p class="muted" id="scan-engine-note">两条路的证据强度不同：发掘引擎会拿缺陷版与
+            修复版做差分执行，成立的结论记为「已证实」；推理引擎由 DSH 会话在目标目录里
+            <strong>只读审计</strong>，没有修复版可对照，因此它的发现一律记为
+            「未证实（静态）」，报告里会写明验证方式。切到推理引擎不会偷偷回退——它起不来时
+            任务直接失败并说明缺什么。</p>
+          <p class="notice hidden" id="scan-engine-message"></p>
+        </div>
+      </section>
+
+      <!-- 工具审批：决定"要不要人先点一下头"。
+           它和权限档是两件事，卡片上必须说清：权限档是**收窄器**（这一档允许发起
+           哪类动作），审批是**人在环确认**（这一次要不要真的做）。所以 `auto` 不是
+           "关掉审批"——单子照建、理由照写、批准人记成 `auto`，审计里查得到；`off`
+           才是根本不留单。这两档的差别只在这张卡上说得清，所以各自给一句警告。 -->
+      <section class="setup-card wide" data-settings-group="review">
+        <div class="panel-head">工具审批
+          <span class="panel-head-hint">谁点头：人工逐条批，或由平台自动批准并执行</span>
+        </div>
+        <div class="panel-body">
+          <p class="muted" id="review-hint">尚未加载</p>
+          <div class="form-row">
+            <label class="field-label" for="review-mode">审批档位</label>
+            <select id="review-mode" class="select sm-select">
+              <option value="off">不审查</option>
+              <option value="ask">审查任意命令</option>
+              <option value="strict">逐次确认侵入动作</option>
+              <option value="auto">自动批准并执行</option>
+            </select>
+            <button class="btn" type="button" id="review-save">保存</button>
+          </div>
+          <p class="muted" id="review-state">—</p>
+          <p class="muted" id="review-note">审批<strong>不放宽门禁</strong>：它只决定"要不要
+            等人点一下头"，不改变会话的探测作用域与权限档——越界动作照样硬拒，装插件
+            这类动作照样要管理员。「自动批准并执行」与「不审查」的差别全在审计里：
+            前者仍为每次调用建一张审查单、写明理由与批准人 <code>auto</code>，
+            后者的调用根本不留单。</p>
+          <p class="notice hidden" id="review-warning"></p>
+          <p class="notice hidden" id="review-message"></p>
+        </div>
+      </section>
+
+      <!-- 插件市场：兼容 DSH Plugin Hub（13600+ 条目录），装/卸走官方 CLI。
+           装插件会影响整个 DSH 部署，因此这一组只对管理员开放。 -->
+      <section class="setup-card wide" data-settings-group="plugins">
+        <div class="panel-head">插件市场
+          <span class="panel-head-hint">DSH Plugin Hub · 目录来自 api.dsh-plugin.org</span>
+          <span class="spacer"></span>
+          <button id="hub-diag" class="btn sm" type="button">连通性自检</button>
+          <button id="hub-installed-refresh" class="btn sm" type="button">刷新已安装</button>
+        </div>
+        <div class="panel-body">
+          <p class="muted" id="hub-meta">尚未加载</p>
+
+          <div class="form-row hub-search-row">
+            <input id="hub-query" class="input" type="search"
+                   placeholder="搜索插件：名称 / 描述 / 标签，例如 pentest、隧道、资产" autocomplete="off">
+            <select id="hub-category" class="select sm-select" aria-label="类别"></select>
+            <label class="hub-verified"><input id="hub-verified" type="checkbox"> 只看已验证</label>
+            <button id="hub-search" class="btn" type="button">搜索</button>
+          </div>
+          <div id="hub-message"></div>
+          <div id="hub-results" class="hub-results"></div>
+          <div class="hub-more hidden" id="hub-more-row">
+            <button id="hub-more" class="btn sm" type="button">加载更多</button>
+          </div>
+
+          <!-- 已安装：来自本机 DSH profile 的实测结果，不是市场目录里的记录 -->
+          <div class="settings-subhead">已安装的 DSH 插件</div>
+          <div id="hub-installed" class="hub-installed"></div>
+
+          <!-- 操作记录：安装是**入队执行**的，成败与输出都在这里。
+               折叠走 fold.js——与对话侧栏那四块、资产目录、报告目录**同一套机制**。
+               没另写一个 `<details>`：那会多出第二种折叠，而它的状态不落设备、
+               刷新之后自己弹开（这一条正是 fold.js 存在的理由）。
+               头是真按钮，所以"清空记录"只能做它的**兄弟节点**——按钮里嵌按钮是
+               非法 HTML，浏览器会把内层那个挪到外面去（同 Agent 预设卡片那条注释）。 -->
+          <div class="settings-fold-block" id="hub-ops-block" data-fold-part="hub-ops">
+            <div class="settings-fold-row">
+              <button class="panel-head fold-head" type="button" data-fold="hub-ops">
+                插件操作记录<span class="panel-head-hint" id="hub-ops-hint"></span>
+                <span class="fold-mark" aria-hidden="true"></span>
+              </button>
+              <span class="spacer"></span>
+              <button id="hub-ops-clear" class="btn sm" type="button">清空记录</button>
+            </div>
+            <div class="panel-body hub-ops" id="hub-ops"></div>
+          </div>
+
+          <div class="settings-subhead">连通性与自检</div>
+          <div id="hub-diag-result"></div>
+        </div>
+      </section>
+
+      <!-- 外部 MCP 服务：把第三方 MCP 服务的工具接进「控制台」。
+           工具名形如 mcp__<服务id>__<工具名>，与平台自己的工具一起出现在
+           模型的工具表里。改配置、测试连接、手工调用都要管理员——那三件事
+           会写配置或**拉起外部进程**。 -->
+      <section class="setup-card wide" data-settings-group="mcp">
+        <div class="panel-head">MCP 服务
+          <span class="panel-head-hint">外部工具接入 · stdio 或 HTTP</span>
+          <span class="spacer"></span>
+          <span class="muted" id="mcp-meta">尚未加载</span>
+          <button id="mcp-refresh" class="btn sm" type="button">刷新</button>
+        </div>
+        <div class="panel-body">
+          <p class="muted" id="mcp-note">这里的服务由外部程序实现，工具跑在<strong>控制面这台
+            机器</strong>上。它们<strong>不产出目标证据</strong>（结果不进探索链路、漏洞或报告），
+            返回值按不可信输入处理。每条服务声明一个权限档：档位越高，能拿到它的会话越少
+            （<code>full</code> 最窄，只有完全作业档的会话能拿到）。</p>
+
+          <div id="mcp-message"></div>
+          <div id="mcp-list" class="mcp-list"></div>
+
+          <div class="settings-subhead" id="mcp-form-title">添加 MCP 服务</div>
+          <form id="mcp-form" class="settings-form" autocomplete="off">
+            <div class="form-row">
+              <label class="field-label" for="mcp-id">服务 id</label>
+              <input id="mcp-id" class="input text-input" type="text" autocomplete="off"
+                     spellcheck="false" placeholder="fs（小写字母开头；它会出现工具名里）">
+              <label class="field-label" for="mcp-label">名称</label>
+              <input id="mcp-label" class="input text-input" type="text" autocomplete="off"
+                     placeholder="文件系统">
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="mcp-transport">传输</label>
+              <select id="mcp-transport" class="select sm-select">
+                <option value="stdio">stdio（拉起一个进程）</option>
+                <option value="http">http（Streamable HTTP）</option>
+              </select>
+              <label class="field-label" for="mcp-level">权限档</label>
+              <select id="mcp-level" class="select sm-select"></select>
+              <span class="muted">档位越高，能拿到它的会话越少（full 最窄）</span>
+            </div>
+
+            <div class="form-row" id="mcp-stdio-row">
+              <label class="field-label" for="mcp-command">命令</label>
+              <input id="mcp-command" class="input text-input" type="text" autocomplete="off"
+                     spellcheck="false" placeholder="npx / node / python（也可写完整命令行）">
+            </div>
+            <div class="form-row" id="mcp-args-row">
+              <label class="field-label" for="mcp-args">参数</label>
+              <textarea id="mcp-args" class="input" rows="3"
+                        placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;D:\data"></textarea>
+              <span class="muted">每行一个</span>
+            </div>
+
+            <div class="form-row hidden" id="mcp-http-row">
+              <label class="field-label" for="mcp-url">地址</label>
+              <input id="mcp-url" class="input text-input" type="text" autocomplete="off"
+                     spellcheck="false" placeholder="https://host/mcp">
+            </div>
+
+            <div class="form-row">
+              <label class="field-label" for="mcp-timeout">超时（秒）</label>
+              <input id="mcp-timeout" class="input num-input" type="number" min="1" max="600" value="60">
+              <label class="field-label" for="mcp-enabled">状态</label>
+              <select id="mcp-enabled" class="select sm-select">
+                <option value="1">启用</option>
+                <option value="0">停用</option>
+              </select>
+              <label class="hub-verified" for="mcp-review">
+                <input id="mcp-review" type="checkbox" checked> 每次调用前要人工批准
+              </label>
+            </div>
+            <p class="muted">批准与 <code>chat_review</code> 档位一起生效。外部工具与
+              <code>run_command</code> 同类：在这台机器上由外部代码执行、不受适配器表约束，
+              所以「要人先看一眼」是默认，而不是去猜这个工具危不危险。</p>
+
+            <div class="form-row" id="mcp-env-row">
+              <label class="field-label" for="mcp-env">环境变量</label>
+              <textarea id="mcp-env" class="input" rows="3"
+                        placeholder="PYTHONIOENCODING=utf-8"></textarea>
+              <span class="muted">每行一条 KEY=VALUE；stdio 服务用它设编码等</span>
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="mcp-note-field">备注</label>
+              <input id="mcp-note-field" class="input text-input" type="text" autocomplete="off"
+                     placeholder="可选：用途 / 联系人">
+            </div>
+
+            <p class="notice hidden" id="mcp-form-message"></p>
+            <div class="form-row">
+              <button id="mcp-submit" class="btn" type="submit">保存并探测</button>
+              <button id="mcp-cancel" class="btn sm" type="button">清空表单</button>
+            </div>
+            <p class="muted">保存之后会立刻连一次：连不上的原因（命令找不到、服务报错、
+              超时）会显示在那张卡片上。<strong>探测失败不影响保存</strong>——配置已经落库，
+              改好再点「测试连接」即可。stdio 服务的输出必须是 UTF-8（MCP 的规定）；
+              卡片上出现编码提醒时，加一条 <code>PYTHONIOENCODING=utf-8</code> 即可。</p>
+          </form>
+        </div>
+      </section>
+
+      <!-- 用户管理：仅 role=admin 时显示 -->
+      <!-- Skills：平台里的技能手册（插件集成的 + data/skills 下你自己放/导入的）。
+           它原先是「演练台」的一部分。那道授权门已经撤了：技能是"读一份 markdown"，
+           不下发任务、不碰目标、也不改变权限档——真正挡住它的是资产与部署两页，
+           而那两页本来就有自己的入口。这里只回答三件事：有哪些手册、从哪来、删一份。 -->
+      <section class="setup-card wide" data-settings-group="skills">
+        <div class="panel-head">Skills
+          <span class="panel-head-hint" id="skills-status">尚未加载</span>
+        </div>
+        <div class="panel-body">
+          <p class="muted">技能是<strong>按需加载</strong>的作业手册：目录常驻提示词，
+            正文只在模型判定「这次要用它」时展开。插件带来的与 <code>data/skills</code>
+            下你自己放的合在一起列；同名时以本地那份为准（插件那条会被标成「被覆盖」）。</p>
+
+          <div class="form-row">
+            <label class="field-label" for="skills-query">筛选</label>
+            <input id="skills-query" class="input text-input" type="text"
+                   placeholder="按名字 / 说明 / 适用场景过滤" autocomplete="off">
+            <button id="skills-refresh" class="btn sm" type="button">刷新</button>
+          </div>
+          <p class="muted" id="skills-dir">—</p>
+          <p class="notice hidden" id="skills-message"></p>
+          <div id="skills-import-box" class="hidden">
+            <h4 class="settings-subhead">导入手册<span class="muted">只读你点名的这一个目录，不改源文件</span></h4>
+            <div class="form-row">
+              <label class="field-label" for="skills-import-dir">目录</label>
+              <input id="skills-import-dir" class="input text-input" type="text"
+                     placeholder="放 *.md 的那一个目录（只读你点名的这一个）" autocomplete="off">
+              <button class="btn" type="button" id="skills-import">导入</button>
+            </div>
+            <p class="muted">一次最多 60 份、单份 200 KB；同名不覆盖（你手改过的那份永远优先）。
+              导入时如果目录里能找到 dsh-purge，会同时把它的注入段带进破甲通道。</p>
+          </div>
+          <div id="skills-list" class="skills-list"></div>
+        </div>
+      </section>
+
+      <section class="setup-card wide hidden" id="users-card" data-settings-group="users">        <div class="panel-head">用户管理<span class="panel-head-hint">仅管理员可见</span></div>
+        <div class="panel-body">
+          <div id="users-list" class="users-list"></div>
+
+          <div class="settings-subhead">新建用户</div>
+          <form id="user-form" class="settings-form" autocomplete="off">
+            <div class="form-row">
+              <label class="field-label" for="user-new-username">用户名</label>
+              <input id="user-new-username" class="input" type="text" placeholder="例如 operator-a" autocomplete="off" spellcheck="false">
+              <label class="field-label" for="user-new-password">密码（至少 10 位）</label>
+              <input id="user-new-password" class="input" type="password" autocomplete="new-password">
+              <label class="field-label" for="user-new-role">角色</label>
+              <select id="user-new-role" class="select sm-select">
+                <option value="operator">操作员</option>
+                <option value="admin">管理员</option>
+              </select>
+            </div>
+            <p class="notice hidden" id="user-form-message"></p>
+            <div class="form-row">
+              <button id="user-submit" class="btn" type="submit">创建用户</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+    </div>
+  </section>
+
+  <!-- 页签：仪表盘（规模读数 + 最近任务 + 高危漏洞）。
+       它放在导航第一位，因为它回答的是"这个平台上现在有什么、刚才发生了什么"，
+       而那正是打开一个工作台时最先要看的。**它不是控制台的替代**：控制台是干活
+       的地方（一屏放这一轮的全部消息），仪表盘是概览（一屏放全部规模读数）。
+       两者塞进同一页就得二选一。 -->
+  <section id="panel-dashboard" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">仪表盘</h1>
+        <span class="ph-sub">规模读数 · 最近任务 · 高危漏洞</span>
+      </div>
+      <div class="ph-status">
+        <span class="muted" id="dashboard-meta">尚未加载</span>
+      </div>
+      <div class="ph-actions">
+        <button id="dashboard-refresh" class="btn sm" type="button">刷新</button>
+      </div>
+    </header>
+    <div class="panel-body" id="dashboard-body"></div>
+  </section>
+
+  <!-- 页签：流量（已经发出去过的手工请求）。
+       列表**不带正文**：一屏几十条，每条几十 KB 正文会把响应撑到几 MB，而列表上
+       根本显示不了正文。点开一条才取全文——这也正是这一页的用途：看到一条，
+       改一个字段再发。 -->
+  <section id="panel-traffic" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">流量</h1>
+        <span class="ph-sub">手工请求的记录，按时间倒序</span>
+      </div>
+      <div class="ph-status">
+        <span class="muted" id="traffic-meta">尚未加载</span>
+      </div>
+      <div class="ph-actions">
+        <button id="traffic-refresh" class="btn sm" type="button">刷新</button>
+        <button id="traffic-clear" class="btn sm danger" type="button">清空全部</button>
+      </div>
+    </header>
+    <div class="panel-body">
+      <div id="traffic-body"></div>
+      <div id="traffic-detail"></div>
+    </div>
+  </section>
+
+  <!-- 页签：请求重发（手工构造一条 HTTP 请求）。
+       **不吃模型的权威审查**：这是人在界面上按的，模型不在环里。作用域门禁仍在
+       服务端（`httpreplay.send` 走 scope），所以这一页不是一条"想去哪就去哪"的路。 -->
+  <section id="panel-repeater" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">请求重发</h1>
+        <span class="ph-sub">发一条手工请求；从「流量」里挑一条改过再发</span>
+      </div>
+      <div class="ph-status">
+        <span class="muted">目标须在 --probe-scope 内</span>
+      </div>
+    </header>
+    <div class="panel-body" id="repeater-body"></div>
+  </section>
+
+  <!-- 页签：工作空间（这一轮对话在盘上留下了什么）。
+       只读：打开它不会在盘上建目录。 -->
+  <section id="panel-workspace" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">工作空间</h1>
+        <span class="ph-sub">命令与产物的落盘位置（只读）</span>
+      </div>
+      <div class="ph-actions">
+        <button id="workspace-refresh" class="btn sm" type="button">刷新</button>
+      </div>
+    </header>
+    <div class="panel-body" id="workspace-body"></div>
+  </section>
+
+  <!-- 页签：审批记录（审查单的独立视图）。
+       它此前只活在对话里那几张卡片上，而"这次任意命令执行是谁点的头"是一个**事后**
+       问题——事后翻一屏聊天记录找一张卡片，是这个界面最不该有的摩擦。 -->
+  <section id="panel-approvals" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">审批记录</h1>
+        <span class="ph-sub">谁批准了哪条命令（含已拒绝 / 已过期）</span>
+      </div>
+      <div class="ph-status">
+        <span class="muted" id="approvals-meta">尚未加载</span>
+      </div>
+      <div class="ph-actions">
+        <button id="approvals-refresh" class="btn sm" type="button">刷新</button>
+      </div>
+    </header>
+    <div class="panel-body" id="approvals-body"></div>
+  </section>
+
+  <!-- 页签：日志（access.log 的尾部，管理员）。
+       它是**部署自检之外**唯一能回答"外面到底发生了什么事"的地方。
+       不走静态资源那条路：日志在 data/ 里，把它挪进 web/ 等于把访问记录变成可下载文件。 -->
+  <section id="panel-logs" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">日志</h1>
+        <span class="ph-sub">控制面访问日志的尾部（管理员）</span>
+      </div>
+      <div class="ph-status">
+        <span class="muted" id="logs-meta">尚未加载</span>
+      </div>
+      <div class="ph-actions">
+        <input id="logs-limit" class="input logs-limit" type="number" min="1" max="2000" value="200" aria-label="显示行数">
+        <button id="logs-refresh" class="btn sm" type="button">刷新</button>
+      </div>
+    </header>
+    <div class="panel-body" id="logs-body"></div>
+  </section>
+
+  <!-- 页签 9：使用说明（页内操作手册：十二章正文 + 目录 + 搜索 + 按状态给下一步） -->
+  <section id="panel-guide" class="panel">
+    <header class="page-head">
+      <div class="ph-title">
+        <h1 class="ph-name">使用说明</h1>
+        <span class="ph-sub" id="guide-meta">正在准备正文…</span>
+      </div>
+      <div class="ph-status">
+        <input id="guide-search" class="input" type="search" placeholder="搜索步骤 / 命令 / 关键词" aria-label="搜索使用说明">
+      </div>
+      <div class="ph-actions">
+        <button id="guide-reset" class="btn sm hidden" type="button">清除搜索</button>
+      </div>
+    </header>
+
+    <!-- 状态条：读 /setup 与 /models，告诉使用者现在卡在哪一步 -->
+    <div class="guide-status" id="guide-status"></div>
+
+    <div class="guide-body">
+      <nav class="guide-toc" id="guide-toc" aria-label="章节目录"></nav>
+      <article class="guide-content" id="guide-content"></article>
+    </div>
+  </section>
+
+</main>
+</div><!-- /workspace -->
+
+</div><!-- /console-shell -->
+
+<!-- 修改密码：仅登录后可用 -->
+<div id="password-overlay" class="modal-overlay hidden">
+  <form id="password-form" class="modal-card" autocomplete="off">
+    <div class="modal-head">
+      <span>修改密码</span>
+      <span class="spacer"></span>
+      <button id="password-close" class="icon-btn" type="button" aria-label="关闭修改密码">×</button>
+    </div>
+    <div class="modal-body">
+      <label class="field-label" for="password-current">当前密码</label>
+      <input id="password-current" class="input auth-input" type="password" autocomplete="current-password">
+      <label class="field-label" for="password-new">新密码（至少 10 位）</label>
+      <input id="password-new" class="input auth-input" type="password" autocomplete="new-password">
+      <label class="field-label" for="password-confirm">确认新密码</label>
+      <input id="password-confirm" class="input auth-input" type="password" autocomplete="new-password">
+      <p class="auth-message hidden" id="password-message" role="alert"></p>
+      <div class="form-row">
+        <button id="password-submit" class="btn" type="submit">保存新密码</button>
+        <button id="password-cancel" class="btn sm" type="button">取消</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- auth.js 必须先于 app.js：它标记"控制台由 boot.js 接管启动"，未登录时不渲染控制台 -->
+<script src="auth.js"></script>
+<script src="app.js"></script>
+<script src="panels.js"></script>
+<!-- split.js 排在这里没有顺序依赖：它只读自己那三个手柄与一份设备上的宽度偏好，
+     不碰 app.js 的任何状态。放在应用脚本之后只是为了让 app.js 先定义 #graph-svg
+     这些节点，截图与调试时 DOM 已经成型。 -->
+<script src="split.js"></script>
+<!-- fold.js 与 split.js 同一档：只读 DOM 与一份设备上的折叠偏好，不碰任何状态，
+     所以也没有顺序依赖。放在它后面是因为两者是同一类东西（界面偏好），
+     并排放好找。 -->
+<script src="fold.js"></script>
+<script src="theme.js"></script>
+<script src="skills.js"></script>
+<script src="settings.js"></script>
+<script src="chat.js"></script>
+<script src="guide.js"></script>
+<script src="boot.js"></script>
+</body>
+</html>

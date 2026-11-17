@@ -1,0 +1,431 @@
+/* ============================================================================
+ * AI 智能体渗透测试工作台 —— Apple HIG 方向的视觉系统「候选层」
+ *
+ * 这不是产品样式表。它是 `视觉设计系统.md` 里那套 token 的**可执行版本**，
+ * 由 `tools/ui_token_preview.py` 在夹具渲染时**注入到 style.css 之后**，
+ * 用来出「改前 / 改后」对照图，核对换算关系与对比度在真实页面上是否成立。
+ *
+ * 三件事刻意不做：
+ *   * 不改任何 id、类名、DOM 结构 —— `tests/test_ui_contract.py` 断言了 id 与页签；
+ *   * 不新增 `overflow: hidden` 的容器 —— `test_overflow_hidden_containers_are_known`
+ *     把这份白名单写死了（当前只有 `body` 与 `.cmd-block`），新增即测试失败；
+ *   * 不引入外部资源、字体、图标 —— 全部离线可用，字体走系统栈。
+ *
+ * 落地方式：把 §1 的 token 段替换掉 style.css 的 `:root`，再按 §2–§9 逐条把
+ * 旧声明改成引用新 token（每条都注明了改的是哪条规则）。
+ * ==========================================================================*/
+
+/* ---------------------------------------------------------------- 1. token -- */
+
+:root {
+  /* 表面层级：深色界面里"谁在上面"由**亮度**表达，边框只做收边。
+     相邻两档的亮度差刻意大于 Apple 的 1C1C1E / 2C2C2E（1.16 → 1.26），
+     因为这里一屏要并排 9 张卡，苹果那种"几乎同色"的层级在这种密度下会糊成一片。 */
+  --bg: #0B0B0D;              /* 窗口底 / 画布 / 内嵌代码块 */
+  --surface-tray: #101013;    /* 侧栏、工具条、输入区托盘 —— 比内容底亮一档 */
+  --surface-1: #16161A;       /* 卡片、面板、弹窗底 */
+  --surface-2: #1E1E23;       /* 卡内控件、输入框、列表行、气泡 */
+  --surface-3: #28282E;       /* 悬停 / 选中 / 芯片 */
+  --surface-4: #34343B;       /* 按下 / 强选中 / 拖动中 */
+  --scrim: rgba(6, 6, 8, .62);
+
+  /* 分割线与描边：Apple 用半透明 hairline（跟着底走），而不是固定的深灰实色。
+     好处是同一支线落在三种底上都不会"比底还黑"。 */
+  --separator: rgba(255, 255, 255, .07);        /* 区域分隔（装饰，无对比度门槛） */
+  --separator-strong: rgba(255, 255, 255, .12); /* 卡片收边 */
+  --field-border: rgba(255, 255, 255, .16);     /* 控件描边（配合面色差，见文档 §1.6） */
+
+  /* 文字三档。Apple 的四级灰阶（最暗的 quaternary 是 0.18 alpha）是给大字号
+     装饰性文字用的，在 11–12px 中文上会掉到 2:1 左右，所以这里只保留三档，
+     且最低一档是实色而不是 alpha —— 它必须自己在四种底上都过 4.5:1。 */
+  --label: #F5F5F7;    /* 正文、条目标题、表格数据 */
+  --label-2: #ADADB8;  /* 次要：说明句、标签、字段名 */
+  --label-3: #9A9AA6;  /* 第三档：元信息、ID、时间；仍 ≥4.5:1 */
+  --label-4: #6E6E78;  /* 仅供 SVG 图形与图标描边用，**禁止**承载文字 */
+
+  /* 强调色。作**文字**时改用下面那一支：systemBlue 在悬停档（--surface-3）上
+     只有 4.02:1，达不到正文门槛，而"链接 / 可点文本"恰恰常出现在悬停行上。 */
+  --accent: #0A84FF;
+  --accent-text: #409CFF;      /* 强调色作文字：surface-1 6.50 / surface-3 5.43 */
+  --accent-hover: #409CFF;
+  --accent-press: #0A6FD8;
+  --accent-tint: rgba(10, 132, 255, .16);
+  --accent-border: rgba(10, 132, 255, .45);
+  --ink: #0B0B0D;              /* 亮底上的唯一前景色 */
+
+  /* 状态（四个语义，别再派生第五个） */
+  --ok: #30D158;
+  --ok-tint: rgba(48, 209, 88, .16);
+  --warn: #FFD60A;
+  --warn-tint: rgba(255, 214, 10, .16);
+  --danger: #FF453A;           /* 系统故障 / 自检失败 / 任务失败 */
+  --danger-tint: rgba(255, 69, 58, .16);
+
+  /* 严重度五档（数据分级，不是状态） */
+  --sev-critical: #FF453A;
+  --sev-high: #FF9F0A;
+  --sev-medium: #FFD60A;
+  --sev-low: #63E6C3;
+  --sev-info: #9A9AA6;
+
+  /* 图节点类别：刻意避开状态色与严重度色，只保留 finding↔sev-high 这一处
+     同色（"这个节点是个漏洞"本来就该用漏洞的等级色，是有意的等价）。 */
+  --kind-goal: #5E5CE6;
+  --kind-intent: #BF5AF2;
+  --kind-fact: #40C8E0;
+  --kind-finding: #FF9F0A;
+  --kind-asset: #64D2FF;
+
+  /* 间距刻度：8pt 栅格 + 4pt 半步。现有 22 个取值收敛到 8 个。 */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+  --sp-7: 24px;
+  --sp-8: 32px;
+  --sp-9: 48px;
+
+  /* 字阶：7 档，每档有名字。正文仍是 13px —— 见文档 §4「不该照搬的第一条」。 */
+  --fs-micro: 10px;    /* 角标、计数徽章 */
+  --fs-caption: 11px;  /* 元信息、字段名、ID、时间 */
+  --fs-small: 12px;    /* 次要文字、表格、工具条 */
+  --fs-body: 13px;     /* 正文、条目内容 */
+  --fs-title: 14px;    /* 条目标题（600） */
+  --fs-heading: 16px;  /* 区块标题、文档 H2（600） */
+  --fs-display: 20px;  /* 文档 H1、登录标题（600） */
+
+  /* 行高：中文没有 Latin 的 x-height 缓冲，同等字号下需要更多行距，
+     所以正文取 1.5 而不是 Apple 的 1.29；但表格与元信息行仍要收紧到 1.35，
+     否则一屏少两行。 */
+  --lh-tight: 1.35;
+  --lh-body: 1.5;
+  --lh-prose: 1.7;
+
+  /* 圆角：5 档。现有 14 个取值（含 4 个方向组合）收敛到这里。 */
+  --r-xs: 4px;    /* 内联标签、代码 */
+  --r-sm: 6px;    /* 控件：按钮、输入框、下拉 */
+  --r-md: 10px;   /* 卡片、面板、气泡、代码块 */
+  --r-lg: 14px;   /* 浮层：弹窗、登录卡 */
+  --r-full: 999px;
+
+  /* 阴影：深色界面里阴影几乎读不出来，**层次靠面色**，阴影只服务浮层。 */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .5);        /* 下拉、气泡菜单 */
+  --shadow-2: 0 12px 32px rgba(0, 0, 0, .55);     /* 弹窗 */
+  --shadow-3: 0 28px 72px rgba(0, 0, 0, .62);     /* 登录门 */
+  --ring: 0 0 0 3px rgba(10, 132, 255, .35);      /* 焦点环 */
+
+  /* 动效：三类时长、三条曲线。现有样式表 transition 声明是 **0 处**，
+     所有状态变化都是硬切；这里把"该有转场"的地方补齐，并给 reduced-motion 出口。 */
+  --dur-1: 120ms;  /* 悬停 / 按下 / 焦点 —— 低于 100ms 会被感知成"没反应" */
+  --dur-2: 200ms;  /* 控件状态、展开收起、芯片选中 */
+  --dur-3: 320ms;  /* 面板与页签切换、浮层进入 */
+  --dur-4: 480ms;  /* 登录门、首屏大区块（只跑一次） */
+  --ease-standard: cubic-bezier(.4, 0, .2, 1);
+  --ease-decel: cubic-bezier(.05, .7, .1, 1);
+  --ease-accel: cubic-bezier(.3, 0, .8, .15);
+  --ease-spring: cubic-bezier(.34, 1.28, .64, 1);
+
+  /* 等宽栈与正文栈保持原样（含 CJK 回退），只补一条等宽里的中文： */
+  --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono",
+          "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", monospace;
+  --sans: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB",
+          system-ui, sans-serif;
+}
+
+/* ------------------------------------------------------------ 2. 页面骨架 -- */
+
+body {
+  background: var(--bg);
+  color: var(--label);
+  font: var(--fs-body)/var(--lh-body) var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 旧：一条 62 次的 `1px solid var(--border)` 把顶栏、页签栏、区块头、工具条、
+   卡片、弹窗画成了同一档方框。新规则：**区域**用半透明 hairline 分隔，
+   **卡片**只收边不描边，**控件**才用可见描边。 */
+.topbar,
+.tabs,
+.panel-head,
+.graph-toolbar, .list-toolbar, .report-toolbar,
+.settings-nav,
+.chat-compose {
+  border-color: var(--separator);
+}
+
+/* 顶栏 = 托盘色（比内容底亮一档），而不是和页签栏同色 */
+.topbar { background: var(--surface-tray); height: 52px; padding: 0 var(--sp-6); gap: var(--sp-7); }
+.tabs { background: var(--surface-tray); border-bottom: 1px solid var(--separator); padding: 0 var(--sp-5); gap: var(--sp-1); }
+.panel-head { background: transparent; border-bottom: 1px solid var(--separator); letter-spacing: 0; color: var(--label-2); padding: var(--sp-4) var(--sp-5); }
+.graph-toolbar, .list-toolbar, .report-toolbar { background: var(--surface-tray); border-bottom: 1px solid var(--separator); min-height: 44px; padding: var(--sp-2) var(--sp-5); gap: var(--sp-4); }
+.panel-body { padding: var(--sp-5); }
+
+/* 卡片的"卡感"来自面色差 + 10px 圆角，而不是 1px 描边 */
+.setup-card,
+.finding-card,
+.row,
+.check-item,
+.authz-item,
+.mode-option,
+.model-card,
+.plan-item,
+.hub-item,
+.hub-op,
+.chat-msg,
+.chat-session,
+.chat-tool-chip,
+.chat-subagents,
+.auth-card,
+.modal-card {
+  background: var(--surface-1);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--r-md);
+}
+.setup-card .panel-head { border-radius: 0; background: transparent; }
+.setup-body, .settings-body, .card-list { gap: var(--sp-6); padding: var(--sp-5); }
+
+/* 同一张卡里"再进来一层"的块用 surface-2，于是层级是
+   bg → surface-1（卡）→ surface-2（卡内块）→ surface-3（交互态），不再靠加框。 */
+.check-item, .authz-item, .row, .plan-item, .model-card, .mode-option, .chat-session,
+.chat-tool-chip, .guide-status-card, .model-test, .notice, .chat-live-chip {
+  background: var(--surface-2);
+  border-color: var(--separator);
+}
+
+/* 左侧色条：只留给"状态"，不再用于"这是一个什么东西"。
+   现有 19 处 border-left 色条里，finding-card / check-item / authz-item /
+   guide-status-card / chat-subagent-row / plan-item.blocked 是状态（保留，改 2px）；
+   mode-option / model-card / md-quote / plan-intent / dsh-iso / agent-row /
+   chat-reasoning / authz-boundary 是身份或层级（去掉）。 */
+.finding-card, .check-item, .authz-item, .guide-status-card, .chat-subagent-row { border-left-width: 2px; }
+.mode-option, .model-card, .plan-intent, .chat-reasoning, .agent-row, .authz-boundary,
+.authz-readonly, .dsh-iso, .md-quote { border-left: 0; }
+.mode-option, .model-card { border-left: 1px solid var(--separator-strong); }
+.mode-option.selected, .model-card.active { border-color: var(--accent-border); background: var(--accent-tint); }
+
+/* ---------------------------------------------------------- 3. 控件与表单 -- */
+
+.btn, .select, .input {
+  background: var(--surface-2);
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-sm);
+  color: var(--label);
+  padding: 5px var(--sp-5);
+  transition: background var(--dur-1) var(--ease-standard),
+              border-color var(--dur-1) var(--ease-standard),
+              transform var(--dur-1) var(--ease-standard);
+}
+.btn:hover, .select:hover { background: var(--surface-3); border-color: var(--accent-border); }
+.btn:active { transform: scale(.98); }
+.btn:disabled { opacity: .5; }
+
+/* 三层按钮：主（实心强调）/ 次（面色）/ 静默（无底无边，用于高频轻量动作） */
+.btn.primary, .auth-submit, .job-mode-btn.active {
+  background: var(--accent); border-color: transparent; color: var(--ink); font-weight: 600;
+}
+.btn.primary:hover, .auth-submit:hover { background: var(--accent-hover); }
+
+.input:focus, .select:focus, .btn:focus-visible,
+.icon-btn:focus-visible, .tab:focus-visible, .chip:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+/* --------------------------------------------------------------- 4. 页签 -- */
+
+.tab {
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  border-bottom: 2px solid transparent;
+  color: var(--label-2);
+  padding: var(--sp-4) var(--sp-5);
+  transition: color var(--dur-1) var(--ease-standard),
+              background var(--dur-2) var(--ease-standard);
+}
+.tab:hover { background: var(--surface-2); color: var(--label); }
+.tab.active { background: var(--surface-1); color: var(--label); border-bottom-color: var(--accent); }
+.tab-badge { background: var(--surface-3); color: var(--label-2); border-radius: var(--r-full); }
+
+/* ---------------------------------------------------- 5. 徽章与状态（核心）-- */
+
+/* 现状：14 个徽章类 / 8 种圆角 / 6 种亮色实心块，一行里能叠 3 个彩色方块。
+   新规则按**语义分成两族**，圆角、内边距、字号各自统一：
+     · 数据等级（严重度）→ tinted 胶囊：同色淡底 + 同色文字；底色淡，不抢视线
+     · 系统状态 → solid 胶囊：实心底 + 墨字；它比数据更需要一眼看见
+   这是"同色不同义"的解法：不换色，换**形态**。 */
+.sev-badge, .chip, .detail-badge, .tag, .authz-badge, .test-badge,
+.status-badge, .check-badge, .dsh-tag, .dsh-chip, .hub-pill, .stat,
+.tab-badge, .chat-live-badge {
+  border-radius: var(--r-full);
+  padding: 1px var(--sp-4);
+  font: var(--fs-caption)/1.6 var(--sans);
+  border: 1px solid transparent;
+  color: var(--label-2);
+  background: var(--surface-3);
+  letter-spacing: 0;
+}
+/* 严重度：tinted */
+.sev-badge { background: var(--surface-3); }
+.sev-badge.sev-critical { background: var(--danger-tint); color: var(--sev-critical); border-color: var(--danger-tint); }
+.sev-badge.sev-high { background: rgba(255, 159, 10, .16); color: var(--sev-high); border-color: rgba(255, 159, 10, .16); }
+.sev-badge.sev-medium { background: rgba(255, 214, 10, .16); color: var(--sev-medium); border-color: rgba(255, 214, 10, .16); }
+.sev-badge.sev-low { background: rgba(99, 230, 195, .16); color: var(--sev-low); border-color: rgba(99, 230, 195, .16); }
+.sev-badge.sev-info { background: var(--surface-3); color: var(--label-2); }
+/* 系统状态：solid + 墨字（白字压 accent 只有 2.95:1，不达 AA） */
+.status-badge, .check-badge { color: var(--ink); font-weight: 600; }
+.status-badge.status-online, .status-badge.status-done,
+.check-badge.check-ok { background: var(--ok); }
+.status-badge.status-running { background: var(--accent); color: var(--ink); }
+.status-badge.status-pending, .check-badge.check-warn { background: var(--warn); }
+.status-badge.status-failed, .status-badge.status-offline,
+.check-badge.check-fail { background: var(--danger); }
+.authz-badge, .authz-badge.on { background: var(--surface-3); color: var(--label-2); border-color: var(--separator-strong); }
+.authz-item.on { border-left-color: var(--warn); background: var(--warn-tint); }
+
+/* 芯片：选中态用 tinted 填充 + 同色边框，不用"更亮的面" */
+.chip { background: var(--surface-2); border: 1px solid var(--field-border); gap: var(--sp-3); }
+.chip:hover { background: var(--surface-3); border-color: var(--accent-border); color: var(--label); }
+.chip.on { background: var(--accent-tint); border-color: var(--accent); color: var(--label); }
+.chip .count { color: var(--label-3); }
+
+/* ------------------------------------------------------ 6. 表格 / 键值 / 列表 -- */
+
+/* 键值：标签列 96px（现 104px），行间用 hairline 而不是 1px 全框。
+   `:not(.setup-kv)` 这一笔是必须的 —— `.setup-kv` 也带 `.kv` 类，
+   不加限定的话这条单列定义会盖掉它自己的 auto-fit 多列（实测后果：
+   部署信息卡的值列被压成 1 个字符宽，"http://…" 竖着排下来）。 */
+.kv:not(.setup-kv) { grid-template-columns: 96px minmax(0, 1fr); gap: var(--sp-1) var(--sp-5); }
+.setup-kv { grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 0 var(--sp-6); }
+.setup-kv > .kv-item { grid-template-columns: 96px minmax(0, 1fr); }
+.kv-key { color: var(--label-3); font: var(--fs-caption)/1.6 var(--sans); border-top: 1px solid var(--separator); padding: var(--sp-2) 0; }
+.kv-val { font: var(--fs-small)/1.5 var(--mono); color: var(--label); border-top: 1px solid var(--separator); padding: var(--sp-2) 0; }
+
+/* 表格：去掉全网格线，只留"顶线 + 表头底线 + 行间 hairline"
+   （全网格是 12 列 × N 行 = 上百条线，这一条就占了整页一半的视觉噪声） */
+.markdown table, .guide-table, .user-table { border-collapse: collapse; border: 0; }
+.markdown th, .markdown td, .guide-table th, .guide-table td,
+.user-table th, .user-table td {
+  border: 0; border-bottom: 1px solid var(--separator); padding: var(--sp-3) var(--sp-5);
+}
+.markdown th, .guide-table th, .user-table th {
+  background: transparent; color: var(--label-2); border-bottom-color: var(--separator-strong);
+  font-weight: 600;
+}
+.markdown tr:nth-child(even) td { background: transparent; }
+.markdown tr:hover td, .user-table tr:hover td { background: var(--surface-2); }
+
+/* 代码块与内联代码 */
+.md-inline-code, .copy-value, .hub-item-target {
+  background: var(--surface-3); border: 1px solid transparent;
+  border-radius: var(--r-xs); color: #FFC799; font-family: var(--mono);
+}
+.md-code, .cmd-body, .chat-trace-pre, .test-sample {
+  background: var(--bg); border: 1px solid var(--separator);
+  border-radius: var(--r-md); padding: var(--sp-5);
+}
+.md-code code, .cmd-body { color: #CFE3FF; font: var(--fs-small)/1.6 var(--mono); }
+.cmd-block { border-radius: var(--r-md); border-color: var(--separator); }
+.cmd-head { background: var(--surface-2); border-bottom: 1px solid var(--separator); }
+
+/* 空态：不再画虚线框。占位不是"另一个面板"，
+   它只是这个容器当前的内容替身，于是用同基线的文字 + 面色。 */
+.empty {
+  border: 0; background: transparent; border-radius: var(--r-md);
+  color: var(--label-3); padding: var(--sp-7) var(--sp-6); font-size: var(--fs-small);
+  max-width: 520px; margin: 0 auto; text-align: center;
+}
+.empty.error { background: var(--danger-tint); border: 1px solid transparent; color: #FFB4AE; }
+.chat-welcome { border: 0; background: var(--surface-2); border-radius: var(--r-md); padding: var(--sp-6); }
+.chat-sessions-divider { border-top: 0; color: var(--label-3); }
+
+/* 滚动条：track 透明（现状是 --bg，落在 --panel 底上会露出一条比面板更黑的竖条）；
+   thumb 用 alpha 白，跟着底走。 */
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .14); border-radius: var(--r-full); border: 3px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .26); background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ------------------------------------------------------------ 7. 图（链路）-- */
+
+/* 28px 方格纸是整站最吵的一处装饰：它和"内容"无关，却给整块画布铺满线。
+   改成不画网格 —— 节点自身的面色与描边已经足够定位。 */
+.graph-canvas { background: var(--bg); }
+.gnode-box { fill: var(--surface-1); stroke: var(--separator-strong); stroke-width: 1; }
+.gnode.kind-goal .gnode-box { stroke: var(--kind-goal); }
+.gnode.kind-intent .gnode-box { stroke: var(--kind-intent); }
+.gnode.kind-fact .gnode-box { stroke: var(--kind-fact); }
+.gnode.kind-finding .gnode-box { stroke: var(--kind-finding); }
+.gnode.kind-asset .gnode-box { stroke: var(--kind-asset); }
+.gnode-label { fill: var(--label); font: 600 var(--fs-small) var(--sans); }
+.gnode-sub { fill: var(--label-3); font: var(--fs-caption) var(--mono); }
+/* 选中不再借用 --accent（那会和 kind-goal 撞色），改成"白色描边 + 一圈光晕" ——
+   颜色留给数据类别，选中留给"焦点"，这正是 Apple 的选择态约定。 */
+.gnode.hl .gnode-box { stroke-width: 2; filter: none; }
+.gnode.selected .gnode-box {
+  stroke: var(--label); stroke-width: 2; filter: drop-shadow(0 0 6px rgba(10, 132, 255, .55));
+}
+.gedge { stroke: rgba(255, 255, 255, .14); stroke-width: 1.2; opacity: 1; }
+.gedge.hl { stroke-width: 2; }
+.gedge-label { fill: var(--label-3); stroke: var(--bg); stroke-width: 3px; }
+.side-panel { background: var(--surface-tray); border-left: 1px solid var(--separator); width: 320px; flex-basis: 320px; }
+.split-pane + .split-pane { border-left: 1px solid var(--separator); }
+
+/* --------------------------------------------------------------- 8. 对话 -- */
+
+.chat-side { background: var(--surface-tray); border-right: 1px solid var(--separator); }
+.chat-side-block { border-bottom: 1px solid var(--separator); }
+.chat-entry { background: transparent; border-bottom: 1px solid var(--separator); padding: var(--sp-4) var(--sp-6); }
+.chat-log { padding: var(--sp-6); gap: var(--sp-5); }
+.chat-msg { border: 0; padding: var(--sp-5) var(--sp-6); background: var(--surface-1); border-radius: var(--r-md); }
+/* 用户气泡：tinted 强调色 + 无边框 + 更大的圆角收口（Apple Messages 的做法） */
+.chat-msg-user { background: var(--accent-tint); border: 0; border-radius: var(--r-md); }
+.chat-msg-head { margin-bottom: var(--sp-3); }
+.chat-msg-role { color: var(--label-3); letter-spacing: 0; }
+.chat-msg-at { color: var(--label-3); }
+.chat-live { border-left: 2px solid var(--accent); background: var(--surface-1); }
+.chat-compose { background: var(--surface-tray); padding: var(--sp-4) var(--sp-6); gap: var(--sp-4); }
+.chat-input { background: var(--surface-2); border-radius: var(--r-md); border-color: var(--field-border); padding: var(--sp-5); resize: none; }
+.chat-quick-chip { background: var(--surface-2); border-radius: var(--r-full); }
+.chat-trace-pre { max-height: 280px; }
+.chat-reasoning-text { background: var(--bg); border: 1px solid var(--separator); border-radius: var(--r-sm); }
+
+/* --------------------------------------------------- 9. 浮层与动效 ---------- */
+
+/* 真·毛玻璃只给"下面确实有内容"的浮层：弹窗、遮罩。顶栏/工具条是 flex 兄弟节点，
+   内容不会从它们下面滚过，blur 采样到的只是纯色底 —— 那里用面色表达材质即可。 */
+.modal-overlay { background: var(--scrim); backdrop-filter: blur(6px) saturate(140%); }
+.modal-card, .auth-card {
+  background: rgba(22, 22, 26, .86);
+  backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+}
+.modal-card { box-shadow: var(--shadow-2); }
+.modal-head { background: transparent; border-bottom: 1px solid var(--separator); }
+
+/* 动效：只给"该有转场"的地方，且默认就是 --dur-1/2，
+   高于 200ms 的只有结构变化（面板切换、浮层进入）。 */
+.tab, .chip, .btn, .input, .select, .tree-btn, .chat-goal, .chat-session,
+.guide-toc-item, .settings-nav-btn, .mode-option, .model-card,
+.markdown tr, .user-table tr {
+  transition: background var(--dur-2) var(--ease-standard),
+              border-color var(--dur-2) var(--ease-standard),
+              color var(--dur-1) var(--ease-standard);
+}
+.settings-nav-btn { border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.settings-nav-btn.active { background: var(--surface-1); color: var(--label-2); border-color: var(--separator-strong); }
+
+/* 现表里唯一的无限动画（光标闪烁）没有 reduced-motion 出口。
+   HIG 要求这一项必须被尊重：所有位移与循环动画在 reduce 下停掉，
+   只保留颜色变化（颜色变化不引发前庭反应）。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}

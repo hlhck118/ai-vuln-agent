@@ -1,0 +1,533 @@
+# -*- coding: utf-8 -*-
+"""对话页上下文栏：**目标那一行要说到扫描目标**，**对话记录不能自己消失**。
+
+这两件事是同一次报上来的，而且都在同一栏里，所以放一个文件。与
+`test_ui_contract.py` 的关系是"专题与总目"：那一个守整页的结构契约（块的顺序、
+折叠、aria、样式表规则），这里只守这一栏里两条容易写歪、写歪了又**不会让任何
+功能测试变红**的性质。
+
+## 一、"目标"那一行
+
+报上来的原话是「目标显示详细的扫描目标」。查下去发现根因不在显示层：
+**会话自动创建的目标一律叫「渗透目标」**（`store.DEFAULT_SESSION_LABEL`），
+于是这一栏里每个目标读起来都一模一样，而"这个目标到底扫了什么"在界面上没有
+任何地方回答得了。真正的地址、域名与端口在**任务的 `target`** 上。
+
+所以这里守三件事：
+
+1. 那一行确实把**具体扫描目标**显示出来（去重、封顶、封顶要说、完整清单可达）；
+2. 这些数据来自**控制台已经持有的那一份 `/jobs`**，不许在这里再发一次请求
+   （两处各拉一次会在某次刷新后给出两份不同的清单）；
+3. 任务还没拉回来时**不许写"还没有扫描目标"**——那是"不知道"，不是"没有"，
+   而这两件事的下一步动作刚好相反。
+
+## 二、"对话记录"那一块
+
+报上来的原话是「对话记录显示一次消失了」。它在旧代码里有**一条确定的路径**：
+
+    catch (error) { view.sessions = []; … }
+
+任何一次网络抖动、服务重启打断请求、后端 500，都会让这一块改口说
+「还没有对话。在右边提问即会新建一条。」——一句关于使用者数据的假话，而且它会
+一直停在那儿：`loadSessions` 只在**指纹变化**时被心跳重放，指纹不变时它永远自愈
+不了。这一次的修法是不再清空已知列表，另外把三种"还没有"分开：**这次没拉到**、
+**还没拉到过**、**确实没有**。
+
+此后（m03903）这一块又多了一条要求：**所有对话都要出现**，按目标分组。此前它只
+列当前目标那一批、其余用「另有 N 条属于其他目标」概括——于是"我到底有哪些对话"
+得逐个点目标才拼得出来，而"看不见的那批"与"被删掉的"在屏幕上没有区别。
+
+## 写法
+
+与 `test_ui_contract.py` 同一套：切源码文本做断言，**不执行**那份 JS（这个仓库没有
+node/jsdom 那一层，`test_pulse.py` 也是这么写的）。每条断言都在线上旧代码上会红——
+本轮逐条核过。
+"""
+import os
+import re
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+
+
+def _read(*parts):
+    with open(os.path.join(ROOT, *parts), encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _strip_comments(text):
+    """去掉 `//` 与 `/* */` 注释，只留下会被执行的代码。
+
+    **必须做这一步**：本文件好几条断言查的是"某个东西有没有出现"，而注释里正好会
+    提到它——本轮就踩到了：`goalRow` 里那句"行内不许放 `<details>`"的说明本身让
+    `assertNotIn('<details>', …)` 红了。查注释就会把"写清了为什么不能这么做"报成
+    "这么做了"。
+    """
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _fn_body(text, name):
+    """按缩进切出一个函数的函数体（含首行）。找不到返回空串。
+
+    比"从函数名切到下一个函数名"稳：本文件要断言的几个函数后面跟着的未必是函数，
+    也可能是注释块或 `};`。
+    """
+    match = re.search(r"^(  (?:async )?function %s\b[^\n]*\n)" % re.escape(name),
+                      text, re.M)
+    if not match:
+        return ""
+    rest = text[match.end():]
+    out = [match.group(1)]
+    for line in rest.split("\n"):
+        if line.strip() and not line.startswith("    "):
+            break
+        out.append(line)
+    return _strip_comments("\n".join(out))
+
+
+class GoalRowShowsScanTargetsTestCase(unittest.TestCase):
+    """第一件事：「目标」那一行要说清**扫了什么**，而不只是一个通用名字。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.chat = _read("web", "chat.js")
+        cls.app = _read("web", "app.js")
+        cls.css = re.sub(r"/\*.*?\*/", "", _read("web", "style.css"), flags=re.S)
+        cls.row = _fn_body(cls.chat, "goalRow")
+        cls.rules = {sel.strip(): " ".join(body.split())
+                     for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", cls.css)}
+
+    def test_the_host_collapse_needs_the_host_to_be_a_target_itself(self):
+        """折叠地址的**安全条件**：只有"主机本身也在清单里"才允许合并。
+
+        真库里 12 个目标里 10 个是 `182.117.165.148:<端口>`，不压就要占三行。
+        但只按最后一个冒号切是错的：IPv6（`[::1]:80`）、带端口的 URL、
+        以及 `a.example:443` 与 `a.example` 本不相干的巧合都会被切错，
+        而切错的症状是**某个目标从清单里消失了**——不报错，只是少一个。
+        所以合并前必须确认 `h` 自己是这一批里的一个目标。
+        """
+        body = _fn_body(self.chat, "goalScanGroups")
+        self.assertTrue(body, "找不到 goalScanGroups")
+        self.assertIn("lastIndexOf(':')", body, "取主机的方式变了（最后一个冒号）")
+        self.assertIn("scans.indexOf(host) >= 0", body,
+                      "没有确认主机本身也是目标就合并了：切错时目标会静默消失")
+        self.assertIn("个端口", body, "合并后的词条没有说明端口数")
+
+    def test_the_counts_line_can_be_one_line(self):
+        """计数行的字符预算：**一行只有 21 个字符**（真浏览器量过）。
+
+        折成两行会把行高从 91px 顶到 125px，而这一块的正文在最常见的窗口高度下
+        只有 100px——最后一行被拦腰截断，且截断处落在字中间。
+        丢掉的数字没有丢，都在 `pick.title` 里。
+        """
+        body = _fn_body(self.chat, "goalRow")
+        self.assertIn("pick.append(el('span', 'chat-goal-meta'", body)
+        # 这一行只许有三个读数；四个就会折行（数过：28 字符仍然折）。
+        self.assertNotIn("`节点 ${nodes}`", body,
+                         "又把总量塞回可见那一行了：会折行并把最后一行挤出可视区")
+        # 拿掉的数字必须还在 title 里：完整四项 + 总量。丢了才是回归。
+        self.assertIn("['intent', 'fact', 'finding', 'asset']", body,
+                      "完整四项计数没有进 title：这一项丢了")
+        self.assertIn("节点 ${nodes}", body, "总量没有进 title")
+
+    def test_the_row_renders_the_concrete_targets_it_scanned(self):
+        self.assertTrue(self.row, "找不到 goalRow（被改名了？）")
+        self.assertIn("goalScanTargets(", self.row,
+                      "目标行没有取具体扫描目标：这一栏里每个目标都会叫「渗透目标」")
+        self.assertIn("'chat-goal-scan'", self.row, "缺少扫描目标那一行的容器")
+        self.assertIn("chat-goal-scan-list", self.row, "缺少具体扫描目标的清单行")
+
+    def test_the_address_list_is_gated_on_the_selected_row(self):
+        """**地址清单只画在选中那一行上**——这是量出来的，不是省事。
+
+        这一块的高度上限是整栏的 26%。真浏览器里量过（1120×860，栏高 620px）：
+        正文只有 124px，而一行目标带完整四行是 149px，一个都装不下，会被拦腰截断，
+        而截断处正好在第 4 行——看起来像"这行本来就这么长"，不会像缺陷。
+        所以每行都给"扫了多少"（`chat-goal-scan` 无条件 append），
+        而"扫的是哪些地址"只给选中那个；其余目标的完整清单在 `pick.title` 里。
+        谁把这一行改回无条件渲染，就得同时把这一块的高度上限一起改——所以这里红。
+        """
+        self.assertRegex(self.row, r"if \(on &&[^\n]*scans\.length\)",
+                         "地址清单变成无条件渲染了：会把选中行挤出可视区")
+        self.assertIn("pick.title", self.row,
+                      "非选中行没有拿到完整清单的出口（title）")
+        # "扫了多少"必须每行都有：它在 if 之外。
+        head, _, tail = self.row.partition("if (on &&")
+        self.assertIn("pick.append(scanLine)", head,
+                      "「扫描目标 N 个」被一起挪进选中分支了："
+                      "那样非选中行就完全看不出扫过什么")
+
+    def test_scan_targets_come_from_the_console_snapshot_not_a_second_request(self):
+        """数据必须来自 `PentestUI.state.jobs`（与「任务」页同一份快照）。
+
+        另写一次 `/jobs` 请求的失败形态是：目标行与任务块在某一次刷新之后显示
+        不同的任务数，而两处看起来都正常。
+        """
+        body = _fn_body(self.chat, "goalScanTargets") + _fn_body(self.chat, "goalJobs")
+        self.assertTrue(body, "找不到 goalJobs / goalScanTargets")
+        self.assertIn("ui().state", body, "没有从控制台那份快照取任务")
+        self.assertIn("engagementId", body, "没有按目标过滤任务")
+        self.assertNotIn("apiGet", body, "目标行自己发了一次请求——两处快照会分叉")
+
+    def test_the_target_list_is_deduplicated(self):
+        body = _fn_body(self.chat, "goalScanTargets")
+        self.assertIn("indexOf(target) < 0", body,
+                      "没有去重：同一个地址扫 20 次就会在行里出现 20 遍")
+
+    def test_truncation_is_disclosed_and_the_full_list_stays_reachable(self):
+        """封顶必须说出来，而且封掉的那些要能拿到。"""
+        self.assertIn("GOAL_SCAN_SHOWN", self.chat, "没有封顶常量")
+        self.assertIn("另有", self.row, "截断了却不说，读起来像「总共只有这几个」")
+        self.assertIn("title = scans.join", self.row,
+                      "完整清单没有出口——行内不许放可交互元素，只能靠 title")
+
+    def test_no_scan_targets_is_never_claimed_before_jobs_load(self):
+        """`jobsLoaded` 是必须看的：没拉到任务时写「还没有扫描目标」是假话。"""
+        self.assertIn("jobsLoaded", self.row,
+                      "目标行没看 jobsLoaded——加载中会被写成「还没有扫描目标」")
+        self.assertIn("正在加载", self.row, "缺少加载态文案")
+
+    def test_goal_row_has_no_interactive_child(self):
+        """`.chat-goal-pick` 是一颗 `<button>`，里面再放可交互元素是非法结构。
+
+        这条不是洁癖：`<button>` 里嵌 `<button>` 时浏览器把内层甩到外面（文件里
+        已经为删除按钮记过这件事），而 `<details>` 的内建摘要同理——它会让
+        "点这一行"变成"展开那个东西"，也就是丢了切换目标这个唯一动作。
+        """
+        self.assertNotIn("<details>", self.row)
+        self.assertNotIn("createElement('details')", self.row)
+        # 行里只许造两颗按钮：pick（选中范围）与 del（删除）。
+        made = re.findall(r"el\('button'", self.row)
+        self.assertEqual(len(made), 2,
+                         "目标行里出现了第三颗按钮：它落在 pick 里就是非法结构，"
+                         "落在外面就是与删除按钮抢位置")
+
+    def test_per_kind_counts_reuse_the_console_word_table(self):
+        """逐类计数（意图/事实/漏洞/资产）而不是四项之和。
+
+        「47 节点」分不出这 47 个里有没有漏洞。而词表**必须**来自控制台：
+        在 chat.js 里再写一份 `intent: '意图'` 的失败形态是同一个 kind 在两处
+        叫两个名字。
+        """
+        self.assertIn("ui().kindLabel", self.row,
+                      "目标行自己造了词表——两处会用两套名字")
+        self.assertIn("kindLabel", self.app, "app.js 没有把词表交出去")
+        for kind in ("intent", "fact", "finding", "asset"):
+            for quoted in ("'%s': '意图'" % kind, "'%s': '事实'" % kind,
+                           "'%s': '漏洞'" % kind, "'%s': '资产'" % kind):
+                self.assertNotIn(quoted, self.chat,
+                                 "chat.js 里又出现了一份节点类型词表：%s" % quoted)
+
+    def test_goal_counts_do_not_invent_a_zero_conversation_count(self):
+        """`对话 0` 与 `对话 —` 不是同一件事：列表还没拉回来时是"不知道"。"""
+        self.assertIn("view.loaded", self.row,
+                      "目标行在列表没拉回来时会把对话数写成 0")
+
+    def test_task_changes_repaint_the_goal_row(self):
+        """任务一变，目标行上那两个数（扫描目标 N 个 · 任务 M 条）就得跟着变。
+
+        断言的是**行为挂在谁身上**而不是写在哪一行：重画目标行可以在
+        `renderSideJobs` 里，也可以在它包着的 `paintSideJobs` 里——重要的是那一句
+        必须真的在任务块重画这条路径上，并且不能落在早退之后（空列表同样要重画）。
+        """
+        jobs = _fn_body(self.chat, "renderSideJobs")
+        self.assertTrue(jobs, "找不到 renderSideJobs")
+        paint = _fn_body(self.chat, "paintSideJobs")
+        self.assertTrue(paint, "找不到 paintSideJobs")
+        self.assertIn("paintSideJobs(", jobs,
+                      "renderSideJobs 不再走到真正画任务块的那个函数")
+        self.assertIn("renderGoals()", paint,
+                      "任务块重画时没有连带重画目标行："
+                      "任务列表清空之后目标行会永远停在旧数字上")
+
+    def test_every_new_part_has_a_style_rule(self):
+        for cls_name in (".chat-goal-head", ".chat-goal-id", ".chat-goal-scan",
+                         ".chat-goal-scan-list", ".chat-goal-auth"):
+            self.assertIn(cls_name, self.rules, "缺少样式规则：%s" % cls_name)
+
+
+class SessionListNeverClaimsEmptyTestCase(unittest.TestCase):
+    """第二件事：**对话记录不许自己消失**，也不许把"没拉到"说成"没有"。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.chat = _read("web", "chat.js")
+        cls.css = re.sub(r"/\*.*?\*/", "", _read("web", "style.css"), flags=re.S)
+        cls.paint = _fn_body(cls.chat, "paintSessions")
+        cls.load = _fn_body(cls.chat, "loadSessions")
+        cls.rules = {sel.strip(): " ".join(body.split())
+                     for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", cls.css)}
+
+    def test_a_failed_load_does_not_wipe_the_known_list(self):
+        """这条是本轮报上来的那个现象的直接成因，一个字都不能退回去。"""
+        self.assertTrue(self.load, "找不到 loadSessions")
+        self.assertNotIn("view.sessions = []", self.load,
+                         "加载失败又清空了列表：一次抖动就会让这一块改说"
+                         "「还没有对话」——一句关于使用者数据的假话")
+        self.assertIn("view.sessionsError", self.load, "失败没有被记下来")
+
+    def test_failure_is_shown_as_failure_and_not_as_empty(self):
+        """失败态要有**自己那句正文**，而且不能复用空态那句。
+
+        只断言"函数里出现过『加载失败』"是不够的——栏头那一行也写着它，于是把失败
+        正文换成「还没有对话。在右边提问即会新建一条。」之后，断言照样过，而屏幕上
+        显示的正是我们正在修的那句假话。这一条是本轮变异检验抓出来的（M9）。
+        """
+        self.assertIn("view.sessionsError", self.paint, "面板没有区分失败与为空")
+        fail_text = re.search(r"'对话列表加载失败[^']*'", self.paint)
+        self.assertIsNotNone(fail_text, "失败态没有自己的正文")
+        empty_text = re.search(r"'还没有对话[^']*'", self.paint)
+        self.assertIsNotNone(empty_text, "空态那句话不见了")
+        self.assertNotEqual(fail_text.group(0), empty_text.group(0),
+                            "失败态复用了空态那句话：屏幕上看就是「还没有对话」")
+
+    def test_never_loaded_is_not_rendered_as_empty(self):
+        """`loaded` 与"列表为空"必须分开——一个该等，一个该去提问。"""
+        self.assertIn("view.loaded", self.paint, "面板没看 loaded")
+        self.assertIn("正在加载对话列表", self.paint, "缺少加载态文案")
+        self.assertNotEqual(
+            re.search(r"'正在加载对话列表[^']*'", self.paint).group(0),
+            re.search(r"'还没有对话[^']*'", self.paint).group(0),
+            "加载态与空态用了同一句话：这两种情况的下一步动作是相反的")
+
+    def test_the_failure_line_has_a_retry(self):
+        """不给重试入口的话，唯一出路是刷新整个页面。"""
+        self.assertIn("chat-sessions-retry", self.paint, "失败态没有重试按钮")
+        self.assertIn("loadSessions(true)", self.paint, "重试没有强制重拉")
+        retry = _fn_body(self.chat, "paintSessions")
+        self.assertIn("addEventListener", retry, "重试按钮没有挂事件")
+
+    def test_the_head_hint_carries_the_count(self):
+        """栏头是这一块**折起来之后唯一的读数**（与子智能体那一块同一条理由）。"""
+        self.assertIn("setHint(dom.sessionsHint", self.paint, "栏头没有读数")
+        self.assertIn("条'", self.paint, "栏头没有带上条数")
+
+    def test_other_goals_conversations_are_listed_not_summarized(self):
+        """**全部对话都列出来**，按目标分组（m03903）。
+
+        此前这里只画当前目标那一批，其余用「另有 N 条属于其他目标」一行概括。于是
+        "我到底有哪些对话"得逐个点目标去拼，而"看不见"与"被删掉"在屏幕上没有区别。
+        这条守的是分组本身：所有会话都必须真的走到 `append`，而不是被一句话吃掉。
+        """
+        self.assertIn("sessionGroups()", self.paint, "没有按目标分组")
+        self.assertIn("sessionGroupRow(group", self.paint, "组标题没有画出来")
+        self.assertIn("group.sessions.forEach", self.paint,
+                      "分组之后没有把组里的每条对话都 append 出来")
+        self.assertIn("orphans.forEach", self.paint, "未归属那一组没有画")
+        self.assertNotIn("另有", self.paint,
+                         "又用「另有 N 条」把其他目标的对话藏起来了")
+
+    def test_orphans_are_collected_once_and_never_listed_twice(self):
+        """未归属的对话只进 `orphans` 这一条路，所以不会画两遍。
+
+        `eid === ''`（删掉当前目标之后）与"有归属"两种情况下都只得一份：分组发生在
+        `sessionGroups()` 里，归属为空的进 `orphans` 并 `return`，不会同时留在某个组里。
+        可达路径：删掉当前选中的目标（`deleteGoal` 把 `eid` 清空）之后重画。
+        """
+        groups = _fn_body(self.chat, "sessionGroups")
+        self.assertTrue(groups, "找不到 sessionGroups")
+        self.assertIn("if (!owner) { orphans.push(session); return; }", groups,
+                      "归属为空与有归属没有分开：同一批对话会被画两遍")
+        self.assertIn("{ groups, orphans }", self.paint, "面板没接住分组结果")
+
+    def test_signout_clears_the_previous_users_failure(self):
+        out = _fn_body(self.chat, "onSignedOut")
+        self.assertTrue(out, "找不到 onSignedOut")
+        self.assertIn("view.sessionsError = null", out,
+                      "上一个用户那次请求的失败留给了下一个人")
+
+    def test_the_inflight_guard_only_clears_its_own_request(self):
+        """无条件清在途标记会让后一次请求被第三个调用者重复发起。"""
+        self.assertIn("view.sessionsInflight === inflight", self.load,
+                      "在途标记被无条件清掉：三条并发响应谁后到谁说了算")
+
+    def test_the_failure_style_differs_from_the_empty_style(self):
+        self.assertIn(".chat-sessions-fail", self.rules, "缺少失败态样式")
+        rule = self.rules[".chat-sessions-fail"]
+        self.assertIn("border-left", rule,
+                      "失败态与空态长得一样：读者分不出「确实没有」与「这次没拉到」")
+
+
+class FourBlockLinkageTestCase(unittest.TestCase):
+    """四块联动（m03903）：目标、对话、任务、子智能体共用**一个**范围。
+
+    报上来的原话是「所有的对话全部显示，点击对话或者目标进行目标、对话、任务、
+    子智能体的选项联动」。这里的几条各挡一种"看起来正常、实际各走各的"：
+
+    1. 点一个目标 → 另外三块必须重画。只调 `selectEngagement` 的话，漏洞页换了、
+       任务与子智能体还停在旧目标上，而屏幕上没有任何地方说它们不同步；
+    2. 打开会话也是**点了目标**的一种（会话必然属于某个目标）：采纳之后同样要重画；
+    3. 「任务」块自己跟范围，但**不借 `state.eid` 做"看全部"**——那个字段同时决定
+       漏洞 / 资产 / 报告的范围，让一颗"看全部任务"顺手改掉它是两件事；
+    4. 子智能体在"目标名下最近一条对话"这种情况是在读**另一条**对话的数据，所以
+       必须标明来源、可点开、失败要留痕（不能退回"还没派过"）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.chat = _read("web", "chat.js")
+        cls.css = re.sub(r"/\*.*?\*/", "", _read("web", "style.css"), flags=re.S)
+        cls.rules = {sel.strip(): " ".join(body.split())
+                     for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", cls.css)}
+
+    def test_clicking_a_goal_repaints_the_other_three_blocks(self):
+        """目标行点击：另外三块必须跟上，任务块的"看全部"要收回。"""
+        goal = _fn_body(self.chat, "goalRow")
+        self.assertTrue(goal, "找不到 goalRow")
+        self.assertIn("renderSideJobs()", goal,
+                      "点了目标，任务块还停在旧目标上")
+        self.assertIn("renderSideSubagents()", goal,
+                      "点了目标，子智能体还是上一场对话的")
+        self.assertIn("view.sideJobsAll = false", goal,
+                      "换目标时任务块的「看全部」没有收回")
+
+    def test_adopting_a_sessions_goal_repaints_them_too(self):
+        """打开／自动采纳一条对话的目标，等于点了一次目标——同样三块跟上。"""
+        body = _fn_body(self.chat, "adoptSessionEngagement")
+        self.assertTrue(body, "找不到 adoptSessionEngagement")
+        self.assertIn("selectEngagement(", body)
+        self.assertIn("renderSessions()", body)
+        self.assertIn("renderSideJobs()", body,
+                      "采纳了目标，任务块没跟上")
+        self.assertIn("renderSideSubagents()", body,
+                      "采纳了目标，子智能体块没跟上")
+
+    def test_the_session_list_refresh_also_refreshes_the_subagent_block(self):
+        """会话列表拉回来之后，"目标名下最近一条对话"可能换了。"""
+        load = _fn_body(self.chat, "loadSessions")
+        self.assertTrue(load, "找不到 loadSessions")
+        self.assertIn("renderSideSubagents()", load,
+                      "会话列表变了、子智能体块没重取：会一直显示上一轮那一条的派活")
+
+    def test_a_group_header_switches_the_whole_scope(self):
+        """组标题是"从对话切到目标"的入口：四块一起走。"""
+        row = _fn_body(self.chat, "sessionGroupRow")
+        self.assertTrue(row, "找不到 sessionGroupRow")
+        self.assertIn("el('button'", row,
+                      "组标题不是按钮：点它切范围就成了鼠标专属")
+        self.assertIn("chooseGoal(group.eid)", row, "组标题没有接上切范围")
+        self.assertIn("if (!meta) return row;", row,
+                      "目标已删时仍做成可点：选一个不存在的 id 会让三块面板各报一次 404")
+        pick = _fn_body(self.chat, "chooseGoal")
+        self.assertTrue(pick, "找不到 chooseGoal")
+        for call in ("selectEngagement(", "renderSessions()",
+                     "renderSideJobs()", "renderSideSubagents()"):
+            self.assertIn(call, pick, "点组标题之后 %s 没有跟上" % call)
+        self.assertIn("view.sideJobsAll = false", pick,
+                      "换范围时任务块的「看全部」没有收回")
+
+    def test_switching_the_goal_also_switches_the_open_conversation(self):
+        """目标与对话必须**双向**对应：点目标 = 换到它名下的对话（m00482）。
+
+        只做"换对话 → 范围跟过去"这一个方向（`adoptSessionEngagement`）时，范围停在
+        甲、打开着的还是乙的对话：「目标」块高亮甲，「对话记录」里蓝底那条属于乙——
+        同一屏上两个"当前"，而右边那份数据说的是另一台机器。三个换范围的入口
+        （目标行 / 对话组头 / 任务行）都要走上这条对齐，漏一个就从一个口子回来。
+        """
+        for name in ("goalRow", "chooseGoal", "pickJob"):
+            body = _fn_body(self.chat, name)
+            self.assertTrue(body, "找不到 %s" % name)
+            self.assertIn("alignSessionToGoal(", body,
+                          "%s 换了范围，却没把打开着的对话换过去" % name)
+        body = _fn_body(self.chat, "alignSessionToGoal")
+        self.assertTrue(body, "找不到 alignSessionToGoal")
+        for marker in ("view.pendingGoalSwitch", "view.sending",
+                       "openSession(", "newSession()", "engagementId"):
+            self.assertIn(marker, body, "对齐少了一步：%s" % marker)
+        # 守卫必须只挡"有 id 但列表里没有"：「新对话」是 id 为空的草稿，换目标时
+        # 照样要能跟着走（否则空目标下起了新对话、再点回有对话的目标就停在空白里）。
+        self.assertIn("if (view.sessionId && !open) return;", body,
+                      "列表里还没有这一条时就下判断：猜错一次会把刚发出去的那一轮清掉")
+        self.assertIn("if (!view.loaded) return;", body,
+                      "列表还没到就拿「这个目标名下没有对话」下结论")
+        self.assertIn("if (open) newSession();", body,
+                      "草稿再清一遍会把刚排上的东西收掉")
+
+    def test_a_switch_blocked_by_a_running_turn_lands_at_finish(self):
+        """一轮在跑时**不硬切**：那一轮的流会把正文逐条写进当前这个视图。
+
+        所以对齐只记一个待办（`view.pendingGoalSwitch`），由 `finish()` 收尾时补上；
+        收尾若又把队列里的下一条接了上来（`setSending(true)`），还得把它留着，否则
+        那一次切换就永远丢了。
+        """
+        self.assertIn("pendingGoalSwitch: ''", self.chat, "没有待办字段")
+        body = _fn_body(self.chat, "finish")
+        self.assertTrue(body, "找不到 finish")
+        self.assertIn("alignSessionToGoal(pending)", body)
+        self.assertIn("else if (pending) view.pendingGoalSwitch = pending;", body,
+                      "收尾时又把下一条接了上来，待办被清掉就再也不会补")
+        self.assertLess(body.index("await openSession(sessionId)"),
+                        body.index("alignSessionToGoal(pending)"),
+                        "待办必须在 `openSession` 之后补：先补会被它覆盖")
+
+    def test_the_job_block_follows_the_selected_goal(self):
+        """任务块默认只看本目标，且"看全部"必须是这一块自己的开关。"""
+        body = _fn_body(self.chat, "paintSideJobs")
+        self.assertTrue(body, "找不到 paintSideJobs")
+        self.assertIn("selectedEid()", body, "任务块没看选中的目标")
+        self.assertIn("String(job.engagementId || '') === eid", body,
+                      "没有按目标过滤任务")
+        self.assertIn("appendJobsScopeToggle(", body, "跨目标的范围开关不见了")
+        toggle = _fn_body(self.chat, "appendJobsScopeToggle")
+        self.assertIn("view.sideJobsAll = true", toggle, "没有「看全部」的出口")
+        self.assertIn("view.sideJobsAll = false", toggle,
+                      "看全部之后收不回本目标：按一次就再也回不去了")
+        # 反面：不许借 `state.eid` 做"看全部"——它同时决定漏洞/资产/报告的范围
+        self.assertNotIn("state.eid =", body)
+
+    def test_clicking_a_job_aligns_the_scope_first(self):
+        """点一条属于别的目标的任务：先把范围对齐过去，再开详情。"""
+        row = _fn_body(self.chat, "sideJobRow")
+        self.assertIn("pickJob(job)", row)
+        pick = _fn_body(self.chat, "pickJob")
+        self.assertTrue(pick, "找不到 pickJob")
+        self.assertIn("selectEngagement(", pick)
+        self.assertIn("openDetail('job'", pick)
+        self.assertIn("engagementList", pick,
+                      "没判断目标是否还在：已删目标下会选一个不存在的 id")
+
+    def test_the_subagent_block_follows_the_goal_through_the_latest_session(self):
+        """目标范围下的子智能体取自"这个目标名下最近一条对话"。"""
+        scope = _fn_body(self.chat, "subagentScope")
+        self.assertTrue(scope, "找不到 subagentScope")
+        self.assertIn("selectedEid()", scope)
+        self.assertIn("String(one.engagementId || '') === eid", scope)
+        self.assertIn("/chat/sessions/", scope, "没有去取那条对话")
+        self.assertIn("updatedAt", scope,
+                      "缓存键没带 updatedAt：那条对话长出新派活之后会一直给旧答案")
+        self.assertIn("goalSubagentWaiting[key]", scope,
+                      "在途与缓存没分开：第二个调用者会把「正在取」当成「没有」再发一次")
+
+    def test_a_failed_subagent_fetch_is_kept_not_shown_as_none(self):
+        """没拉到 ≠ 这个目标没派过：失败要留痕，而且给重试。"""
+        scope = _fn_body(self.chat, "subagentScope")
+        self.assertIn("view.goalSubagentCache[key] = { rows: [], error }", scope,
+                      "失败没被记下来：一次网络抖动就会说成「这个目标还没派过」")
+        self.assertIn("delete view.goalSubagentCache[key]", scope,
+                      "失败之后没有重试的途径")
+        paint = _fn_body(self.chat, "renderSideSubagents")
+        self.assertIn("scope.error", paint, "面板没区分失败与为空")
+        self.assertIn("取派活失败", paint, "失败态没有自己那句正文")
+
+    def test_the_subagent_source_is_named_and_clickable(self):
+        """读的是**另一条**对话的数据，就必须说来源、并给打开它的路。"""
+        row = _fn_body(self.chat, "subagentSourceRow")
+        self.assertTrue(row, "找不到 subagentSourceRow")
+        self.assertIn("chat-side-subagent-from", row)
+        self.assertIn("openSession(session.id)", row, "来源行点不开")
+        self.assertIn("来自对话", row, "来源行没有说是哪条对话")
+        paint = _fn_body(self.chat, "renderSideSubagents")
+        self.assertIn("subagentSourceRow(scope.from)", paint,
+                      "目标范围下没有把来源画出来")
+
+    def test_every_new_part_has_a_style_rule(self):
+        for cls_name in (".chat-sessions-goal", ".chat-sessions-goal-name",
+                         ".chat-sessions-goal-count", ".chat-sessions-goal-tag",
+                         ".chat-side-subagent-from"):
+            self.assertIn(cls_name, self.rules, "缺少样式规则：%s" % cls_name)
+
+
+if __name__ == "__main__":
+    unittest.main()
