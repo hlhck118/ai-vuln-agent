@@ -359,10 +359,12 @@ class FourBlockLinkageTestCase(unittest.TestCase):
     1. 点一个目标 → 另外三块必须重画。只调 `selectEngagement` 的话，漏洞页换了、
        任务与子智能体还停在旧目标上，而屏幕上没有任何地方说它们不同步；
     2. 打开会话也是**点了目标**的一种（会话必然属于某个目标）：采纳之后同样要重画；
-    3. 「任务」块自己跟范围，但**不借 `state.eid` 做"看全部"**——那个字段同时决定
-       漏洞 / 资产 / 报告的范围，让一颗"看全部任务"顺手改掉它是两件事；
-    4. 子智能体在"目标名下最近一条对话"这种情况是在读**另一条**对话的数据，所以
-       必须标明来源、可点开、失败要留痕（不能退回"还没派过"）。
+    3. 「任务」块与「子智能体」块**只列这条对话的**（m14866 撤掉了三档范围闸门）：
+       范围由主区开着哪条对话唯一决定，没有手工开关，也不借 `state.eid`——
+       那个字段同时决定漏洞 / 资产 / 报告的范围；
+    4. 撤掉范围之后仍然只许有**一条**渲染路径：两块各自从本会话已有的快照里筛，
+       不另发请求，也不再出现"正在取 / 取派活失败 / 本目标还没有对话"这些只因为
+       "在读另一条对话的数据"才存在的状态。
     """
 
     @classmethod
@@ -380,10 +382,10 @@ class FourBlockLinkageTestCase(unittest.TestCase):
                       "点了目标，任务块还停在旧目标上")
         self.assertIn("renderSideSubagents()", goal,
                       "点了目标，子智能体还是上一场对话的")
-        # 换目标之后任务块要回到**跟随档**（先看这条对话，再看这个目标）：
-        # 停在上一轮手工选的"全部"上，会把别的目标的活混进来而没有任何提示。
-        self.assertIn("view.sideJobsScope = ''", goal,
-                      "换目标时任务块的范围没有回到跟随档")
+        # 范围只有一档（m14866），换目标时不需要再收什么手工档；反过来，
+        # 谁把那颗开关写回来，这里就红。
+        self.assertNotIn("sideJobsScope", goal,
+                         "任务块的范围开关又回来了：它已经只剩「这条对话」一档")
 
     def test_adopting_a_sessions_goal_repaints_them_too(self):
         """打开／自动采纳一条对话的目标，等于点了一次目标——同样三块跟上。"""
@@ -417,8 +419,8 @@ class FourBlockLinkageTestCase(unittest.TestCase):
         for call in ("selectEngagement(", "renderSessions()",
                      "renderSideJobs()", "renderSideSubagents()"):
             self.assertIn(call, pick, "点组标题之后 %s 没有跟上" % call)
-        self.assertIn("view.sideJobsScope = ''", pick,
-                      "换范围时任务块的范围没有回到跟随档")
+        self.assertNotIn("sideJobsScope", pick,
+                         "换范围时还在收手工档：那一档已经不存在了")
 
     def test_switching_the_goal_also_switches_the_open_conversation(self):
         """目标与对话必须**双向**对应：点目标 = 换到它名下的对话（m00482）。
@@ -464,48 +466,43 @@ class FourBlockLinkageTestCase(unittest.TestCase):
                         body.index("alignSessionToGoal(pending)"),
                         "待办必须在 `openSession` 之后补：先补会被它覆盖")
 
-    def test_the_job_block_follows_the_session_then_the_goal(self):
-        """任务块的范围闸门：**先看这条对话，再看这个目标，最后才是全部。**
+    def test_the_job_block_lists_only_this_conversation(self):
+        """任务块只有一档范围：**这条对话派下去的那些**（m14866）。
 
-        只按目标筛是不够的：一个目标可能被好几条对话共用（新建对话会跟着当时
-        选中的目标走），于是切到另一条对话时这一块纹丝不动——而它回答的正是
-        「这条对话还派着几件活」。反过来只看对话也不行：手动下发与命令行下发的
-        任务没有会话归属，藏起来等于说它们不存在。所以三档都在。
+        原先它是三档闸门（这条对话 → 本目标 → 全部目标，m15165），每一档还各配一颗
+        往回按的按钮。使用者的判断是「只显示当前会话的内容，取消看全部」：一块会
+        自己改范围的列表，读之前永远要先确认"这一屏是哪一批"，而它回答的问题只有
+        一个——这条对话还派着几件活。所以这里正向钉住「按 `sessionId` 筛、一条都
+        不截」，反向钉住「那三档连同开关都不许回来」。
         """
         body = _fn_body(self.chat, "paintSideJobs")
         self.assertTrue(body, "找不到 paintSideJobs")
-        self.assertIn("jobScope(all)", body, "任务块没走范围闸门")
-        self.assertIn("appendJobsScopeToggle(scope)", body, "范围开关不见了")
-        scope = _fn_body(self.chat, "jobScope")
-        self.assertTrue(scope, "找不到 jobScope")
-        self.assertIn("selectedEid()", scope, "任务块没看选中的目标")
-        self.assertIn("String(job.engagementId || '') === eid", scope,
-                      "没有按目标过滤任务")
-        self.assertIn("String(job.sessionId || '') === String(session.id)", scope,
-                      "没有按对话过滤任务：同一目标下两条对话的任务会混在一起")
-        self.assertIn("view.sessions", scope,
-                      "跟随档没从会话列表里挑本目标那条对话")
-        self.assertIn("updatedAt", scope,
-                      "挑最近一条对话时没按 updatedAt 排，取到的是任意一条")
-        # 跟随的是**另一条**对话时必须说得出来源（与子智能体块同一条判据）。
-        self.assertIn("followed", scope,
-                      "读的是别的对话的数据却没有 `followed` 标记")
-        self.assertIn("subagentSourceRow(scope.session)", body,
-                      "跟随别的对话时没有把来源画出来")
-        toggle = _fn_body(self.chat, "appendJobsScopeToggle")
-        self.assertTrue(toggle, "找不到 appendJobsScopeToggle")
-        # 三档每一档都要有**往回**的路：按过一次放宽之后就再也收不回来，
-        # 是这个开关最容易写歪的地方。
-        self.assertIn("view.sideJobsScope = next", toggle,
-                      "范围开关没有真正改范围")
-        for tier in ("'goal'", "'all'", "'session'"):
-            self.assertIn(tier, toggle, "范围开关少了 %s 这一档" % tier)
+        self.assertIn("sessionJobs(jobView)", body, "任务块没走按对话筛的那条路")
+        self.assertNotIn("jobScope(", body, "三档范围闸门又回来了")
+        self.assertNotIn("appendJobsScopeToggle(", body, "范围开关又回来了")
+        self.assertNotIn("slice(", body,
+                         "任务块又在截断了：这一块要的是全部，多的那几条正是最新的")
+        self.assertNotIn("switchTab(", body,
+                         "「查看全部」那颗按钮还在：这一块本来就不截断，它会让人以为不全")
         # 反面：不许借 `state.eid` 做范围——它同时决定漏洞/资产/报告的范围
         self.assertNotIn("state.eid =", body)
+        scope = _fn_body(self.chat, "sessionJobs")
+        self.assertTrue(scope, "找不到 sessionJobs")
+        self.assertIn("view.sessionId", scope, "没看开着的是哪一条对话")
+        self.assertIn("String(job.sessionId || '') === id", scope,
+                      "没有按对话过滤任务：别的对话的任务会混进来")
+        self.assertIn("jobView.compare", scope,
+                      "没沿用任务页签那套排序：执行中的不再排在最前")
+        self.assertNotIn("view.sessions", scope,
+                         "还在从会话列表里挑「同目标最近一条」：那是跟目标走的旧判据")
+        self.assertNotIn("selectedEid()", scope, "任务块又在看选中的目标了")
         self.assertNotIn("state.eid =", scope)
 
-    def test_a_session_switch_also_takes_back_the_manual_scope(self):
-        """换对话 / 新建对话都要**重画**这两块，并把手工放宽的那两档收回。"""
+    def test_a_session_switch_repaints_both_blocks(self):
+        """换对话 / 新建对话都要**重画**这两块。
+
+        范围只剩「这条对话」一档之后，"收回手工档"这件事自然消失了（没有档可收），
+        但**重画**这件事反而更要紧：这一块的内容现在完全由 `view.sessionId` 决定。"""
         # 重画：`adoptSessionEngagement` 在"这条对话的目标就是当前目标"时第一句
         # 就 return 了，而那正是最常见的情形——只靠它，切到同一目标下的另一条
         # 对话时任务块会停在上一条对话的任务上，而且看起来完全正常。
@@ -516,11 +513,9 @@ class FourBlockLinkageTestCase(unittest.TestCase):
                           "%s 之后任务块没重画：会停在上一对话的任务上" % name)
             self.assertIn("renderSideSubagents()", body,
                           "%s 之后子智能体块没重画" % name)
-        # 收回：`'all'` 是上一屏的人按下去的。换一条对话还留着它，新对话一打开
-        # 就看不见自己的任务——而屏幕上没有任何东西说这是上次按的。
         body = _fn_body(self.chat, "openSession")
-        self.assertIn("view.sideJobsScope = ''", body,
-                      "换对话时手工档没收回")
+        self.assertNotIn("sideJobsScope", body,
+                         "换对话时还在收手工档：那一档已经不存在了")
     def test_clicking_a_job_aligns_the_scope_first(self):
         """点一条属于别的目标的任务：先把范围对齐过去，再开详情。"""
         row = _fn_body(self.chat, "sideJobRow")
@@ -532,108 +527,140 @@ class FourBlockLinkageTestCase(unittest.TestCase):
         self.assertIn("engagementList", pick,
                       "没判断目标是否还在：已删目标下会选一个不存在的 id")
 
-    def test_the_subagent_block_follows_the_goal_through_the_latest_session(self):
-        """目标范围下的子智能体取自"这个目标名下最近一条对话"。"""
+    def test_the_subagent_block_shows_this_conversation_only(self):
+        """子智能体块也只剩一档：**主区这一屏的派活**（m14866）。
+
+        它原先是跟选中目标走的：主区开着的那条对话不属于选中目标时，就去拉「这个
+        目标名下最近一条对话」，再在正文里标一行来源、并把失败留痕。那条路整条
+        没了——少掉的不只是一次网络请求与两层缓存，还有一整类状态：这一块可能停在
+        「正在取…」、停在「取派活失败」、停在「本目标还没有对话」，而使用者要看的
+        只是「刚才那几个兄弟走到哪了」。
+        """
         scope = _fn_body(self.chat, "subagentScope")
         self.assertTrue(scope, "找不到 subagentScope")
-        self.assertIn("selectedEid()", scope)
-        self.assertIn("String(one.engagementId || '') === eid", scope)
-        self.assertIn("/chat/sessions/", scope, "没有去取那条对话")
-        self.assertIn("updatedAt", scope,
-                      "缓存键没带 updatedAt：那条对话长出新派活之后会一直给旧答案")
-        self.assertIn("goalSubagentWaiting[key]", scope,
-                      "在途与缓存没分开：第二个调用者会把「正在取」当成「没有」再发一次")
-
-    def test_a_failed_subagent_fetch_is_kept_not_shown_as_none(self):
-        """没拉到 ≠ 这个目标没派过：失败要留痕，而且给重试。"""
-        scope = _fn_body(self.chat, "subagentScope")
-        self.assertIn("view.goalSubagentCache[key] = { rows: [], error }", scope,
-                      "失败没被记下来：一次网络抖动就会说成「这个目标还没派过」")
-        self.assertIn("delete view.goalSubagentCache[key]", scope,
-                      "失败之后没有重试的途径")
+        self.assertIn("currentSubagentRows()", scope,
+                      "没从本会话的消息里取派活")
+        for gone in ("selectedEid()", "/chat/sessions/", "goalSubagentCache",
+                     "goalSubagentWaiting", "engagementId"):
+            self.assertNotIn(gone, scope,
+                             "子智能体块还在走跟目标那条旧路：%s" % gone)
         paint = _fn_body(self.chat, "renderSideSubagents")
-        self.assertIn("scope.error", paint, "面板没区分失败与为空")
-        self.assertIn("取派活失败", paint, "失败态没有自己那句正文")
-
-    def test_the_subagent_source_is_named_and_clickable(self):
-        """读的是**另一条**对话的数据，就必须说来源、并给打开它的路。"""
-        row = _fn_body(self.chat, "subagentSourceRow")
-        self.assertTrue(row, "找不到 subagentSourceRow")
-        self.assertIn("chat-side-subagent-from", row)
-        self.assertIn("openSession(session.id)", row, "来源行点不开")
-        self.assertIn("来自对话", row, "来源行没有说是哪条对话")
-        paint = _fn_body(self.chat, "renderSideSubagents")
-        self.assertIn("subagentSourceRow(scope.from)", paint,
-                      "目标范围下没有把来源画出来")
+        self.assertTrue(paint, "找不到 renderSideSubagents")
+        for gone in ("subagentSourceRow", "scope.error", "取派活失败", "waiting"):
+            self.assertNotIn(gone, paint,
+                             "失败 / 在途 / 来源那几档又回来了：%s" % gone)
+        # 只有一条渲染路径这条性质不受范围改动影响：两块仍然共用 subagentBlock()。
+        self.assertIn("subagentBlock(rows)", paint)
+        self.assertIn("wireSubagentPicks(block, rows)", paint)
 
     def test_every_new_part_has_a_style_rule(self):
         for cls_name in (".chat-sessions-goal", ".chat-sessions-goal-name",
-                         ".chat-sessions-goal-count", ".chat-sessions-goal-tag",
-                         ".chat-side-subagent-from"):
+                         ".chat-sessions-goal-count", ".chat-sessions-goal-tag"):
             self.assertIn(cls_name, self.rules, "缺少样式规则：%s" % cls_name)
 
 
-class ClickingPutsTheRowOnTopTestCase(unittest.TestCase):
-    """点一个目标 / 点一条对话之后，**被点的那一行要挪到最前面**（m15733）。
+class OrderIsWhatTheBackendGaveTestCase(unittest.TestCase):
+    """顺序**照后端给的画**，点谁都不改变谁的位置（m14866 撤销 m15733）。
 
-    顺序本来只有"后端怎么给就怎么画"：目标是 `created_at DESC`（新建的在最前），
-    对话是"当前目标那一组在最前 + 组内按更新时间倒序"。两种都不看"我刚点了谁"，
-    于是点完一个目标，它的行可能还在滚动区外；点完一条对话，它可能还在组里第三
-    个——屏幕上「正在读的那一条」与「排在第一的那一条」不是同一个东西。
+    m15733 曾经让「点一下，那一行就挪到最前」。使用者的判断是取消：目标与对话是
+    **两列要反复对照的清单**，位置每点一次就变，读到第三行之后手上的坐标全作废了；
+    而"现在是哪一项"这件事本来就由高亮 +「当前」标出来，不需要靠位移再表达一遍。
 
-    这两处都必须是**展示层**的排序：`view.goals` / `view.sessions` 是控制台与服务端
-    给的快照，改它们的顺序会与那份快照分家（心跳每 3 秒重发一次列表，抹平得无声），
-    而 `autoOpenFirstSession` 还依赖 `view.sessions[0]` 是最近那条。
+    所以这里反向钉住两件事：排序函数不许回来、组内排序不再看 `view.sessionId`。
+    同时正向钉住那条**与顺序无关但一起改过**的性质：`#chat-goals` 自己就是滚动区
+    （它是 `.panel-body`），心跳每 3 秒整体重画，不保住 `scrollTop` 就把正在往下
+    看的人顶回顶部。
     """
 
     @classmethod
     def setUpClass(cls):
         cls.chat = _read("web", "chat.js")
         cls.goals = _fn_body(cls.chat, "renderGoals")
-        cls.order = _fn_body(cls.chat, "orderedGoals")
         cls.groups = _fn_body(cls.chat, "sessionGroups")
 
-    def test_the_clicked_goal_is_drawn_first(self):
-        self.assertTrue(self.order, "找不到 orderedGoals")
-        self.assertIn("orderedGoals(eid)", self.goals,
-                      "目标行没有按选中项排前：点完还是后端那个顺序")
-        self.assertIn("item.id === eid", self.order, "排序没看选中的是哪一个")
-        self.assertIn("findIndex", self.order,
-                      "没有定位选中项：无从把它提到最前")
+    def test_the_clicked_goal_is_not_moved_to_the_top(self):
+        self.assertEqual(_fn_body(self.chat, "orderedGoals"), "",
+                         "按选中项排序的函数又回来了：点一次位置就变一次")
+        self.assertNotIn("orderedGoals(", self.goals,
+                         "目标行又在按选中项排前")
+        self.assertIn("view.goals.forEach(", self.goals,
+                      "目标行没有照 `view.goals` 给的顺序画")
 
-    def test_the_goal_order_is_not_written_back_into_the_snapshot(self):
-        """排的是**画出来的那一行**，不是 `view.goals` 本身。
+    def test_the_conversation_group_ignores_which_one_is_open(self):
+        self.assertTrue(self.groups, "找不到 sessionGroups")
+        self.assertNotIn("view.sessionId", self.groups,
+                         "组内排序又在看打开着的是哪一条")
+        self.assertIn("localeCompare", self.groups,
+                      "组内不再按更新时间倒序了")
 
-        写回去会与"控制台手上那一份"分家——`renderGoals(list)` 每次都用新快照整体
-        覆盖，于是排序只在两次心跳之间有效，而"有时候排序生效、有时候不生效"比
-        "一直不排序"更难被当成缺陷描述出来。
-        """
-        self.assertNotIn("view.goals =", self.order, "排序写回了快照")
-        self.assertNotIn(".sort(", self.order,
-                         "原地 sort 会改掉 view.goals 的顺序（它是同一个数组）")
-        self.assertIn("concat", self.order,
-                      "没有产出一个新数组：切片拼出来的那份才是可以安全画的")
-
-    def test_reordering_keeps_the_goal_scroll_position(self):
+    def test_a_repaint_keeps_the_goal_scroll_position(self):
         """`#chat-goals` 自己就是滚动区（它是 `.panel-body`），清空会把 `scrollTop` 归零。"""
         self.assertIn("dom.goals.scrollTop", self.goals,
                       "重画把滚到一半的人顶回了顶部")
 
-    def test_the_open_conversation_is_first_in_its_group(self):
-        self.assertTrue(self.groups, "找不到 sessionGroups")
-        self.assertIn("view.sessionId", self.groups,
-                      "组内排序没看打开着的是哪一条")
-        self.assertIn("localeCompare", self.groups,
-                      "排在最前之后把更新时间那一条规矩丢了：其余对话不再按时间排")
 
-    def test_an_unknown_open_session_does_not_reorder_anything(self):
-        """`view.sessionId` 可能是空（还没打开过），也可能指向一条已被删的对话。
+class TraceRowJumpsToSidebarTestCase(unittest.TestCase):
+    """会话里一行工具轨迹点下去，右栏要换成那一条任务（m14866）。
 
-        两种情况都必须原样返回后端那个顺序，而不是把某一条莫名提上来。
-        """
-        self.assertIn("findIndex", self.order)
-        self.assertIn("at <= 0", self.order,
-                      "没有处理“已经在最前”与“这个 id 根本不在列表里”")
+    这一下的失败形态全都**长得像正常**：点了没反应（右栏那块折着）、右栏高亮换
+    了但列表还在原处（滚动区外面）、或者跳到了另一条任务上（详情写着别人的名字）。
+    所以这里分开钉四件事：认出是哪一条、三个动作都做了、主区那行与右栏同步、
+    以及样式表真的给可点与选中画了规则。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.chat = _read("web", "chat.js")
+        cls.app = _read("web", "app.js")
+        cls.css = re.sub(r"/\*.*?\*/", "", _read("web", "style.css"), flags=re.S)
+        cls.pick = _fn_body(cls.chat, "traceJobId")
+        cls.focus = _fn_body(cls.chat, "focusJob")
+        cls.block = _fn_body(cls.chat, "traceBlock")
+        cls.marks = _fn_body(cls.chat, "markDetailPicks")
+
+    def test_a_row_knows_which_job_it_is_about(self):
+        """`data` 是**截断后的 JSON 字符串**（后端 `_clip(_dump(...))`），要 parse。"""
+        self.assertTrue(self.pick, "找不到 traceJobId")
+        self.assertIn("JSON.parse", self.pick,
+                      "后端把 data 落成字符串，不 parse 就取不到 jobId")
+        self.assertIn("item.data", self.pick, "没有读这次调用下发了什么")
+        self.assertIn("data.jobId", self.pick, "没有认 jobId 这个字段")
+
+    def test_the_three_things_a_click_must_do(self):
+        self.assertTrue(self.focus, "找不到 focusJob")
+        self.assertIn("PentestFold.set('jobs', false)", self.focus,
+                      "右栏那块折着时，点了什么也看不见")
+        self.assertIn("pickJob(", self.focus, "没有把右栏换成这一条")
+        self.assertIn("scrollIntoView", self.focus,
+                      "高亮落在了滚动区外面，等于没跳")
+        self.assertIn("openDetail('job'", self.focus,
+                      "快照里没有这条任务时什么也不做，看起来就是点了没反应")
+
+    def test_a_row_without_a_job_stays_plain(self):
+        self.assertTrue(self.block, "找不到 traceBlock")
+        self.assertIn("traceJobId(item)", self.block, "轨迹行没有去认任务")
+        self.assertIn("dataset.jobId", self.block, "行上没有记下是哪一条")
+        self.assertIn("is-pickable", self.block, "可点这件事没有落到类名上")
+        # 撤回折叠块那一下不能连详情栏一起换：点「原始返回」不该跳走。
+        self.assertIn("closest('details')", self.block,
+                      "点开原始返回的同时把详情栏换掉了")
+
+    def test_the_main_column_and_the_right_column_agree(self):
+        self.assertTrue(self.marks, "找不到 markDetailPicks")
+        self.assertIn(".chat-trace-item[data-job-id]", self.marks,
+                      "主区的轨迹行不跟着右栏高亮，两处会各指一条")
+
+    def test_both_entries_are_exported(self):
+        """两个入口都要露出来：`focusJob` 给测试与后续调用点，`loadJobs` 给那次补拉。"""
+        self.assertIn("focusJob }", self.chat, "focusJob 没有对外暴露")
+        self.assertIn("  loadJobs,", self.app,
+                      "补拉任务列表的入口没有给出去，focusJob 里那次补拉是空的")
+
+    def test_the_two_new_states_have_rules(self):
+        self.assertIn(".chat-trace-item.is-pickable", self.css,
+                      "可点的轨迹行没有手型光标")
+        self.assertIn(".chat-trace-item.is-picked", self.css,
+                      "选中的轨迹行与别的行看不出区别")
 
 
 if __name__ == "__main__":

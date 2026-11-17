@@ -4830,16 +4830,19 @@ class FoldPanelTestCase(unittest.TestCase):
 
     # ------------------------------------------------- 上下文栏另两块的接线
 
-    def test_the_sidebar_jobs_block_says_there_are_more(self):
-        """侧栏任务列表是**截断**的，所以必须有一个出口。
+    def test_the_sidebar_jobs_block_shows_them_all(self):
+        """侧栏任务列表**不再截断**，所以也不再有「查看全部」那颗按钮（m14866）。
 
-        没有它，那几条读起来就像"任务总共只有这些"——而截断本身在界面上没有任何
-        提示。出口是「查看全部」，它切到任务页签（完整列表在那儿）。
+        它原先只列前 5 条，多出来的靠一颗按钮指去「任务」页签。使用者的判断是
+        「所有任务全部展示出来」：这一块回答的正是「这条对话还派着几件活」，而
+        "另有 3 条要再点一次才看得见"恰好是这个问题回答不了的地方。上限与那颗
+        按钮必须一起走——只留按钮就变成一颗点了没事发生的假按钮。
         """
         chat = _read("chat.js")
-        self.assertIn("SIDE_JOB_MAX", chat, "侧栏任务列表没有上限，会把对话记录挤掉")
-        self.assertIn("switchTab('jobs')", chat,
-                      "侧栏任务块没有通往完整列表的出口，截断就成了静默的")
+        self.assertNotIn("SIDE_JOB_MAX", chat,
+                         "侧栏任务列表又在截断了：这一块要的是全部")
+        self.assertNotIn("switchTab('jobs')", chat,
+                         "「查看全部」那颗按钮还在：这一块本来就不截断")
 
     def test_the_sidebar_jobs_block_keeps_itself_fresh(self):
         """那一块要会自己长——它不在任务页签里，所以不会跟着任务页签的刷新走。
@@ -7471,6 +7474,44 @@ class PanelsWiringTestCase(unittest.TestCase):
         # 看**去掉注释的代码**：这句话必须真的进确认框，写在注释里不算。
         self.assertIn("整张表", self._code,
                       "确认框没有说明清空的范围比列表大")
+
+    def test_the_audit_pages_can_take_it_away_and_erase_it(self):
+        """审批记录与日志两页都要有「导出」和「清空」。
+
+        这两页原先只有「刷新」：看得到、擦不掉、也拿不走。「事后核账」这个诉求
+        一半在屏幕上、一半在文件里——把某一时段的账导出去交给别人对一遍，和
+        「现在就盯着这一屏看」是两件不同的事，只有前者需要按钮。
+
+        两页的删除按钮文案必须带范围：审批记录的范围是「管理员整张表 / 其他身份
+        只清自己名下那些」，日志的范围是「整份文件（含滚动出来的上一份）」——
+        两条都比眼前这一屏大，而不说清时人默认按看到的那些理解。
+        """
+        ids = _static_ids(self._html)
+        for name in ("approvals", "logs"):
+            for suffix in ("export", "clear"):
+                self.assertIn("%s-%s" % (name, suffix), ids,
+                              "「%s」页没有%s按钮的挂点" % (name, suffix))
+                self.assertIn("bind('%s-%s'" % (name, suffix), self._code,
+                              "「%s-%s」这颗按钮没接上处理函数" % (name, suffix))
+        # 清空的确认框必须说清范围比这一屏大：两句各自对应一条真实差额。
+        self.assertIn("/reviews/clear", self._code)
+        self.assertIn("/logs/clear", self._code)
+
+    def test_the_export_does_not_go_through_the_listing_limit(self):
+        """导出走的是另一条接口，不是「把列表再拉一遍」。
+
+        列表夹在 100 条以内是为了「一屏看得完」。导出的价值恰恰在更早那些记录上
+        ——照列表那条路导，交出去的文件看着完整、其实只有最近一百条，而拿到
+        文件的人看不出缺了（它没有总行数可比）。
+        """
+        self.assertIn("/reviews/export", self._code,
+                      "审批记录的导出没有自己的接口")
+        self.assertIn("/logs/export", self._code,
+                      "日志的导出没有自己的接口")
+        # 导出落盘走 Blob + 临时 <a>：服务端没有 Content-Disposition 通道，
+        # 文件名与编码本来就得由界面负责一次。
+        self.assertIn("URL.createObjectURL", self._code)
+        self.assertIn("URL.revokeObjectURL", self._code)
 
     def test_status_words_come_from_the_shared_table(self):
         """仪表盘与审批页不许印后端原值。

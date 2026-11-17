@@ -604,7 +604,7 @@
 
           <div class="chat-side-block chat-side-subagents" id="chat-side-subagents" data-fold-part="subagents">
             <button class="panel-head fold-head" type="button" data-fold="subagents">
-              子智能体<span class="panel-head-hint" id="chat-side-subagents-hint">跟选中目标</span>
+              子智能体<span class="panel-head-hint" id="chat-side-subagents-hint">本会话</span>
               <span class="fold-mark" aria-hidden="true"></span>
             </button>
             <div class="panel-body" id="chat-side-subagent-list"></div>
@@ -1640,6 +1640,11 @@
         <span class="muted" id="approvals-meta">尚未加载</span>
       </div>
       <div class="ph-actions">
+        <!-- 导出与清空都不是「重新看一眼」：一个把整批账取出文件，一个删掉它。
+             导出走 `/reviews/export`（同一道归属闸、但不截到 100 条），清空走
+             `/reviews/clear`（还在等裁决的单子不删 —— 删掉它那一轮会转到超时）。 -->
+        <button id="approvals-export" class="btn sm" type="button">导出</button>
+        <button id="approvals-clear" class="btn sm danger" type="button">清空</button>
         <button id="approvals-refresh" class="btn sm" type="button">刷新</button>
       </div>
     </header>
@@ -1660,6 +1665,10 @@
       </div>
       <div class="ph-actions">
         <input id="logs-limit" class="input logs-limit" type="number" min="1" max="2000" value="200" aria-label="显示行数">
+        <!-- 导出的是整份文件（含滚动出来的 access.log.1），不是这一页尾部那一段；
+             清空连同那一份一起删，清完留一行说明 —— 「谁什么时候清过日志」也在审计里。 -->
+        <button id="logs-export" class="btn sm" type="button">导出</button>
+        <button id="logs-clear" class="btn sm danger" type="button">清空</button>
         <button id="logs-refresh" class="btn sm" type="button">刷新</button>
       </div>
     </header>

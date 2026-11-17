@@ -390,7 +390,10 @@ class PulseWiringContractTestCase(unittest.TestCase):
         self.assertNotIn("state.pulse = null", body)
 
     def test_the_chat_side_compares_its_own_stamps(self):
-        self.assertIn("currentSessionId, syncFromPulse }", self.chat)
+        # 导出表在 `syncFromPulse` 之后又多了 `focusJob`（m14866：会话里点工具
+        # 轨迹跳到右栏那一条），所以这里钉的是"这两项都在表里"，不是"表以它们结尾"。
+        self.assertIn("currentSessionId, syncFromPulse,", self.chat)
+        self.assertIn("focusJob };", self.chat)
         body = _body(self.chat, "function syncFromPulse(stamps)")
         self.assertIn("view.sessionsStamp !== next.sessions", body)
         self.assertIn("previous.messages !== next.messages", body)

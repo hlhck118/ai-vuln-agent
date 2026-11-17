@@ -139,15 +139,27 @@
   let trafficCount = 0;
   // 列表**不带正文**（`withBody` 默认关）：一屏几十条，每条几十 KB 正文会把
   // 响应撑到几 MB，而列表上根本显示不了正文。点开某一条才取全文。
-  async function loadTraffic() {
+  // `quiet` 是**心跳那条路**专用的：`/pulse` 的流量指纹一变就调它一次（见
+  // app.js 的 `pumpPulse`）。两条差别都与"这一页正被人读着"有关：
+  //
+  //   * 不写「正在读取流量…」——那是给"刚点进来"用的。心跳每几秒来一次，每次都
+  //     在表格上方闪一行字，读的人会以为这一页一直在重连。
+  //   * 失败**静默**。后台轮询失败一次的红字会盖在正在读的表上，而下一次 3 秒后
+  //     就会自己好；真正的失败仍然会暴露——切页签那一次是 `quiet` 为假的加载。
+  //
+  // `#traffic-detail` 两条路都不动：它显示的是某一条记录的原文，与列表是否重画无关。
+  async function loadTraffic(quiet) {
     const host = $('#traffic-body');
     if (!host) return;
-    clear(host);
-    host.append(el('div', 'muted', '正在读取流量…'));
+    if (!quiet) {
+      clear(host);
+      host.append(el('div', 'muted', '正在读取流量…'));
+    }
     let data = null;
     try {
       data = await apiGet('/traffic?limit=100');
     } catch (error) {
+      if (quiet) return;
       clear(host);
       host.append(errorBlock('流量列表加载失败：' + error.message));
       return;
@@ -424,6 +436,32 @@
     });
   }
 
+  /* ------------------------------------------------------------ 导出 */
+  // 两页的「导出」都把服务端那份数据原样写进文件，不在浏览器里重排字段：
+  // 导出的东西是拿去核账的（贴进工单、交给同事对一遍）。字段少一个、顺序变了，
+  // 事后对不上时说不清是数据的问题还是这次导出的问题。
+  //
+  // 落盘走 Blob + 临时 <a>，与报告页那条下载同一条路（`downloadReport`）：
+  // 服务端那边没有 Content-Disposition 通道，文件名与编码本来就得由界面负责一次。
+  function saveFile(name, text, type) {
+    const link = el('a');
+    link.href = URL.createObjectURL(new Blob([text], { type: type }));
+    link.download = name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+  }
+
+  // 文件名里只放时间，不放「副本」「最终」这类词：同一天导两次会互相覆盖或并存，
+  // 而那个区别该由人自己决定，不该由文件名替他猜。
+  function fileStamp() {
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+      + `-${pad(now.getHours())}${pad(now.getMinutes())}`;
+  }
+
   /* ------------------------------------------------------------ 审批记录 */
   async function loadApprovals() {
     const host = $('#approvals-body');
@@ -489,10 +527,30 @@
       // 不取是白扔。手册里写着「展开看参数与判定」，而这一页原先根本没有展开。
       // 展开的内容建在**同表的下一个 tr** 里而不是浮层：浮层要管定位、滚动与
       // 点外面关闭，而这里只有一个诉求——把这几行字放在它旁边。
-      const toggleCell = el('td');
+      const toggleCell = el('td', 'approval-acts');
       const toggle = el('button', 'btn sm', '展开');
       toggle.type = 'button';
+      // 「删除」与「展开」挤在同一格：删一条审批记录是个独立动作，但为它单开一列，
+      // 表头就要多一个空标题，而这张表本来就有一格是空的（放展开按钮）。
+      // 删的是**审批记录本身**，不是证据——链路里的发现与资产不随它消失，
+      // 所以确认框里要把这句话写出来，否则没人敢点。
+      const drop = el('button', 'btn sm danger', '删除');
+      drop.type = 'button';
+      drop.title = '删掉这一条审批记录（不影响链路里的证据）';
+      drop.addEventListener('click', async () => {
+        const ask = `确定删掉这条审批记录？\n\n${item.tool || '这次调用'} · ${item.headline || ''}\n\n`
+          + '删掉就找不回来。它只删这条记录本身：链路里的发现与资产不受影响。';
+        if (!window.confirm(ask)) return;
+        const meta = $('#approvals-meta');
+        try {
+          await apiPost('/reviews/delete', { reviewId: item.id });
+          loadApprovals();
+        } catch (error) {
+          if (meta) meta.textContent = '删除失败：' + error.message;
+        }
+      });
       toggleCell.append(toggle);
+      toggleCell.append(drop);
       tr.append(toggleCell);
       body.append(tr);
 
@@ -631,6 +689,70 @@
     });
     bind('workspace-refresh', renderWorkspace);
     bind('approvals-refresh', loadApprovals);
+    // 导出与清空都不在「刷新」那条路上：一个把整批账取出文件，一个删掉它，
+    // 两者都不是「重新看一眼」。
+    bind('approvals-export', async () => {
+      const meta = $('#approvals-meta');
+      try {
+        // 导出接口与列表同一道归属闸，但**不截到 100 条**：列表夹那一下是为了
+        // 一屏看得完，照那个上限导出来的是「看着完整、其实只有最近一百条」的文件。
+        const data = await apiGet('/reviews/export');
+        saveFile(`审批记录-${fileStamp()}.json`,
+          JSON.stringify(data, null, 2), 'application/json;charset=utf-8');
+        if (meta) meta.textContent = `已导出 ${formatCount(data.total)} 条审批记录`;
+      } catch (error) {
+        if (meta) meta.textContent = '导出失败：' + error.message;
+      }
+    });
+    bind('approvals-clear', async () => {
+      const meta = $('#approvals-meta');
+      const ask = '确定清空审批记录？\n\n'
+        + '删的是审批记录本身（谁批准了哪条命令），链路里的发现与资产不受影响。\n'
+        + '范围比列表大：管理员清的是整张表，其他身份只清自己名下对话的那些。\n'
+        + '还在等裁决的单子不删 —— 删掉它，发起它的那一轮会一直转到超时。';
+      if (!window.confirm(ask)) return;
+      try {
+        const answer = await apiPost('/reviews/clear', {});
+        if (meta) {
+          const rest = answer.kept ? `，留下 ${formatCount(answer.kept)} 条` : '';
+          const held = answer.awaiting ? `，${formatCount(answer.awaiting)} 条仍在等裁决` : '';
+          meta.textContent = `已清掉 ${formatCount(answer.deleted)} 条${rest}${held}`;
+        }
+        loadApprovals();
+      } catch (error) {
+        if (meta) meta.textContent = '清空失败：' + error.message;
+      }
+    });
     bind('logs-refresh', loadLogs);
+    bind('logs-export', async () => {
+      const meta = $('#logs-meta');
+      try {
+        // 导出的是**整份**（含滚动出来的 access.log.1），不是屏幕上这一段尾部：
+        // 「只读了尾部」这件事是给眼睛省流量的，不是给出文件用的。
+        const data = await apiGet('/logs/export');
+        saveFile(`访问日志-${fileStamp()}.txt`,
+          (data.lines || []).join('\n'), 'text/plain;charset=utf-8');
+        if (meta) {
+          meta.textContent = `已导出 ${formatCount(data.total)} 行（${(data.sizeBytes / 1024).toFixed(1)} KB）`;
+        }
+      } catch (error) {
+        if (meta) meta.textContent = '导出失败：' + error.message;
+      }
+    });
+    bind('logs-clear', async () => {
+      const meta = $('#logs-meta');
+      const ask = '确定清空访问日志？\n\n'
+        + '连同滚动出来的上一份（access.log.1）一起删，删掉就找不回来。\n'
+        + '这一页只列得到尾部一段，但清的是整份文件。\n\n'
+        + '清完会留一行说明，所以文件不会是空的 —— 「谁在什么时候清过日志」也是审计要回答的问题。';
+      if (!window.confirm(ask)) return;
+      try {
+        const answer = await apiPost('/logs/clear', {});
+        if (meta) meta.textContent = `已清掉 ${(answer.removed / 1024).toFixed(1)} KB 的访问日志`;
+        loadLogs();
+      } catch (error) {
+        if (meta) meta.textContent = '清空失败：' + error.message;
+      }
+    });
   });
 }());

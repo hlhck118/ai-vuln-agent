@@ -1125,8 +1125,11 @@ function loadTabData(tab) {
   // 仪表盘**不在**这个名单里，与链路页的取舍方向相反：它整页都是读数与列表，
   // 每 3 秒重画一次的表现是"列表在手底下闪"，而这一页回答的是"现在有什么"，
   // 切进来时那一次加载已经够新。要给新数据就按页头那颗「刷新」。
+  // 流量页也接进来（m14866「流量根据会话任务实时展示」）：那一页列的是**发出去过的
+  // 请求**，而请求是模型在对话里跑工具时发出去的——人在流量页上等的正是"又发了一条"。
+  // 不接的话它只在切进来的那一刻读一次，之后整个扫描跑完都不动。
   const pulseTab = tab === 'dsh' || tab === 'findings' || tab === 'assets'
-    || (tab === 'graph' && state.graphAuto);
+    || tab === 'traffic' || (tab === 'graph' && state.graphAuto);
   if (pulseTab) startPulseAuto();
   else stopPulseAuto();
   if (tab === 'jobs') {
@@ -2757,8 +2760,66 @@ function renderJobs(error) {
   }
   if (error) { wrap.append(errorBlock('任务列表加载失败：' + error.message)); return; }
   if (!state.jobs.length) { wrap.append(emptyBlock('暂无任务：填好目标后下发第一个任务')); return; }
-  const list = el('ul', 'row-list');
-  state.jobs.slice().sort(compareJobs).forEach((job) => {
+  // 按**目标**分组（m14866「任务列表按照目标分组」）。这张表此前是一根长条，按状态
+  // 排：同一个目标的四次执行被别的目标的任务隔开，读的人得自己在脑子里把它们挑出来。
+  // 分组之后"这个目标跑过几次、各是什么结果"一眼可见；组内仍按 `compareJobs`（执行中
+  // 在前、同状态新 → 旧），于是组与组之间是目标的顺序、组内是状态的顺序。
+  const list = el('div', 'job-groups');
+  jobGroups().forEach((group) => list.append(jobGroupBlock(group)));
+  wrap.append(list);
+}
+
+/** 任务页的分组：一个目标一组。
+ *
+ *  三件事按这个顺序定，每一件都有它的理由：
+ *
+ *   1. **键是 `engagementId`**，不是目标字符串。目标值可以重复（两次都填了同一个
+ *      域名），而目标号唯一；拿字符串分组会把两个目标的任务并成一组。
+ *   2. **当前选中的目标置顶**。分组之后最常问的一句是"**这个**目标跑成什么样"，
+ *      而它的位置若取决于别的东西（创建时间、最近执行），每次进这一页都要先找它。
+ *   3. **其余按最近一次执行倒序**。这一页回答的是"最近在干什么"，不是"历史上发生过
+ *      什么"——目标列表那边按创建时间排，那是另一个问题。
+ *
+ *  没有目标号的任务单独一组「未归属目标」并排在最后：手工下发与命令行下发的任务
+ *  不带归属，它们**不是**被藏起来，而是本来就不属于任何目标。
+ */
+function jobGroups() {
+  const buckets = new Map();
+  state.jobs.forEach((job) => {
+    const eid = String(job.engagementId || '');
+    if (!buckets.has(eid)) buckets.set(eid, []);
+    buckets.get(eid).push(job);
+  });
+  const groups = Array.from(buckets.entries()).map(([eid, jobs]) => ({
+    eid,
+    // 目标名走 `targetOf`（读 `state.engagementList` 那一份快照），列表还没加载出来时
+    // 退回目标号本身 —— 与报告目录那一行同一条规矩，宁可印一个号也不印「未知」。
+    label: eid ? targetOf(eid) : '未归属目标',
+    latest: jobs.reduce((top, job) => Math.max(top, Number(job.createdAt) || 0), 0),
+    jobs,
+  }));
+  groups.sort((a, b) => {
+    const mine = (group) => (group.eid && group.eid === state.eid ? 0 : 1);
+    const diff = mine(a) - mine(b);
+    if (diff !== 0) return diff;
+    const unowned = (group) => (group.eid ? 0 : 1);
+    const tail = unowned(a) - unowned(b);
+    return tail !== 0 ? tail : b.latest - a.latest;
+  });
+  return groups;
+}
+
+/** 一组任务：一行组标题（目标名 + 条数），下面那几条。 */
+function jobGroupBlock(group) {
+  const box = el('section', 'job-group');
+  const heading = el('div', 'rpt-group');
+  const name = el('span', 'job-group-name', group.label);
+  name.title = group.eid || group.label;
+  heading.append(name);
+  heading.append(el('span', 'job-group-count', `${formatCount(group.jobs.length)} 条`));
+  box.append(heading);
+  const rows = el('ul', 'row-list');
+  group.jobs.slice().sort(compareJobs).forEach((job) => {
     const status = jobStatusOf(job), item = el('li', 'row'), head = el('div', 'row-head');
     const isFollowed = Boolean(state.jobLog && state.jobLog.jobId === job.id);
     head.append(el('span', `status-badge status-${status}`, JOB_STATUS_LABEL[status]));
@@ -2824,11 +2885,10 @@ function renderJobs(error) {
     // 时那是一屏之外，点开的东西在哪儿得自己找。正文存在 `state.jobLog` 里，
     // 所以这里每次重画都能把它原样重建出来。
     if (isFollowed) item.append(jobLogPanel(state.jobLog));
-    list.append(item);
+    rows.append(item);
   });
-  wrap.append(list);
-  // 列表重建时面板已经跟着那一行重建了（见上面的 `jobLogPanel`）。
-  // 这里只需要确认流还在——`state.jobLog.source` 跨重画存续，重建的只是 DOM。
+  box.append(rows);
+  return box;
 }
 /**
  * 由规划提案下发的任务，把"依据哪句话"显示在任务上。
@@ -3872,6 +3932,13 @@ async function pumpPulse() {
         && (changed('nodes') || changed('engagements'))) {
       await loadGraph(true);
     }
+    // 流量：这一页的指纹是**那个范围内**的条数与最大行号（服务端按调用者能看见的
+    // 范围取，见 `store.change_stamps` 的 `traffic_user`）。判当前页签，与漏洞 / 资产
+    // 同一条规矩：别的页签上不该为它重画表格。
+    if (state.tab === 'traffic' && changed('traffic')) {
+      const panels = window.PentestPanels;
+      if (panels && typeof panels.loadTraffic === 'function') panels.loadTraffic(true);
+    }
   }
   if (chat && typeof chat.syncFromPulse === 'function') chat.syncFromPulse(stamps);
   return stamps;
@@ -4350,6 +4417,10 @@ window.PentestUI = {
   // 同一个定时器**（不是各起一个：两个定时器会让刷新节奏翻倍，而它们拉到的是
   // 同一份数据）。见 watchJobs 的注释。
   watchJobs,
+  // 会话里的工具轨迹点一下要跳到右栏那一条任务（m14866）：那条路径先在快照里找，
+  // 找不到就**补拉一次**——刚下发的任务、以及在别的页签里清过列表之后，快照里都
+  // 还没有它。补拉这个动作的数据源在控制台这边，所以入口要一起给出去。
+  loadJobs,
   // 侧边栏两个读数块的新鲜度。对话页签进入时由 `loadTabData` 起，切走时停。
   // 对外暴露是为了让契约测试能直接验"探询会比对指纹、只在变了时才重拉"。
   pumpPulse,

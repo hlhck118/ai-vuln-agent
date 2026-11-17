@@ -114,24 +114,11 @@
     // 目标列表（侧边栏第二块，常驻栏底）。**数据由控制台持有**（`PentestUI.state.engagementList`）
     // ——目标同时决定漏洞/资产/报告的范围，两份快照必然会在新目标出现时显示得不一样。
     goals: [],
-    // —— 四块联动（m03903）。下面两个字段都只属于侧栏这一块，不进 `state`：
-    // `state.eid` 决定的是漏洞 / 资产 / 报告的范围，「任务」块要不要看全部
-    // 与它不是同一件事。
-    //
-    // 「任务」块列**哪一批**（m15165）：空串 = 跟着走（这条对话 → 这个目标），
-    // 'goal' = 本目标全部对话，'all' = 全部目标。三档而不是两档布尔：
-    // 只按目标筛时，同一目标下另一条对话下发的任务会混进来，而这一块回答的正是
-    // 「这条对话还派着几件活」；但反过来只看对话也不行——手动下发与命令行下发的
-    // 任务没有会话归属，藏起来等于说它们不存在。所以中间那一档必须有。
-    // **不进 `state`**：`state.eid` 决定漏洞 / 资产 / 报告的范围，两者不是同一件事。
-    sideJobsScope: '',
-    // 目标名下子智能体的取用缓存（见 `subagentScope`）。键由目标 id、会话 id、
-    // 会话 updatedAt 拼成：后两段保证"那条对话又长出了新派活"时缓存会失效，
-    // 而不是一直给出一份旧的。值 `{rows}`；拉取失败记 `{rows: [], error}`。
-    goalSubagentCache: {},
-    // 同一批键的在途标记。它必须与缓存分开：缓存表示"已经有答案"，它表示"正在取"。
-    // 合在一起的话，第二个调用者会把"在途"当成"没有"再发一次。
-    goalSubagentWaiting: {},
+    // —— 四块联动（m03903）。下面的字段都只属于侧栏这一块，不进 `state`。
+    // 「任务」与「子智能体」两块**只列这条对话的**（m14866）。范围没有第二档，
+    // 也没有手工开关：它由主区开着哪条对话唯一决定。原先这里还有一个
+    // `sideJobsScope` 三档闸门（m15165）与两层目标级派活缓存（m03903），
+    // 现在都不需要了——范围收成一档之后，"这一屏是哪一批"不再是个需要回答的问题。
     // 使用者是否**亲手**换过范围（点目标行 / 对话组头 / 任务行）。置位之后，
     // 后台的会话列表刷新不再把 `state.eid` 拽回打开着的那条对话的目标；
     // 点开一条对话（`openSession`）即清零，并把 `scopeSync` 一并清掉。
@@ -1178,23 +1165,6 @@
   const engagementList = () => asArray(ui().state && ui().state.engagementList);
   const engagementMeta = (eid) => engagementList().find((item) => item.id === eid) || null;
 
-  /** 目标行的绘制顺序：**被选中的那个排最前**，其余保持后端给的顺序。
-   *
-   *  点一个目标之后它要立刻贴到手边——那一行不只是高亮，它还展开着「扫描过哪些
-   *  地址」，而目标一多，被点的那一行常常在滚动区外。这一步只改**画出来的顺序**：
-   *  view.goals 是控制台给的快照（renderGoals(list) 直接覆盖它），动它会与那份
-   *  快照分家，而心跳每 3 秒就会重发一次列表，届时「上一秒排过的序」会被无声抹平。
-   *  排序是**展示层**的事，所以每次重画都按当前 eid 重新算一遍。
-   */
-  function orderedGoals(eid) {
-    const list = view.goals;
-    if (!eid) return list;
-    const at = list.findIndex((item) => item.id === eid);
-    // 0 = 已经在最前；-1 = 这个 id 不在列表里（目标刚被删）。两种都不用动。
-    if (at <= 0) return list;
-    return [list[at]].concat(list.slice(0, at), list.slice(at + 1));
-  }
-
   /** 目标列表（侧边栏第二块，常驻栏底）。数据由控制台持有，这里只负责画。
    *
    *  点一个目标做两件事，而且必须同时发生：① 把它设为「漏洞 / 资产 / 报告」的范围；
@@ -1205,7 +1175,7 @@
     if (list) view.goals = asArray(list);
     if (!dom.goals) return;
     // #chat-goals 自己既是列表又是滚动区（它就是 .panel-body），清空会把
-    // scrollTop 归零。置顶之后第一行换了人，正在往下看的人会被顶回顶部——
+    // scrollTop 归零。心跳每 3 秒就整块重画一次，正在往下看的人会被顶回顶部——
     // 与 renderSessions 同一条处理：先记下来，画完还回去。
     const scrolled = dom.goals.scrollTop;
     clear(dom.goals);
@@ -1215,8 +1185,11 @@
       syncDetail('goal');
       return;
     }
+    // 顺序**照后端给的画**（created_at DESC，新建的在最前）。点一个目标不再把它
+    // 挪到第一行（m14866 撤掉了那条）：那一行的位置每点一次就变，两次回来找同一台
+    // 机器都得重新扫一遍。选中的是哪一个由高亮与「当前」标出来。
     const eid = selectedEid();
-    orderedGoals(eid).forEach((item) => dom.goals.append(goalRow(item, eid)));
+    view.goals.forEach((item) => dom.goals.append(goalRow(item, eid)));
     if (scrolled) dom.goals.scrollTop = scrolled;
     // 重画之后“被选中的那一行”是新的 DOM：高亮与详情都要重新落上去。
     markDetailPicks();
@@ -1395,9 +1368,8 @@
       if (item.id !== selectedEid()) await ui().selectEngagement(item.id);
       view.manualGoal = true;           // 同上：手工换的范围，后台刷新不许夺回
       renderSessions();                 // 它会连带重画目标行（行上带着"几条对话"）
-      // 另外两块也按新范围重画（m03903）。不重画的话，目标区块切到甲，任务块
-      // 还列着乙的任务、子智能体还是上一场对话的——这一栏的几块各有各的范围。
-      view.sideJobsScope = '';
+      // 另外两块也重画：这一栏的四块共用 `state.eid`，不重画就会停在旧目标上
+      // ——那正是"点了目标、旁边却没动"的形态。
       renderSideJobs();
       renderSideSubagents();
       // 切范围与看详情是同一件事的两面：点一个目标，右边就该摊开这个目标。
@@ -1570,15 +1542,11 @@
     });
     const groups = [];
     byGoal.forEach((sessions, owner) => {
-      // 组内顺序：**打开着的那条排最前**，其余按更新时间倒序。点一条对话之后它就是
-      // 这一列里最该贴在手边的那一行；只按时间排的话，读的是三天前的一条、刚点的那条
-      // 沉在下面，屏幕上「正在读的」与「排在第一的」不是同一个东西。写成第二关键字
-      // 而不是先排时间再搬：这样搬完仍是确定顺序，同毫秒的两条也能稳定排开。
-      sessions.sort((a, b) => {
-        const mine = a.id === view.sessionId ? -1 : (b.id === view.sessionId ? 1 : 0);
-        if (mine) return mine;
-        return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
-      });
+      // 组内顺序：**按更新时间倒序**（m14866 撤掉了「打开着的那条排最前」）。
+      // 点一条对话不再把它的位置搬到组首：那一列每点一次就重排一次，正在读的位置
+      // 跟着跳，「再回去找刚才那条」变成重新扫一遍。正在读的是哪一条由蓝底标出来。
+      sessions.sort((a, b) => String(b.updatedAt || '')
+        .localeCompare(String(a.updatedAt || '')));
       groups.push({ eid: owner, sessions, latest: String(sessions[0].updatedAt || '') });
     });
     groups.sort((a, b) => b.latest.localeCompare(a.latest));
@@ -1629,7 +1597,6 @@
     // 这一下是**使用者亲手**换的范围。记下来：后台的列表刷新（`loadSessions` →
     // `adoptSessionEngagement`）不许再把人拽回打开着的那条对话的目标。
     view.manualGoal = true;
-    view.sideJobsScope = '';            // 换范围就回到跟随档，免得还停在上一轮的手工档
     ui().selectEngagement(next);
     renderSessions();
     renderSideJobs();
@@ -1952,16 +1919,6 @@
 
   /* ------------------------------------------------------ 上下文栏 · 任务 ---- */
 
-  /** 这一块最多列几条。
-   *
-   *  **理由换过一次**：原来写的是"296px 宽、每条约 46px，再多就会把「对话记录」
-   *  挤成一条滚动缝"——侧栏改成"每块按自己的内容取高"之后那条理由不成立了（对话记录不再
-   *  被挤，它按自己的内容取高）。现在的理由是位置：这一块下面还有整块子智能体，
-   *  任务列到八条以上时，想看一眼"子智能体在跑吗"得先滚过一长串已经结束的任务。
-   *  完整的列表在「任务」页签，出口按钮也在。
-   */
-  const SIDE_JOB_MAX = 5;
-
   /** 上下文栏的「任务」块。
    *
    *  **数据归 `app.js`**（`state.jobs`，与「任务」页签是同一份），这里只负责画
@@ -2003,152 +1960,65 @@
     }
     if (!ui().state.jobsLoaded) {
       // 栏头已经写着「正在加载…」。正文这句不复述它，而是趁等待告诉使用者
-      // **这一块的性质**——它只列最近几条，而不是全部。
+      // **这一块的性质**——它只列这条对话派下去的，不是全部。
       setHint(dom.sideJobsHint, '正在加载…');
       dom.sideJobs.append(el('p', 'muted',
-        '这一块列最近几条；完整的在「任务」页签。'));
+        '这一块列这条对话派下去的任务；全部任务在「任务」页签。'));
       return;
     }
-    const all = asArray(ui().state.jobs).slice().sort(jobView.compare);
-    if (!all.length) {
+    if (!asArray(ui().state.jobs).length) {
       // 栏头写的是「暂无」，所以正文不再说一遍「还没有任务」，只说**怎么才会有**。
       setHint(dom.sideJobsHint, '暂无');
       dom.sideJobs.append(el('p', 'muted',
         '在「任务」页签下发，或直接对助手说一句。'));
       return;
     }
-    /* —— 范围先跟**对话**、再跟**目标**（m15165）。这一块原先是全局「最近几条」，
-       m03903 把它收到「选中目标」；但一个目标可能被好几条对话共用（新建对话会跟着
-       当时选中的目标走），于是切到另一条对话时这一块纹丝不动——而它回答的正是
-       「这条对话还派着几件活」。范围闸门在 `jobScope` 里，这里只管画。
-       **不动 `state.eid`**：那一个同时决定漏洞 / 资产 / 报告的范围，
-       让一颗「看全部任务」顺手改掉它是两件事。 */
-    const scope = jobScope(all);
-    if (!scope.rows.length) {
-      setHint(dom.sideJobsHint, scope.mode === 'session' ? '这条对话暂无' : '本目标暂无');
-      dom.sideJobs.append(el('p', 'muted', scope.mode === 'session'
-        ? '这条对话还没有下发过任务。' + (scope.wider
-          ? '本目标名下另有 ' + scope.wider + ' 条属于别的对话或手工下发；' : '')
-          + '任务归到哪条对话，由下发它的那一轮决定。'
-        : '选中的目标名下还没有任务。任务归到哪个目标，由它实际扫描的地址决定；'
-          + '「任务」页签列的是全部。'));
-      appendJobsScopeToggle(scope);
+    /* —— 只列**这条对话**派下去的任务（m14866）。这一块原先是三档闸门
+       （这条对话 → 本目标 → 全部目标，m15165），使用者的判断是「只显示当前会话的内容，
+       取消看全部」：一块会自动改范围的列表，读之前永远要先确认"这一屏是哪一批"。
+       现在范围只有一档，而且由主区开着哪条对话唯一决定，没有手工开关。
+       **不动 `state.eid`**：那一个决定漏洞 / 资产 / 报告的范围。 */
+    const rows = sessionJobs(jobView);
+    if (!rows.length) {
+      setHint(dom.sideJobsHint, '这条对话暂无');
+      dom.sideJobs.append(el('p', 'muted',
+        '这条对话还没有下发过任务。任务归到哪条对话，由下发它的那一轮决定；'
+        + '手工下发与命令行下发的任务不带对话归属，只在「任务」页签里。'));
       return;
     }
-    // `compare` 已经把执行中排在前面，所以「前几条」里一定先出现还活着的那些——
-    // 那是打开这一栏时唯一想知道的事。
-    const live = scope.rows
-      .filter((job) => !jobView.finished.has(jobView.statusOf(job))).length;
-    setHint(dom.sideJobsHint, scope.label + (live ? '未结束 ' + live : '全部已结束'));
-    // 跟随「目标名下**另一条**对话」时必须说出这一份来自哪条对话：不说的话，
-    // 读者会以为它就是主区这条对话下发的——同一次点击给出两个出处。
-    if (scope.followed && scope.session) dom.sideJobs.append(subagentSourceRow(scope.session));
-    const shown = scope.rows.slice(0, SIDE_JOB_MAX);
-    shown.forEach((job) => dom.sideJobs.append(sideJobRow(job)));
-    // **截断了就必须说**。不说的话读起来像「任务总共只有这几条」，
-    // 而截断本身在界面上没有任何提示。
-    if (scope.rows.length > shown.length) {
-      const more = el('button', 'btn sm chat-side-more',
-        '查看全部 ' + scope.rows.length + ' 条');
-      more.type = 'button';
-      more.addEventListener('click', () => ui().switchTab('jobs'));
-      dom.sideJobs.append(more);
-    }
-    appendJobsScopeToggle(scope);
+    // `compare` 已经把执行中排在前面，所以往下读的第一眼就是还活着的那些。
+    const live = rows.filter((job) => !jobView.finished.has(jobView.statusOf(job))).length;
+    setHint(dom.sideJobsHint, live ? '未结束 ' + live : '全部已结束');
+    // **一条都不截**（m14866）。原先只列前 5 条，多出来的靠一颗「查看全部」按钮
+    // 指去「任务」页签——而这一块回答的正是「这条对话还派着几件活」，
+    // "另有 3 条要再点一次才看得见"恰是这个问题回答不了的地方。
+    rows.forEach((job) => dom.sideJobs.append(sideJobRow(job)));
   }
 
-  /** 这一块列的是**哪一批**任务：先看这条对话，再看这个目标，最后才是全部。
+  /** 这一块列的是**哪一批**任务：只有一批——这条对话派下去的那些。
    *
-   *  为什么必须先看对话：任务是某一轮对话下发的，而一个目标可能被好几条对话共用
-   *  （新建对话会跟着当时选中的目标走）。只按目标筛的话，切到另一条对话时这一块
-   *  纹丝不动——而它回答的正是「这条对话还派着几件活」。
+   *  范围由「主区开着哪条对话」唯一决定，没有手工开关（m14866）。原先它是个三档
+   *  闸门（这条对话 → 本目标 → 全部目标，m15165），每一档还各配一颗往回按的按钮；
+   *  使用者的判断是「只显示当前会话的内容，取消看全部」——一块会自己改范围的列表，
+   *  读之前永远要先确认"这一屏是哪一批"，而它回答的问题只有一个：**这条对话还派着
+   *  几件活**。
    *
-   *  跟哪条对话的判据与「子智能体」块**同一条**（`subagentScope`）：主区开着的那条
-   *  属于本目标就用它；否则取本目标名下最近更新的一条，并在正文里写出来源。
-   *  两块用两套判据的话，同一屏上会出现「任务来自甲、派活来自乙」而没有任何提示。
-   *
-   *  没有 `sessionId` 的老任务是「不属于任何对话」的那一档：它们在 session 档里
-   *  不出现，但 goal 档会照旧全列出来——把它们藏起来等于把手工下发与命令行下发的
-   *  任务说成不存在。
+   *  没有 `sessionId` 的老任务（手工下发、命令行下发）因此不在这里出现。它们不是
+   *  "被藏起来"：这一块从来不声称自己是全部，「任务」页签才是，而它一直在那儿。
    */
-  function jobScope(all) {
-    const eid = selectedEid();
-    const man = view.sideJobsScope;
-    const open = view.sessionId
-      ? view.sessions.filter((one) => one.id === view.sessionId)[0] : null;
-    const openOwner = String((open && open.engagementId) || '');
-    // 连目标都没选时仍然先跟**这条对话**：它名下那几条比「全部」更接近问的问题。
-    if (!eid) {
-      const mine = open
-        ? all.filter((job) => String(job.sessionId || '') === String(open.id)) : [];
-      if (!open) {
-        return { mode: 'all', rows: all, label: '', session: null, followed: false,
-                 mine: 0, wider: 0, elsewhere: 0 };
-      }
-      return { mode: 'session', rows: mine, label: '这条对话 · ', session: open,
-               followed: false, mine: mine.length, wider: 0,
-               elsewhere: all.length - mine.length };
-    }
-    const owned = all.filter((job) => String(job.engagementId || '') === eid);
-    const elsewhere = all.length - owned.length;
-    let session = (open && openOwner === eid) ? open : null;
-    let followed = false;
-    if (!session) {
-      const latest = view.sessions
-        .filter((one) => String(one.engagementId || '') === eid)
-        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
-      if (latest) { session = latest; followed = true; }
-    }
-    const mine = session
-      ? owned.filter((job) => String(job.sessionId || '') === String(session.id)) : [];
-    const wider = owned.length - mine.length;
-    if (man === 'all') {
-      return { mode: 'all', rows: all, label: '全部目标 · ', session, followed,
-               mine: mine.length, wider, elsewhere };
-    }
-    if (man === 'goal' || !session) {
-      return { mode: 'goal', rows: owned, label: '本目标 · ', session, followed,
-               mine: mine.length, wider, elsewhere };
-    }
-    return { mode: 'session', rows: mine,
-             label: followed ? '目标最近一条对话 · ' : '这条对话 · ',
-             session, followed, mine: mine.length, wider, elsewhere };
-  }
-
-  /** 「任务」块底部的范围开关：每一档都得有出路。
-   *  session → goal → all 是逐级放宽，所以每个档位都要给出**往回**的那一颗；
-   *  否则按过一次「看全部」之后，这一块就再也收不回选中目标的范围了。
-   *  只挂 `chat-side-more` 这一档样式：宽度与上边距都由它给，范围开关不需要另起
-   *  一套长相（它和上面那颗「查看全部」是同一行里的两种出口）。 */
-  function appendJobsScopeToggle(scope) {
-    const push = (text, next) => {
-      const toggle = el('button', 'btn sm chat-side-more', text);
-      toggle.type = 'button';
-      toggle.addEventListener('click', () => {
-        view.sideJobsScope = next;
-        renderSideJobs();
-      });
-      dom.sideJobs.append(toggle);
-    };
-    if (scope.mode === 'session') {
-      if (scope.wider) push('本目标另有 ' + scope.wider + ' 条 · 看本目标', 'goal');
-      else if (scope.elsewhere) push('另有 ' + scope.elsewhere + ' 条属于其他目标 · 看全部', 'all');
-      return;
-    }
-    if (scope.mode === 'goal') {
-      if (scope.mine) push('只看这条对话（' + scope.mine + ' 条）', 'session');
-      if (scope.elsewhere) push('另有 ' + scope.elsewhere + ' 条属于其他目标 · 看全部', 'all');
-      return;
-    }
-    if (scope.elsewhere) {
-      push('只看本目标（' + (scope.rows.length - scope.elsewhere) + ' 条）', 'goal');
-    }
+  function sessionJobs(jobView) {
+    const id = String(view.sessionId || '');
+    if (!id) return [];
+    return asArray(ui().state.jobs)
+      .filter((job) => String(job.sessionId || '') === id)
+      .sort(jobView.compare);
   }
   /** 点侧栏的一条任务 → 打开详情，并把范围跟到它所属的目标。
    *
-   *  「任务」页签是全局列表、不跟范围；但侧栏这一块列的是"选中目标那一批"，
-   *  在"看全部"模式下列的还可能是别的目标的任务。点一条属于乙的任务、而范围停在甲时，
-   *  右边写着乙的任务、左边三块还是甲的东西——同一次点击给出两个范围。
+   *  「任务」页签是全局列表、不跟范围；侧栏这一块只列这条对话的任务，理论上那条任务
+   *  的目标就是这条对话的目标——但使用者可以在开着对话的情况下手工点目标行换范围，
+   *  于是右边写着甲的任务、左边三块已经是乙的东西。点一条任务时把范围跟回去，
+   *  同一次点击就只有一个范围（m00482 那条「两个方向都要走通」的同一个道理）。
    *  目标已被删（不在 `engagementList` 里）时不跟：选一个不存在的 id 只会让三块面板
    *  各报一次 404。
    */
@@ -2159,7 +2029,6 @@
       .some((goal) => String(goal.id) === owner);
     if (owner && known && String(state.eid || '') !== owner) {
       view.manualGoal = true;           // 点任务行也是手工换范围
-      view.sideJobsScope = '';          // 换范围后回到跟随档，别把人锁在 "全部" 上
       ui().selectEngagement(owner);
       renderSessions();
       renderSideJobs();
@@ -2231,120 +2100,24 @@
    *  **消掉**的：两处调同一个函数，详细程度无从不同。删掉的是第二条渲染路径，
    *  不是这个位置——所以第 2 条渲染路径不许以任何形式回来（契约测试钉着）。
    */
-  /** 这一块该显示谁的子智能体。**跟选中目标走**（m03903）。
+  /** 这一块该显示谁的子智能体：**只有这条对话的**（m14866）。
    *
-   *  两个来源：
-   *   * 打开着的对话本身属于选中目标（或还没有选目标）→ 就是这条对话的
-   *     「正在进行 / 最近一次派活」（老行为，见 `currentSubagentRows`）；
-   *   * 选中了别的目标 → 取**这个目标名下最近一条对话**里的最近一次派活。
-   *     它是一次只读摘取：拉 `/chat/sessions/{id}` 一次，从后往前找最后一条带
-   *     `subagents` 的消息。这一块回答的是"我点的这个目标最近一次派出的是谁"，
-   *     而那条对话不需要被打开——打开它会把主区的上下文整个换掉，代价远大于
-   *     看一眼派活。
+   *  它原先是跟选中目标走的（m03903）：主区开着的那条对话不属于选中目标时，
+   *  就去拉"这个目标名下最近一条对话"，再在正文里标一行来源。那条路现在没有了——
+   *  这一块与「任务」块是同一条判据（`sessionJobs`）：翻的就是主区这一屏的东西。
    *
-   *  为什么不干脆只画当前会话：点目标甲、主区开着乙的对话时，下面写着乙的派活，
-   *  而目标行明明写着甲——读的人没有任何依据知道这两块不是同一个范围。
+   *  少掉的不只是那次网络请求与两层缓存（`goalSubagentCache` / `goalSubagentWaiting`），
+   *  还有一整类状态：这一块曾经可能停在"正在取…"、停在"取派活失败"、停在"本目标
+   *  还没有对话"——而使用者要看的是"刚才那几个兄弟走到哪了"。
    */
   function subagentScope() {
-    const eid = selectedEid();
-    const open = view.sessionId
-      ? view.sessions.filter((one) => one.id === view.sessionId)[0] : null;
-    const openOwner = String((open && open.engagementId) || '');
-    if (!eid || openOwner === eid) {
-      return { rows: currentSubagentRows(), from: null, waiting: false };
-    }
-    const owned = view.sessions
-      .filter((one) => String(one.engagementId || '') === eid)
-      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-    const latest = owned[0];
-    if (!latest) return { rows: [], from: null, waiting: false, noGoal: true };
-    const key = [eid, latest.id, String(latest.updatedAt || '')].join('|');
-    const seen = view.goalSubagentCache[key];
-    if (seen) {
-      return { rows: seen.rows, from: latest, waiting: false, error: seen.error,
-               retry: () => { delete view.goalSubagentCache[key]; renderSideSubagents(); } };
-    }
-    if (!view.goalSubagentWaiting[key]) {
-      view.goalSubagentWaiting[key] = true;
-      ui().apiGet('/chat/sessions/' + encodeURIComponent(latest.id))
-        .then((payload) => {
-          const messages = asArray(payload && payload.messages);
-          let rows = [];
-          for (let i = messages.length - 1; i >= 0; i -= 1) {
-            const found = asArray(messages[i].subagents);
-            if (found.length) { rows = found; break; }
-          }
-          view.goalSubagentCache[key] = { rows };
-        })
-        .catch((error) => {
-          // **记下来而不是只 showError()**：一块会自己重画的面板不能只在弹一次
-          // 提示之后就退回"还没派过"——那等于把"这次没拉到"说成"这个目标没有"。
-          view.goalSubagentCache[key] = { rows: [], error };
-        })
-        .finally(() => {
-          delete view.goalSubagentWaiting[key];
-          if (selectedEid() === eid) renderSideSubagents();
-        });
-    }
-    return { rows: [], from: latest, waiting: true };
-  }
-
-  /** 「这一份来自哪条对话」——点它打开那条对话。
-   *  这一行必须存在：目标范围下显示的是**另一条**对话里的派活，不说来源，
-   *  读者会以为它就是主区这场对话的子智能体。 */
-  function subagentSourceRow(session) {
-    const from = el('button', 'link-btn chat-side-subagent-from',
-      '来自对话《' + (session.title || '未命名对话') + '》');
-    from.type = 'button';
-    from.title = '点击打开这条对话';
-    from.addEventListener('click', () => openSession(session.id));
-    return from;
+    return { rows: currentSubagentRows(), waiting: false };
   }
 
   function renderSideSubagents() {
     if (!dom.sideSubagents) return;
     clear(dom.sideSubagents);
-    const scope = subagentScope();
-    const rows = scope.rows;
-    const followed = !!scope.from;          // 这一份来自"目标名下的另一条对话"
-    if (scope.waiting) {
-      setHint(dom.sideSubagentsHint, '正在取…');
-      dom.sideSubagents.append(el('p', 'muted',
-        '正在取这个目标名下最近一条对话的派活记录…'));
-      markDetailPicks();
-      syncDetail('subagent');
-      return;
-    }
-    if (scope.error) {
-      setHint(dom.sideSubagentsHint, '取派活失败');
-      const fail = el('p', 'muted chat-sessions-fail',
-        '取这个目标的派活记录失败：' + (scope.error.message || String(scope.error)));
-      if (scope.retry) {
-        const retry = el('button', 'link-btn chat-sessions-retry', '重试');
-        retry.type = 'button';
-        retry.addEventListener('click', scope.retry);
-        fail.append(' ', retry);
-      }
-      dom.sideSubagents.append(fail);
-      markDetailPicks();
-      syncDetail('subagent');
-      return;
-    }
-    if (!rows.length && (scope.noGoal || followed)) {
-      if (scope.noGoal) {
-        setHint(dom.sideSubagentsHint, '本目标还没有对话');
-        dom.sideSubagents.append(el('p', 'muted',
-          '选中的目标名下还没有对话，也就还没有派过子智能体。在右边提问会新建一条。'));
-      } else {
-        setHint(dom.sideSubagentsHint, '本目标还没派过');
-        dom.sideSubagents.append(el('p', 'muted',
-          '这个目标名下最近一条对话也没有派过子智能体。'));
-        dom.sideSubagents.append(subagentSourceRow(scope.from));
-      }
-      markDetailPicks();
-      syncDetail('subagent');
-      return;
-    }
+    const rows = subagentScope().rows;
     if (!rows.length) {
       // 栏头写的是「本会话还没派过」。正文不再把同一句话说第二遍，只说
       // **什么时候它会动**——栏头答"现在有没有"，正文答"以后怎么看"。
@@ -2367,13 +2140,9 @@
       syncDetail('subagent');
       return;
     }
-    // 来源写在正文最前面：这一块此时显示的是**别的**对话里的派活，不说来源，
-    // 它会和主区那场对话混成一体。
-    if (followed) dom.sideSubagents.append(subagentSourceRow(scope.from));
     const running = rows.filter((row) => row.state === 'running').length;
     setHint(dom.sideSubagentsHint,
-      (followed ? '目标最近一次派活' : '最近一次派活')
-      + (running ? ' · 跑动中 ' + running : ''));
+      '最近一次派活' + (running ? ' · 跑动中 ' + running : ''));
     // 与主区**同一个** `subagentBlock()`（契约测试钉着“只有一条渲染路径”）：
     // 可点这件事因此只能在渲染之后补，不能另写一个带按钮的版本。
     const block = subagentBlock(rows);
@@ -2463,6 +2232,11 @@
       Array.from(dom.sideSubagents.querySelectorAll('[data-subagent-index]')).forEach(
         (node) => paint(node, 'subagent', node.dataset.subagentKey));
     }
+    // 主区里那些"下发了任务"的工具行（m14866）也带着这同一个选中态。它们不归某一
+    // 个列表块，所以按类名整页扫；而它们与右栏那一条**说的是同一件事**，两处不
+    // 同步的症状是"右边高亮在 A、左边高亮在 B"，读的人会以为点了两个东西。
+    Array.from(document.querySelectorAll('.chat-trace-item[data-job-id]')).forEach(
+      (node) => paint(node, 'job', node.dataset.jobId));
   }
 
   /** 拉开 / 收起这一栏。只动类名与 aria，不碰选中态——收起是“先不看”，
@@ -3050,6 +2824,56 @@
 
   /* ------------------------------------------------------------ 消息渲染 ---- */
 
+  /** 这条工具调用**下发了哪一条任务**（没有就是空串）。
+   *
+   *  后端 `_trace_entry`（`pentestd/chat.py`）把 `data` 落成了**截断后的 JSON
+   *  字符串**，所以要 parse 一次；`arguments` 里也可能带 `jobId`，但那是"要它去查
+   *  哪一条"，不是"这一次派出了哪一条"——两个都看，先看前者。
+   *
+   *  只认最外层那一格。往深处猜（`result.job`、`jobs[0]`）看着更聪明，失败形态却
+   *  是"点了跳到另一条任务上"——而那看起来完全正常，只是详情写的是别人。
+   */
+  function traceJobId(item) {
+    const pick = (value) => {
+      let data = value;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (err) { return ''; }
+      }
+      if (!data || typeof data !== 'object') return '';
+      return String(data.jobId || '');
+    };
+    return pick(item && item.data) || pick(item && item.arguments);
+  }
+
+  /** 点会话里的一行工具轨迹 → 右栏那一条任务。
+   *
+   *  三件都要做，少一件这一下就是"点了没反应"：
+   *   · 右栏的「任务」块可能折着（fold.js 存的是上次的口味），先展开；
+   *   · 详情栏可能收着，`pickJob()` 里那条 `openDetail(..., true)` 会拉开它；
+   *   · 那一行可能在滚动区外面，画完要 `scrollIntoView`——否则高亮落在了看不见的地方。
+   *
+   *  快照里找不到这条任务时**先补拉一次**：刚下发的任务、以及在别的页签里清过列表
+   *  之后，`ui().state.jobs` 里都还没有它。补拉仍没有才走"这条任务已经不在了"那条路
+   *  （`renderJobDetail` 会自己这么说）——不静默什么都不做。
+   */
+  async function focusJob(jobId) {
+    const id = String(jobId || '');
+    if (!id) return;
+    if (window.PentestFold) window.PentestFold.set('jobs', false);
+    let job = jobById(id);
+    if (!job && typeof ui().loadJobs === 'function') {
+      await ui().loadJobs(true, true);
+      job = jobById(id);
+    }
+    if (job) {
+      pickJob(job);
+      const node = pickedNodeOf(dom.sideJobs, 'job');
+      if (node && node.scrollIntoView) node.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    openDetail('job', id, true, null);
+  }
+
   function traceBlock(trace) {
     const items = asArray(trace);
     const box = el('details', 'chat-trace');
@@ -3060,6 +2884,28 @@
     const list = el('ol', 'chat-trace-list');
     items.forEach((item) => {
       const row = el('li', 'chat-trace-item' + (item.ok ? '' : ' bad'));
+      // 这一行下发了任务就变成可点的（m14866）：点了右栏那一条就会展开。
+      // 没有下发的那几次（读列表、查报告）保持不可点——把每一行都做成按钮，
+      // 会让人以为"每一行都有个对应物"，而大多数行没有。
+      const jobId = traceJobId(item);
+      if (jobId) {
+        row.classList.add('is-pickable');
+        row.dataset.jobId = jobId;
+        row.setAttribute('role', 'button');
+        row.setAttribute('tabindex', '0');
+        row.title = '在右侧打开这条任务';
+        // `原始返回` 那个 <details> 自己也要能被点开：不拦的话，点开它同时把
+        // 详情栏换成这条任务，两件事一起发生，看起来像"点折叠却跳走了"。
+        row.addEventListener('click', (event) => {
+          if (event.target && event.target.closest('details')) return;
+          focusJob(jobId);
+        });
+        row.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          focusJob(jobId);
+        });
+      }
       const title = el('div', 'chat-trace-title');
       title.append(el('span', 'chat-trace-tool', item.label || item.tool || '工具'));
       title.append(el('span', 'chat-trace-time', `${item.durationMs || 0} ms`));
@@ -3750,14 +3596,10 @@
     // 它不该拖慢正文的显示。
     await loadReviews();
     adoptSessionEngagement();
-    // 右栏那两块的范围现在先看**这条对话**（m15165），所以要在这里重画一次。
+    // 右栏那两块只列**这条对话的**任务与派活，所以要在这里重画一次。
     // 不能只靠 `adoptSessionEngagement` 里那两句：它在"这条对话的目标就是当前目标"
     // 时第一句就 return 了，而那正是最常见的情形——切到同一目标下的另一条对话时，
     // 任务块会停在上一条对话的任务上，看起来完全正常。
-    // 
-    // 手工放宽的那两档也在这里收回：`'all'` 是上一屏的人按下去的，换一条对话还留着它，
-    // 就等于新对话一打开就看不见自己的任务。
-    view.sideJobsScope = '';
     renderSideJobs();
     renderSideSubagents();
     // 最后一件事：如果服务端还有一轮在跑，把它接回来。放在渲染都做完之后——
@@ -5843,5 +5685,10 @@
                          // 侧边栏读数的新鲜度：控制台的心跳（`app.js` 的 `pumpPulse`）
                          // 每 3 秒问一次"变了没有"，变了才由这里去拉。
                          // `currentSessionId` 是心跳要那两块的指纹时必须带的参数。
-                         currentSessionId, syncFromPulse };
+                         currentSessionId, syncFromPulse,
+                         // 会话里点一行工具轨迹 → 右栏那一条任务（m14866）。
+                         // 那条路径要展开折叠的面板、拉开详情栏、把行滚进视野，
+                         // 三件事都在 chat.js 里；对外暴露是为了让契约测试能直接验
+                         // "点了之后右栏确实换成了这一条"，而不必驱动真实 DOM。
+                         focusJob };
 })();
