@@ -380,8 +380,10 @@ class FourBlockLinkageTestCase(unittest.TestCase):
                       "点了目标，任务块还停在旧目标上")
         self.assertIn("renderSideSubagents()", goal,
                       "点了目标，子智能体还是上一场对话的")
-        self.assertIn("view.sideJobsAll = false", goal,
-                      "换目标时任务块的「看全部」没有收回")
+        # 换目标之后任务块要回到**跟随档**（先看这条对话，再看这个目标）：
+        # 停在上一轮手工选的"全部"上，会把别的目标的活混进来而没有任何提示。
+        self.assertIn("view.sideJobsScope = ''", goal,
+                      "换目标时任务块的范围没有回到跟随档")
 
     def test_adopting_a_sessions_goal_repaints_them_too(self):
         """打开／自动采纳一条对话的目标，等于点了一次目标——同样三块跟上。"""
@@ -415,8 +417,8 @@ class FourBlockLinkageTestCase(unittest.TestCase):
         for call in ("selectEngagement(", "renderSessions()",
                      "renderSideJobs()", "renderSideSubagents()"):
             self.assertIn(call, pick, "点组标题之后 %s 没有跟上" % call)
-        self.assertIn("view.sideJobsAll = false", pick,
-                      "换范围时任务块的「看全部」没有收回")
+        self.assertIn("view.sideJobsScope = ''", pick,
+                      "换范围时任务块的范围没有回到跟随档")
 
     def test_switching_the_goal_also_switches_the_open_conversation(self):
         """目标与对话必须**双向**对应：点目标 = 换到它名下的对话（m00482）。
@@ -462,21 +464,63 @@ class FourBlockLinkageTestCase(unittest.TestCase):
                         body.index("alignSessionToGoal(pending)"),
                         "待办必须在 `openSession` 之后补：先补会被它覆盖")
 
-    def test_the_job_block_follows_the_selected_goal(self):
-        """任务块默认只看本目标，且"看全部"必须是这一块自己的开关。"""
+    def test_the_job_block_follows_the_session_then_the_goal(self):
+        """任务块的范围闸门：**先看这条对话，再看这个目标，最后才是全部。**
+
+        只按目标筛是不够的：一个目标可能被好几条对话共用（新建对话会跟着当时
+        选中的目标走），于是切到另一条对话时这一块纹丝不动——而它回答的正是
+        「这条对话还派着几件活」。反过来只看对话也不行：手动下发与命令行下发的
+        任务没有会话归属，藏起来等于说它们不存在。所以三档都在。
+        """
         body = _fn_body(self.chat, "paintSideJobs")
         self.assertTrue(body, "找不到 paintSideJobs")
-        self.assertIn("selectedEid()", body, "任务块没看选中的目标")
-        self.assertIn("String(job.engagementId || '') === eid", body,
+        self.assertIn("jobScope(all)", body, "任务块没走范围闸门")
+        self.assertIn("appendJobsScopeToggle(scope)", body, "范围开关不见了")
+        scope = _fn_body(self.chat, "jobScope")
+        self.assertTrue(scope, "找不到 jobScope")
+        self.assertIn("selectedEid()", scope, "任务块没看选中的目标")
+        self.assertIn("String(job.engagementId || '') === eid", scope,
                       "没有按目标过滤任务")
-        self.assertIn("appendJobsScopeToggle(", body, "跨目标的范围开关不见了")
+        self.assertIn("String(job.sessionId || '') === String(session.id)", scope,
+                      "没有按对话过滤任务：同一目标下两条对话的任务会混在一起")
+        self.assertIn("view.sessions", scope,
+                      "跟随档没从会话列表里挑本目标那条对话")
+        self.assertIn("updatedAt", scope,
+                      "挑最近一条对话时没按 updatedAt 排，取到的是任意一条")
+        # 跟随的是**另一条**对话时必须说得出来源（与子智能体块同一条判据）。
+        self.assertIn("followed", scope,
+                      "读的是别的对话的数据却没有 `followed` 标记")
+        self.assertIn("subagentSourceRow(scope.session)", body,
+                      "跟随别的对话时没有把来源画出来")
         toggle = _fn_body(self.chat, "appendJobsScopeToggle")
-        self.assertIn("view.sideJobsAll = true", toggle, "没有「看全部」的出口")
-        self.assertIn("view.sideJobsAll = false", toggle,
-                      "看全部之后收不回本目标：按一次就再也回不去了")
-        # 反面：不许借 `state.eid` 做"看全部"——它同时决定漏洞/资产/报告的范围
+        self.assertTrue(toggle, "找不到 appendJobsScopeToggle")
+        # 三档每一档都要有**往回**的路：按过一次放宽之后就再也收不回来，
+        # 是这个开关最容易写歪的地方。
+        self.assertIn("view.sideJobsScope = next", toggle,
+                      "范围开关没有真正改范围")
+        for tier in ("'goal'", "'all'", "'session'"):
+            self.assertIn(tier, toggle, "范围开关少了 %s 这一档" % tier)
+        # 反面：不许借 `state.eid` 做范围——它同时决定漏洞/资产/报告的范围
         self.assertNotIn("state.eid =", body)
+        self.assertNotIn("state.eid =", scope)
 
+    def test_a_session_switch_also_takes_back_the_manual_scope(self):
+        """换对话 / 新建对话都要**重画**这两块，并把手工放宽的那两档收回。"""
+        # 重画：`adoptSessionEngagement` 在"这条对话的目标就是当前目标"时第一句
+        # 就 return 了，而那正是最常见的情形——只靠它，切到同一目标下的另一条
+        # 对话时任务块会停在上一条对话的任务上，而且看起来完全正常。
+        for name in ("openSession", "newSession"):
+            body = _fn_body(self.chat, name)
+            self.assertTrue(body, "找不到 %s" % name)
+            self.assertIn("renderSideJobs()", body,
+                          "%s 之后任务块没重画：会停在上一对话的任务上" % name)
+            self.assertIn("renderSideSubagents()", body,
+                          "%s 之后子智能体块没重画" % name)
+        # 收回：`'all'` 是上一屏的人按下去的。换一条对话还留着它，新对话一打开
+        # 就看不见自己的任务——而屏幕上没有任何东西说这是上次按的。
+        body = _fn_body(self.chat, "openSession")
+        self.assertIn("view.sideJobsScope = ''", body,
+                      "换对话时手工档没收回")
     def test_clicking_a_job_aligns_the_scope_first(self):
         """点一条属于别的目标的任务：先把范围对齐过去，再开详情。"""
         row = _fn_body(self.chat, "sideJobRow")

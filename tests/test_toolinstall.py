@@ -248,8 +248,12 @@ class RecipeTableTestCase(unittest.TestCase):
         它会去调，然后拿到一个"未知外部工具"的错），少一个键的症状是"某个
         适配器永远返回没有登记"。两处都不抛异常。
         """
+        # 判据对的是内置表 DEFAULT_ADAPTERS，不是运行期的 ADAPTER_INDEX：后者是
+        # data/tools.json 读出来的活表，可能比代码旧（这一轮新加的两个适配器就不在
+        # 本机那份文件里），也可能比代码新（使用者自己写的适配器，本来就不该有安装
+        # 配方）。两个方向都只有内置表说得清。
         recipes = set(toolinstall.RECIPES)
-        adapters = set(toolkit.ADAPTER_INDEX)
+        adapters = set(item["id"] for item in toolkit.DEFAULT_ADAPTERS)
         self.assertEqual(set(), recipes - adapters,
                          "配方表里有不是适配器的 id")
         self.assertEqual(set(), adapters - recipes,

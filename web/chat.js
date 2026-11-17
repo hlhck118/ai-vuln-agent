@@ -118,11 +118,13 @@
     // `state.eid` 决定的是漏洞 / 资产 / 报告的范围，「任务」块要不要看全部
     // 与它不是同一件事。
     //
-    // 「任务」块默认只列**选中目标**名下那几条；`sideJobsAll` 是这一块自己的
-    // "看全部"开关。为什么还要留这个开关：只看本目标时，别的目标下正在跑的任务
-    // 会从这一栏彻底消失，而这一块原本的职责正是"还有活在跑吗"；反过来，
-    // 看全部之后也必须能收回本目标，否则一次点击就再也回不去了。
-    sideJobsAll: false,
+    // 「任务」块列**哪一批**（m15165）：空串 = 跟着走（这条对话 → 这个目标），
+    // 'goal' = 本目标全部对话，'all' = 全部目标。三档而不是两档布尔：
+    // 只按目标筛时，同一目标下另一条对话下发的任务会混进来，而这一块回答的正是
+    // 「这条对话还派着几件活」；但反过来只看对话也不行——手动下发与命令行下发的
+    // 任务没有会话归属，藏起来等于说它们不存在。所以中间那一档必须有。
+    // **不进 `state`**：`state.eid` 决定漏洞 / 资产 / 报告的范围，两者不是同一件事。
+    sideJobsScope: '',
     // 目标名下子智能体的取用缓存（见 `subagentScope`）。键由目标 id、会话 id、
     // 会话 updatedAt 拼成：后两段保证"那条对话又长出了新派活"时缓存会失效，
     // 而不是一直给出一份旧的。值 `{rows}`；拉取失败记 `{rows: [], error}`。
@@ -1373,7 +1375,7 @@
       renderSessions();                 // 它会连带重画目标行（行上带着"几条对话"）
       // 另外两块也按新范围重画（m03903）。不重画的话，目标区块切到甲，任务块
       // 还列着乙的任务、子智能体还是上一场对话的——这一栏的几块各有各的范围。
-      view.sideJobsAll = false;
+      view.sideJobsScope = '';
       renderSideJobs();
       renderSideSubagents();
       // 切范围与看详情是同一件事的两面：点一个目标，右边就该摊开这个目标。
@@ -1597,7 +1599,7 @@
     // 这一下是**使用者亲手**换的范围。记下来：后台的列表刷新（`loadSessions` →
     // `adoptSessionEngagement`）不许再把人拽回打开着的那条对话的目标。
     view.manualGoal = true;
-    view.sideJobsAll = false;            // 换范围就回到"只看本目标"，免得还停在上一轮的全量
+    view.sideJobsScope = '';            // 换范围就回到跟随档，免得还停在上一轮的手工档
     ui().selectEngagement(next);
     renderSessions();
     renderSideJobs();
@@ -1957,7 +1959,7 @@
   function paintSideJobs(error) {
     // 目标行上的「扫描目标 N 个 · 任务 M 条」读的就是这一批任务，所以任务一变就得
     // 连带重画它。**放在本函数最前面**：下面三个早退（没有 DOM、加载失败、空列表）
-    // 都会提前 return，放在后面等于"任务列表空了之后目标行永远停在旧数字上"——
+    // 都会提前 return，放在后面等于「任务列表空了之后目标行永远停在旧数字上」——
     // 而那个旧数字看起来完全正常。
     renderGoals();
     if (!dom.sideJobs) return;
@@ -1979,70 +1981,139 @@
     }
     const all = asArray(ui().state.jobs).slice().sort(jobView.compare);
     if (!all.length) {
-      // 栏头写的是「暂无」，所以正文不再说一遍"还没有任务"，只说**怎么才会有**。
+      // 栏头写的是「暂无」，所以正文不再说一遍「还没有任务」，只说**怎么才会有**。
       setHint(dom.sideJobsHint, '暂无');
       dom.sideJobs.append(el('p', 'muted',
         '在「任务」页签下发，或直接对助手说一句。'));
       return;
     }
-    /* —— 范围跟着选中的目标走（m03903）。这一块原先是全局"最近几条"，与上面
-       「目标」「对话记录」两块的范围不是同一个——于是点着目标甲、任务块里却列着乙
-       的任务，而它看起来完全正常。现在默认只列甲名下那几条；`sideJobsAll` 是这一块
-       自己的"看全部"开关，**不动 `state.eid`**：那一个同时决定漏洞 / 资产 / 报告的
-       范围，让一颗"看全部任务"顺手改掉它是两件事。 */
-    const eid = selectedEid();
-    const scoped = eid
-      ? all.filter((job) => String(job.engagementId || '') === eid) : all;
-    const outside = eid ? all.length - scoped.length : 0;
-    const list = (view.sideJobsAll || !eid) ? all : scoped;
-    if (!list.length) {
-      setHint(dom.sideJobsHint, '本目标暂无');
-      dom.sideJobs.append(el('p', 'muted',
-        '选中的目标名下还没有任务。任务归到哪个目标，由它实际扫描的地址决定；'
-        + '「任务」页签列的是全部。'));
-      appendJobsScopeToggle(outside, scoped.length);
+    /* —— 范围先跟**对话**、再跟**目标**（m15165）。这一块原先是全局「最近几条」，
+       m03903 把它收到「选中目标」；但一个目标可能被好几条对话共用（新建对话会跟着
+       当时选中的目标走），于是切到另一条对话时这一块纹丝不动——而它回答的正是
+       「这条对话还派着几件活」。范围闸门在 `jobScope` 里，这里只管画。
+       **不动 `state.eid`**：那一个同时决定漏洞 / 资产 / 报告的范围，
+       让一颗「看全部任务」顺手改掉它是两件事。 */
+    const scope = jobScope(all);
+    if (!scope.rows.length) {
+      setHint(dom.sideJobsHint, scope.mode === 'session' ? '这条对话暂无' : '本目标暂无');
+      dom.sideJobs.append(el('p', 'muted', scope.mode === 'session'
+        ? '这条对话还没有下发过任务。' + (scope.wider
+          ? '本目标名下另有 ' + scope.wider + ' 条属于别的对话或手工下发；' : '')
+          + '任务归到哪条对话，由下发它的那一轮决定。'
+        : '选中的目标名下还没有任务。任务归到哪个目标，由它实际扫描的地址决定；'
+          + '「任务」页签列的是全部。'));
+      appendJobsScopeToggle(scope);
       return;
     }
-    // `compare` 已经把执行中排在前面，所以"前几条"里一定先出现还活着的那些——
+    // `compare` 已经把执行中排在前面，所以「前几条」里一定先出现还活着的那些——
     // 那是打开这一栏时唯一想知道的事。
-    const open = list.filter((job) => !jobView.finished.has(jobView.statusOf(job))).length;
-    setHint(dom.sideJobsHint,
-      (eid ? (view.sideJobsAll ? '全部目标 · ' : '本目标 · ') : '')
-      + (open ? '未结束 ' + open : '全部已结束'));
-    const shown = list.slice(0, SIDE_JOB_MAX);
+    const live = scope.rows
+      .filter((job) => !jobView.finished.has(jobView.statusOf(job))).length;
+    setHint(dom.sideJobsHint, scope.label + (live ? '未结束 ' + live : '全部已结束'));
+    // 跟随「目标名下**另一条**对话」时必须说出这一份来自哪条对话：不说的话，
+    // 读者会以为它就是主区这条对话下发的——同一次点击给出两个出处。
+    if (scope.followed && scope.session) dom.sideJobs.append(subagentSourceRow(scope.session));
+    const shown = scope.rows.slice(0, SIDE_JOB_MAX);
     shown.forEach((job) => dom.sideJobs.append(sideJobRow(job)));
-    // **截断了就必须说**。不说的话读起来像"任务总共只有这几条"，
+    // **截断了就必须说**。不说的话读起来像「任务总共只有这几条」，
     // 而截断本身在界面上没有任何提示。
-    if (list.length > shown.length) {
-      const more = el('button', 'btn sm chat-side-more', `查看全部 ${list.length} 条`);
+    if (scope.rows.length > shown.length) {
+      const more = el('button', 'btn sm chat-side-more',
+        '查看全部 ' + scope.rows.length + ' 条');
       more.type = 'button';
       more.addEventListener('click', () => ui().switchTab('jobs'));
       dom.sideJobs.append(more);
     }
-    appendJobsScopeToggle(outside, scoped.length);
+    appendJobsScopeToggle(scope);
   }
 
-  /** 「任务」块底部的范围开关：跨目标还有活的要说出来，也要能一眼看全。
-   *  两个方向都得有出口——只列本目标时给"看全部"，看全部时给"回到本目标"；
-   *  否则按过一次"看全部"之后，这一块就再也收不回选中目标的范围了。 */
-  function appendJobsScopeToggle(outside, scopedCount) {
-    if (!outside) return;
-    // 只挂 chat-side-more 那一档：宽度与上边距都由它给，范围开关不需要另起一
-    // 套长相（它和上面那颗「查看全部」是同一行里的两种出口）。原先这里还多挂
-    // 了一个 chat-side-scope：样式表里没有它的规则、全仓也没有任何选择器读它，
-    // 于是它是一个只存在于 DOM 里的名字——写的人以为在表达什么，看的人查不到。
-    const toggle = el('button', 'btn sm chat-side-more');
-    toggle.type = 'button';
-    if (view.sideJobsAll) {
-      toggle.textContent = `只看本目标（${scopedCount} 条）`;
-      toggle.addEventListener('click', () => { view.sideJobsAll = false; renderSideJobs(); });
-    } else {
-      toggle.textContent = `另有 ${outside} 条属于其他目标 · 看全部`;
-      toggle.addEventListener('click', () => { view.sideJobsAll = true; renderSideJobs(); });
+  /** 这一块列的是**哪一批**任务：先看这条对话，再看这个目标，最后才是全部。
+   *
+   *  为什么必须先看对话：任务是某一轮对话下发的，而一个目标可能被好几条对话共用
+   *  （新建对话会跟着当时选中的目标走）。只按目标筛的话，切到另一条对话时这一块
+   *  纹丝不动——而它回答的正是「这条对话还派着几件活」。
+   *
+   *  跟哪条对话的判据与「子智能体」块**同一条**（`subagentScope`）：主区开着的那条
+   *  属于本目标就用它；否则取本目标名下最近更新的一条，并在正文里写出来源。
+   *  两块用两套判据的话，同一屏上会出现「任务来自甲、派活来自乙」而没有任何提示。
+   *
+   *  没有 `sessionId` 的老任务是「不属于任何对话」的那一档：它们在 session 档里
+   *  不出现，但 goal 档会照旧全列出来——把它们藏起来等于把手工下发与命令行下发的
+   *  任务说成不存在。
+   */
+  function jobScope(all) {
+    const eid = selectedEid();
+    const man = view.sideJobsScope;
+    const open = view.sessionId
+      ? view.sessions.filter((one) => one.id === view.sessionId)[0] : null;
+    const openOwner = String((open && open.engagementId) || '');
+    // 连目标都没选时仍然先跟**这条对话**：它名下那几条比「全部」更接近问的问题。
+    if (!eid) {
+      const mine = open
+        ? all.filter((job) => String(job.sessionId || '') === String(open.id)) : [];
+      if (!open) {
+        return { mode: 'all', rows: all, label: '', session: null, followed: false,
+                 mine: 0, wider: 0, elsewhere: 0 };
+      }
+      return { mode: 'session', rows: mine, label: '这条对话 · ', session: open,
+               followed: false, mine: mine.length, wider: 0,
+               elsewhere: all.length - mine.length };
     }
-    dom.sideJobs.append(toggle);
+    const owned = all.filter((job) => String(job.engagementId || '') === eid);
+    const elsewhere = all.length - owned.length;
+    let session = (open && openOwner === eid) ? open : null;
+    let followed = false;
+    if (!session) {
+      const latest = view.sessions
+        .filter((one) => String(one.engagementId || '') === eid)
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
+      if (latest) { session = latest; followed = true; }
+    }
+    const mine = session
+      ? owned.filter((job) => String(job.sessionId || '') === String(session.id)) : [];
+    const wider = owned.length - mine.length;
+    if (man === 'all') {
+      return { mode: 'all', rows: all, label: '全部目标 · ', session, followed,
+               mine: mine.length, wider, elsewhere };
+    }
+    if (man === 'goal' || !session) {
+      return { mode: 'goal', rows: owned, label: '本目标 · ', session, followed,
+               mine: mine.length, wider, elsewhere };
+    }
+    return { mode: 'session', rows: mine,
+             label: followed ? '目标最近一条对话 · ' : '这条对话 · ',
+             session, followed, mine: mine.length, wider, elsewhere };
   }
 
+  /** 「任务」块底部的范围开关：每一档都得有出路。
+   *  session → goal → all 是逐级放宽，所以每个档位都要给出**往回**的那一颗；
+   *  否则按过一次「看全部」之后，这一块就再也收不回选中目标的范围了。
+   *  只挂 `chat-side-more` 这一档样式：宽度与上边距都由它给，范围开关不需要另起
+   *  一套长相（它和上面那颗「查看全部」是同一行里的两种出口）。 */
+  function appendJobsScopeToggle(scope) {
+    const push = (text, next) => {
+      const toggle = el('button', 'btn sm chat-side-more', text);
+      toggle.type = 'button';
+      toggle.addEventListener('click', () => {
+        view.sideJobsScope = next;
+        renderSideJobs();
+      });
+      dom.sideJobs.append(toggle);
+    };
+    if (scope.mode === 'session') {
+      if (scope.wider) push('本目标另有 ' + scope.wider + ' 条 · 看本目标', 'goal');
+      else if (scope.elsewhere) push('另有 ' + scope.elsewhere + ' 条属于其他目标 · 看全部', 'all');
+      return;
+    }
+    if (scope.mode === 'goal') {
+      if (scope.mine) push('只看这条对话（' + scope.mine + ' 条）', 'session');
+      if (scope.elsewhere) push('另有 ' + scope.elsewhere + ' 条属于其他目标 · 看全部', 'all');
+      return;
+    }
+    if (scope.elsewhere) {
+      push('只看本目标（' + (scope.rows.length - scope.elsewhere) + ' 条）', 'goal');
+    }
+  }
   /** 点侧栏的一条任务 → 打开详情，并把范围跟到它所属的目标。
    *
    *  「任务」页签是全局列表、不跟范围；但侧栏这一块列的是"选中目标那一批"，
@@ -2058,7 +2129,7 @@
       .some((goal) => String(goal.id) === owner);
     if (owner && known && String(state.eid || '') !== owner) {
       view.manualGoal = true;           // 点任务行也是手工换范围
-      view.sideJobsAll = false;
+      view.sideJobsScope = '';          // 换范围后回到跟随档，别把人锁在 "全部" 上
       ui().selectEngagement(owner);
       renderSessions();
       renderSideJobs();
@@ -3649,6 +3720,16 @@
     // 它不该拖慢正文的显示。
     await loadReviews();
     adoptSessionEngagement();
+    // 右栏那两块的范围现在先看**这条对话**（m15165），所以要在这里重画一次。
+    // 不能只靠 `adoptSessionEngagement` 里那两句：它在"这条对话的目标就是当前目标"
+    // 时第一句就 return 了，而那正是最常见的情形——切到同一目标下的另一条对话时，
+    // 任务块会停在上一条对话的任务上，看起来完全正常。
+    // 
+    // 手工放宽的那两档也在这里收回：`'all'` 是上一屏的人按下去的，换一条对话还留着它，
+    // 就等于新对话一打开就看不见自己的任务。
+    view.sideJobsScope = '';
+    renderSideJobs();
+    renderSideSubagents();
     // 最后一件事：如果服务端还有一轮在跑，把它接回来。放在渲染都做完之后——
     // 接上要先把已落库的那几条收下，再拿重放补上“正在写的这一段”。
     await attachTurn(sessionId);
@@ -3699,6 +3780,10 @@
     renderSessions();
     renderEntry();
     renderLog();
+    // 新对话**也是**一次范围变化：任务与子智能体两块跟的是「这条对话」，
+    // 不重画的话它们会停在上一条对话的内容上，而屏上已经没有任何东西提示这一点。
+    renderSideJobs();
+    renderSideSubagents();
     if (dom.input) dom.input.focus();
   }
 
