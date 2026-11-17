@@ -1178,6 +1178,23 @@
   const engagementList = () => asArray(ui().state && ui().state.engagementList);
   const engagementMeta = (eid) => engagementList().find((item) => item.id === eid) || null;
 
+  /** 目标行的绘制顺序：**被选中的那个排最前**，其余保持后端给的顺序。
+   *
+   *  点一个目标之后它要立刻贴到手边——那一行不只是高亮，它还展开着「扫描过哪些
+   *  地址」，而目标一多，被点的那一行常常在滚动区外。这一步只改**画出来的顺序**：
+   *  view.goals 是控制台给的快照（renderGoals(list) 直接覆盖它），动它会与那份
+   *  快照分家，而心跳每 3 秒就会重发一次列表，届时「上一秒排过的序」会被无声抹平。
+   *  排序是**展示层**的事，所以每次重画都按当前 eid 重新算一遍。
+   */
+  function orderedGoals(eid) {
+    const list = view.goals;
+    if (!eid) return list;
+    const at = list.findIndex((item) => item.id === eid);
+    // 0 = 已经在最前；-1 = 这个 id 不在列表里（目标刚被删）。两种都不用动。
+    if (at <= 0) return list;
+    return [list[at]].concat(list.slice(0, at), list.slice(at + 1));
+  }
+
   /** 目标列表（侧边栏第二块，常驻栏底）。数据由控制台持有，这里只负责画。
    *
    *  点一个目标做两件事，而且必须同时发生：① 把它设为「漏洞 / 资产 / 报告」的范围；
@@ -1187,6 +1204,10 @@
   function renderGoals(list) {
     if (list) view.goals = asArray(list);
     if (!dom.goals) return;
+    // #chat-goals 自己既是列表又是滚动区（它就是 .panel-body），清空会把
+    // scrollTop 归零。置顶之后第一行换了人，正在往下看的人会被顶回顶部——
+    // 与 renderSessions 同一条处理：先记下来，画完还回去。
+    const scrolled = dom.goals.scrollTop;
     clear(dom.goals);
     if (!view.goals.length) {
       dom.goals.append(el('p', 'muted', '还没有目标。下发一次任务会自动建一个。'));
@@ -1195,7 +1216,8 @@
       return;
     }
     const eid = selectedEid();
-    view.goals.forEach((item) => dom.goals.append(goalRow(item, eid)));
+    orderedGoals(eid).forEach((item) => dom.goals.append(goalRow(item, eid)));
+    if (scrolled) dom.goals.scrollTop = scrolled;
     // 重画之后“被选中的那一行”是新的 DOM：高亮与详情都要重新落上去。
     markDetailPicks();
     syncDetail('goal');
@@ -1548,7 +1570,15 @@
     });
     const groups = [];
     byGoal.forEach((sessions, owner) => {
-      sessions.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+      // 组内顺序：**打开着的那条排最前**，其余按更新时间倒序。点一条对话之后它就是
+      // 这一列里最该贴在手边的那一行；只按时间排的话，读的是三天前的一条、刚点的那条
+      // 沉在下面，屏幕上「正在读的」与「排在第一的」不是同一个东西。写成第二关键字
+      // 而不是先排时间再搬：这样搬完仍是确定顺序，同毫秒的两条也能稳定排开。
+      sessions.sort((a, b) => {
+        const mine = a.id === view.sessionId ? -1 : (b.id === view.sessionId ? 1 : 0);
+        if (mine) return mine;
+        return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+      });
       groups.push({ eid: owner, sessions, latest: String(sessions[0].updatedAt || '') });
     });
     groups.sort((a, b) => b.latest.localeCompare(a.latest));

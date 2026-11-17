@@ -573,5 +573,68 @@ class FourBlockLinkageTestCase(unittest.TestCase):
             self.assertIn(cls_name, self.rules, "缺少样式规则：%s" % cls_name)
 
 
+class ClickingPutsTheRowOnTopTestCase(unittest.TestCase):
+    """点一个目标 / 点一条对话之后，**被点的那一行要挪到最前面**（m15733）。
+
+    顺序本来只有"后端怎么给就怎么画"：目标是 `created_at DESC`（新建的在最前），
+    对话是"当前目标那一组在最前 + 组内按更新时间倒序"。两种都不看"我刚点了谁"，
+    于是点完一个目标，它的行可能还在滚动区外；点完一条对话，它可能还在组里第三
+    个——屏幕上「正在读的那一条」与「排在第一的那一条」不是同一个东西。
+
+    这两处都必须是**展示层**的排序：`view.goals` / `view.sessions` 是控制台与服务端
+    给的快照，改它们的顺序会与那份快照分家（心跳每 3 秒重发一次列表，抹平得无声），
+    而 `autoOpenFirstSession` 还依赖 `view.sessions[0]` 是最近那条。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.chat = _read("web", "chat.js")
+        cls.goals = _fn_body(cls.chat, "renderGoals")
+        cls.order = _fn_body(cls.chat, "orderedGoals")
+        cls.groups = _fn_body(cls.chat, "sessionGroups")
+
+    def test_the_clicked_goal_is_drawn_first(self):
+        self.assertTrue(self.order, "找不到 orderedGoals")
+        self.assertIn("orderedGoals(eid)", self.goals,
+                      "目标行没有按选中项排前：点完还是后端那个顺序")
+        self.assertIn("item.id === eid", self.order, "排序没看选中的是哪一个")
+        self.assertIn("findIndex", self.order,
+                      "没有定位选中项：无从把它提到最前")
+
+    def test_the_goal_order_is_not_written_back_into_the_snapshot(self):
+        """排的是**画出来的那一行**，不是 `view.goals` 本身。
+
+        写回去会与"控制台手上那一份"分家——`renderGoals(list)` 每次都用新快照整体
+        覆盖，于是排序只在两次心跳之间有效，而"有时候排序生效、有时候不生效"比
+        "一直不排序"更难被当成缺陷描述出来。
+        """
+        self.assertNotIn("view.goals =", self.order, "排序写回了快照")
+        self.assertNotIn(".sort(", self.order,
+                         "原地 sort 会改掉 view.goals 的顺序（它是同一个数组）")
+        self.assertIn("concat", self.order,
+                      "没有产出一个新数组：切片拼出来的那份才是可以安全画的")
+
+    def test_reordering_keeps_the_goal_scroll_position(self):
+        """`#chat-goals` 自己就是滚动区（它是 `.panel-body`），清空会把 `scrollTop` 归零。"""
+        self.assertIn("dom.goals.scrollTop", self.goals,
+                      "重画把滚到一半的人顶回了顶部")
+
+    def test_the_open_conversation_is_first_in_its_group(self):
+        self.assertTrue(self.groups, "找不到 sessionGroups")
+        self.assertIn("view.sessionId", self.groups,
+                      "组内排序没看打开着的是哪一条")
+        self.assertIn("localeCompare", self.groups,
+                      "排在最前之后把更新时间那一条规矩丢了：其余对话不再按时间排")
+
+    def test_an_unknown_open_session_does_not_reorder_anything(self):
+        """`view.sessionId` 可能是空（还没打开过），也可能指向一条已被删的对话。
+
+        两种情况都必须原样返回后端那个顺序，而不是把某一条莫名提上来。
+        """
+        self.assertIn("findIndex", self.order)
+        self.assertIn("at <= 0", self.order,
+                      "没有处理“已经在最前”与“这个 id 根本不在列表里”")
+
+
 if __name__ == "__main__":
     unittest.main()
