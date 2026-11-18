@@ -101,7 +101,10 @@
      （审批记录 / 日志 / 设置 / 使用说明）。中间曾另立过「产出」一段，后来并回
      功能段：报告与任务读的都是当前目标跑出来的东西，拆出去反而让人以为它们
      是另一类入口。横排看不出这个分层，分了段就看出来了。 -->
-<aside class="rail">
+<!-- 左侧导航。`id="rail"` 是给收起按钮的 `aria-controls` 与 rail.js 定位用的：
+       这一条栏整体会被收窄（见 style.css 的 .rail.is-collapsed），但「当前在哪一页」
+       仍然由栏里那颗 .tab.active 表示，不因为看不见就丢掉。 -->
+<aside class="rail" id="rail">
 
   <!-- 左侧栏的字标：与登录门那一处**同构**（同一组 class，尺寸由 `.rail-brand`
        收窄）。两处都不再带图标。 -->
@@ -184,6 +187,19 @@
            所以补在**它们各自的页头**（`#graph-refresh` / `#report-refresh`），
            而不是在全局栏脚留一颗"刷新你当前碰巧在的那一页"的按钮。 -->
   <div class="rail-foot">
+    <!-- 收起/展开这颗按钮放在栏脚、账号区**之前**，而且收起之后它自己**不隐藏**：
+         栏收窄到只剩图标时，这里若也没有可点的东西，就再没有任何回到展开态的入口了
+         （只能开开发者工具改回去）。所以它在两种状态下都在，只是从「图标 + 收起」
+         变成一枚居中的图标。
+
+         它刻意**不用** `.tab` 那一套样式：`.tab` 是「页签」，点它是换页；这一颗改的是
+         这一条栏本身的形状。混进 `.tab` 还会让「每个页签恰有一枚 16px 图标」那条
+         不变式（tests/test_ui_contract.py 的 RailTabIconTestCase）失去意义。
+
+         图标与页签同一套画法：内联 SVG、24 格视框、`stroke: currentColor`、无外链、
+         `aria-hidden` + `focusable="false"`（图形只回答"这是收/展"，名字由下面那行
+         文字与按钮自己的 aria-label 给）。箭头在收起态由 CSS 转 180°。 -->
+    <button class="rail-collapse" id="rail-collapse" type="button" aria-expanded="true" aria-controls="rail" aria-label="收起左侧导航" title="收起左侧导航"><svg class="rail-collapse-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M17.4 6.6 11.9 12l5.5 5.4"/><path d="M5.2 4.5v15"/></svg><span class="rail-collapse-text">收起</span></button>
     <div class="rail-user">
       <span class="rail-user-name" id="topbar-user" title="当前登录用户">未登录</span>
       <button id="password-open" class="btn sm" type="button">修改密码</button>
@@ -1770,6 +1786,11 @@
      所以也没有顺序依赖。放在它后面是因为两者是同一类东西（界面偏好），
      并排放好找。 -->
 <script src="fold.js"></script>
+<!-- rail.js 与 split.js / fold.js 同一档：只读 DOM 与一份设备上的"收没收起"偏好。
+     它排在 fold.js 之后是因为两者是同一类东西（界面偏好），并不是有依赖——状态类名
+     也刻意分开（fold.js 用 is-folded 折块，rail.js 用 is-collapsed 收整条栏），
+     "折叠不许写宽度"那条不变式才守得住。 -->
+<script src="rail.js"></script>
 <script src="theme.js"></script>
 <script src="skills.js"></script>
 <script src="settings.js"></script>

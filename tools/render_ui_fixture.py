@@ -113,8 +113,8 @@ HISTORY_MESSAGE = "现在有哪些执行节点在线？"
 # panels.js（本轮新增）是第三次：仪表盘 / 流量 / 请求重发 / 工作空间 / 审批记录 /
 # 日志六页的**全部**渲染与按钮绑定都在它里面。漏掉它，夹具上那六个页签点得到、
 # 点开是空的——空面板与"这一页就是这样"长得一模一样，截图同样看不出来。
-INLINE_SCRIPTS = ("app.js", "split.js", "fold.js", "theme.js", "settings.js",
-                  "chat.js", "guide.js", "skills.js", "panels.js")
+INLINE_SCRIPTS = ("app.js", "split.js", "fold.js", "rail.js", "theme.js",
+                  "settings.js", "chat.js", "guide.js", "skills.js", "panels.js")
 DROPPED_SCRIPTS = ("auth.js", "boot.js")
 
 # 子智能体派活：**按 `pentestd/subagent.py` 的真实发帧写**，不是照前端契约文档想象的。

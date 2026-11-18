@@ -79,6 +79,14 @@
   /* 请求重发页右栏（流量列表）。默认 420，与 split.js 的 `def` 一致。 */
   --split-repeater: 420px;
 
+  /* ---- 左侧导航栏的两档宽度 ----
+   * 它不是拖拽出来的（那一套在 --split-*），只有收起按钮来回切的两档：
+   * 208 是竖排导航的常规宽度；64 只够一枚 16px 图标加两边的内边距。
+   * 宽度**全部落在这两个变量上**，`rail.js` 只切 `.is-collapsed` 这个类名，
+   * 不碰任何像素——量测与断言的入口也就只有这里一处。 */
+  --rail: 208px;
+  --rail-min: 64px;
+
   /* ---- 交互色：蓝。焦点环与"可交互/选中"共用同源，按透明度分层 ---- */
   --accent: #4f8cff;
   --accent-dim: #2c5aa8;      /* 低饱和底：徽章、标签、选中填充 */
@@ -1016,7 +1024,7 @@ body {
  * 竖排只是多两行。 */
 .rail {
   flex: 0 0 auto;
-  width: 208px;
+  width: var(--rail);
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
@@ -1257,6 +1265,69 @@ body {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .rail-user .btn { width: 100%; }
+
+/* 收起按钮：栏脚里**唯一一颗控制这一栏自己**的按钮，所以排在账号事实之前、
+ * 与「修改密码」「退出登录」同宽。
+ *
+ * 它刻意**不套 .tab 那一套**：那套是导航项（role=tab、左侧指示条、选中底色），
+ * 而它既不是页签、也不在 tablist 里。图标与页签同一画法（24 格 viewBox、1.7 描边、
+ * 圆头圆角、currentColor），收起之后整个转 180°——「〈|」变「|〉」，方向就是展开的方向。
+ *
+ * font 用简写并带上行高：这条规则给按钮加了字体，散着写字号会让它在
+ * .btn 那一族旁边高出一两个像素。 */
+.rail-collapse {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  /* 高度钉成与「修改密码 / 退出登录」那一族一致：收起态只剩 14px 的图标，
+     不钉的话这一颗会比旁边两颗矮 4px，整组按钮看起来参差不齐。 */
+  width: 100%; min-height: 30px; padding: 5px 11px;
+  border: 1px solid var(--border); border-radius: var(--r-2);
+  background: var(--panel-2); color: var(--text-dim);
+  font: var(--fs-small)/1.5 var(--sans);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.rail-collapse:hover { background: var(--panel-3); color: var(--text); }
+.rail-collapse-ico {
+  width: 14px; height: 14px; flex: 0 0 auto;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+  transition: transform var(--t-base) var(--ease);
+}
+.rail.is-collapsed .rail-collapse-ico { transform: rotate(180deg); }
+
+/* ---- 收起态 ----------------------------------------------------------
+ *
+ * 只切 .is-collapsed 这一个类名（rail.js 的 paint() 切它），宽度全集
+ * 中在 --rail / --rail-min 两档里。为什么是「收起」而不是「拖窄」：208px 里
+ * 真正吃宽度的只有字标、段标签和页签名，这三样在 64px 里都放不下；拖到 120px
+ * 上下只会得到「每个名字都被省略号吃掉一半」的中间态，比两档更难用。
+ *
+ * 三件事必须一起做掉，否则会得到「看着收起了、其实没收起」的假象：
+ *   ① 字标 / 段标签 / 账号那一组 display: none —— 它们不是图标，没有第二个形态；
+ *   ② 页签的文字用 font-size: 0 收掉：**它们不是 span**，是按钮里的裸文本节点，
+ *      没有类名可以挂；图标自己有固定的 16px 宽高，不跟着塌掉；
+ *   ③ overflow-x: hidden：64px 下任何一次宽度变形都不许把它顶出一条横向滚动条。
+ *
+ * **只在 ≥901px 生效**：900px 及以下这一栏是顶部横条（见文件末尾那一档），
+ * 横条没有「收窄」可言，收起按钮也在那里 display: none。 */
+@media (min-width: 901px) {
+  .rail.is-collapsed {
+    width: var(--rail-min);
+    padding: var(--sp-4) var(--sp-2);
+    overflow-x: hidden;
+  }
+  .rail.is-collapsed .rail-brand { display: none; }
+  .rail.is-collapsed .rail-group-label { display: none; }
+  .rail.is-collapsed .rail-user { display: none; }
+  .rail.is-collapsed .tab {
+    justify-content: center;
+    padding: 8px 0;
+    font-size: 0;
+  }
+  .rail.is-collapsed .tab-badge { display: none; }
+  .rail.is-collapsed .rail-collapse { padding: 5px 0; }
+  .rail.is-collapsed .rail-collapse-text { display: none; }
+}
 
 /* 状态药丸：胶囊形、无重边框。它是"读数"而不是"按钮"，不该和按钮抢注意力 */
 .stat {
@@ -5453,6 +5524,9 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   }
   .rail-user { flex-direction: row; align-items: center; }
   .rail-user .btn { width: auto; }
+  /* 横条档没有「收窄」这回事：这一栏已经占满一行、内容是横向滚动的，
+     收起只会把十三个页签挤进一条看不见边的滚动带。按钮留着但藏掉。 */
+  .rail-collapse { display: none; }
 }
 
 @media (max-width: 720px) {
