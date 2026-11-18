@@ -677,5 +677,67 @@ class TraceRowJumpsToSidebarTestCase(unittest.TestCase):
                       "选中的轨迹行与别的行看不出区别")
 
 
+class JobAndSubagentAreLinkedTestCase(unittest.TestCase):
+    """任务与子智能体互相跳得过去（m17670）。
+
+    用户原话：「任务和子智能体没有联动」。缺的是同一根线：子智能体的工具记录里
+    没有它开出来的任务号，任务那边也没有派出者。两头都得补上，而且**不许给
+    `jobs` 表加列**——那条线本来就存在（派活工具的返回值里就带着 jobId），只是
+    没有一路传到界面上。
+
+    所以这里分四段钉：后端把 jobId 抄进工具记录、落库那一份也带、前端把这一帧
+    接下来的 jobId 收进工具对象、以及两个方向各自画出了一行可点的东西。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.chat = _read("web", "chat.js")
+        cls.css = re.sub(r"/\*.*?\*/", "", _read("web", "style.css"), flags=re.S)
+        cls.issuer = _fn_body(cls.chat, "jobIssuer")
+        cls.link = _fn_body(cls.chat, "jobLink")
+        cls.node = _fn_body(cls.chat, "subagentNode")
+        cls.sub_detail = _fn_body(cls.chat, "renderSubagentDetail")
+        cls.job_detail = _fn_body(cls.chat, "renderJobDetail")
+        cls.apply = _fn_body(cls.chat, "applySubagent")
+
+    def test_the_live_frame_keeps_the_job_id(self):
+        """`subagent.py` 的 tool 帧带 jobId，`applySubagent` 要把它收进工具对象。"""
+        self.assertTrue(self.apply, "找不到 applySubagent")
+        self.assertIn("data.jobId", self.apply, "工具帧里的 jobId 被丢掉了")
+        self.assertIn("tool.jobId", self.apply, "没有落到工具对象上")
+
+    def test_the_issuer_is_computed_not_stored(self):
+        """反查：扫这一批子智能体的工具记录，谁的 jobId 对上就是谁派的。
+
+        不落库是刻意的——`jobs` 表里没有下发者那一列，为显示加一列要在迁移、
+        `create_job` 载荷、以及每一个派活点各改一遍，而这条线本来就是现成的。
+        """
+        self.assertTrue(self.issuer, "找不到 jobIssuer")
+        self.assertIn("currentSubagentRows()", self.issuer, "没有去看这一批子智能体")
+        self.assertIn("tools", self.issuer, "没有扫工具记录")
+        self.assertIn("jobId", self.issuer, "没有认 jobId")
+        self.assertIn("return null", self.issuer, "找不到时应当安静地什么都不给")
+
+    def test_both_directions_have_a_click_target(self):
+        """两个方向都要有落点：任务详情里点去子智能体，子智能体里点去任务。"""
+        self.assertIn("jobIssuer(", self.job_detail,
+                      "任务详情里没有「派出它的子智能体」")
+        self.assertIn("openDetail('subagent'", self.job_detail,
+                      "那一行点了没有去处")
+        self.assertIn("jobLink(", self.sub_detail,
+                      "子智能体详情里的工具步骤没有给出它开出的任务")
+        # 芯片：有 jobId 才换成按钮。换成 span 就点不动，全都换成按钮则点空。
+        self.assertIn("tool.jobId ? 'button' : 'span'", self.node,
+                      "工具芯片没有按有没有任务区分")
+        self.assertIn("focusJob(tool.jobId)", self.node,
+                      "可点的芯片点了不跳")
+        self.assertIn("stopPropagation", self.node,
+                      "点芯片会顺手把外层那一行也点开")
+
+    def test_the_clickable_chip_has_its_own_rules(self):
+        self.assertIn(".chat-live-chip-job", self.css,
+                      "可点的芯片没有手型光标与焦点环")
+
+
 if __name__ == "__main__":
     unittest.main()

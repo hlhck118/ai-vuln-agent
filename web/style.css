@@ -3584,6 +3584,13 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .chat-live-chip.bad { border-color: var(--border-danger); color: var(--text-danger); }
 .chat-live-chip-name { font-weight: 600; }
 .chat-live-chip-time { font: 10px/1.6 var(--mono); color: var(--muted); }
+/* 派活类工具那一枚芯片是**按钮**（`subagentNode` 在 `tool.jobId` 存在时把 `span`
+   换成 `button`），点一下去右栏看它开出来的那条任务。外观必须与别的芯片一致——
+   它们仍是同一种东西（一次工具调用），可点的只是少数；颜色上的差别会让人以为
+   "派活"是另一类事件。所以只补三处交互态：光标、悬停提亮、键盘焦点环。 */
+.chat-live-chip-job { font: inherit; color: inherit; cursor: pointer; }
+.chat-live-chip-job:hover { border-color: var(--accent); }
+.chat-live-chip-job:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .chat-live-notice { flex: 0 0 100%; margin: 0; font-size: var(--fs-caption); color: var(--text-dim); }
 .chat-live-notice.bad { color: var(--text-danger); }
 

@@ -2203,6 +2203,32 @@
     return String(Number(row.index) || 0) + '/' + String(Number(row.total) || 0);
   }
 
+  /** 这条任务是**谁**派出来的 —— 现算，不落库。
+   *
+   *  `jobs` 表里没有"下发者"这一列（`pentestd/store.py` 的 DDL），`create_job`
+   *  的载荷里也没有。任务与子智能体之间唯一的联系，就在子智能体那条工具记录
+   *  的 `tool.jobId` 上（由 `pentestd/subagent.py` 从派活工具的 `data.jobId`
+   *  抄进工具记录）。所以这一格每次都是反查出来的——好处是刷新之后照样查得到，
+   *  而且不用为了一个显示字段给 `jobs` 表加列。
+   *
+   *  找不到返回 `null`，**不做任何猜测**。两种"没有"都要保持安静：
+   *   · 父轮自己直接调 `start_scan` 开出来的任务，本来就没有子智能体；
+   *   · DSh 原生 subagent 那条路只拿得到文本 body（`pentestd/dsh_runtime.py`
+   *     的 `_child_feed`），没有结构化的 jobId。
+   *  这两种在界面上都是"这一段不出现"，比写一句"未知"要准确。 */
+  function jobIssuer(jobId) {
+    const id = String(jobId || '');
+    if (!id) return null;
+    const rows = currentSubagentRows();
+    for (let i = 0; i < rows.length; i += 1) {
+      const tools = asArray(rows[i].tools);
+      for (let j = 0; j < tools.length; j += 1) {
+        if (String(tools[j].jobId || '') === id) return { row: rows[i], tool: tools[j] };
+      }
+    }
+    return null;
+  }
+
   /** 把选中态落到那些行上（左栏的对话、右栏的任务与子智能体）。**只改类名，
    *  不重画**：重画会把滚动位置打回顶部，而“点第 8 条时跳回第 1 条”比没有高亮
    *  更烦人。 */
@@ -2465,6 +2491,37 @@
     return asArray(jobs).find((job) => String(job.id) === String(id)) || null;
   }
 
+  /** 一条任务的跳转行（状态徽标 + 种类 + 目标）。
+   *
+   *  与目标详情里那一串任务链接（`renderGoalDetail`）同一个写法：整行可点，不做成
+   *  链接色——它不是"去另一页"，而是这一栏换个东西看。点下去交给 `focusJob()`，
+   *  而不是直接 `openDetail()`：`focusJob` 会先把右栏「任务」块展开、在快照里找不到
+   *  时补拉一次，这两件事少了任何一件，这一下就是"点了没反应"。
+   *
+   *  快照里没有这条任务时**不退化成纯文本**：只写任务号，照样可点——刚下发的任务
+   *  在别处还没被拉进 `state.jobs`，而这恰恰是最该点得动的时候。 */
+  function jobLink(jobId, hint) {
+    const id = String(jobId || '');
+    if (!id) return null;
+    const job = jobById(id);
+    const jobView = ui().jobView || {};
+    const btn = el('button', 'chat-detail-link');
+    btn.type = 'button';
+    if (job && typeof jobView.statusOf === 'function') {
+      const status = jobView.statusOf(job);
+      btn.append(el('span', 'status-badge status-' + status,
+        (jobView.label || {})[status] || ''));
+      const kind = typeof jobView.kindLabel === 'function' ? jobView.kindLabel(job) : '';
+      btn.append(el('span', 'chat-detail-link-text',
+        (kind ? kind + ' · ' : '') + (job.target || job.id)));
+    } else {
+      btn.append(el('span', 'chat-detail-link-text',
+        (hint ? hint + ' · ' : '') + id));
+    }
+    btn.addEventListener('click', () => { focusJob(id); });
+    return btn;
+  }
+
   /** 一条任务的完整展开面，画进 `host`（被点中那一行后面的 `.chat-detail-inline`）。
    *  以前没有参数、画进右栏底部那片正文；正文拿掉之后只多了这一个参数，
    *  其余每一行的内容与顺序都没动。 */
@@ -2541,6 +2598,24 @@
         list.append(card);
       });
       host.append(detailSection('智能体协作', list));
+    }
+
+    // 这条任务是**谁**派出来的。与上面「智能体协作」不是一回事：那一段说的是
+    // 任务跑起来之后的执行者，这一段说的是派活的人。父轮自己直接开的任务没有
+    // 这一段（`jobIssuer` 返回 null），界面上就是没有——不写"未知"。
+    const issuer = jobIssuer(job.id);
+    if (issuer) {
+      const btn = el('button', 'chat-detail-link');
+      btn.type = 'button';
+      btn.append(el('span', 'status-badge status-' + (issuer.row.state || 'running'),
+        SUBAGENT_STATE[issuer.row.state] || issuer.row.state || ''));
+      btn.append(el('span', 'chat-detail-link-text',
+        `${issuer.row.role || '子智能体'}（第 ${Number(issuer.row.index) || 0}/`
+        + `${Number(issuer.row.total) || 0} 个）· 用 ${issuer.tool.label || '工具'} 开出`));
+      btn.addEventListener('click', () => {
+        openDetail('subagent', subagentKeyOf(issuer.row), true, issuer.row);
+      });
+      host.append(detailSection('派出它的子智能体', btn));
     }
 
     // 执行过程。**已结束的任务也要看得到**：那是“它到底一步步做了什么”的唯一
@@ -2786,6 +2861,9 @@
         line.append(el('span', 'chat-detail-step-label', tool.label || '工具调用'));
         if (tool.durationMs) line.append(el('span', 'chat-detail-meta', ui().formatDuration(tool.durationMs)));
         item.append(line);
+        // 这一步开了任务，就把那条任务摆出来。与目标详情里那条任务链接同一个写法
+        // （`.chat-detail-link` + 状态徽标）：点它不是"去另一页"，而是这一栏换个东西看。
+        if (tool.jobId) item.append(jobLink(tool.jobId, '下发的任务'));
         if (tool.brief) item.append(el('p', 'chat-detail-text', tool.brief));
         if (tool.ok === false && !tool.brief) item.append(el('p', 'chat-detail-bad', '这一次没有成功。'));
         list.append(item);
@@ -4671,9 +4749,14 @@
       if (data.step !== undefined) row.steps = Number(data.step) || 0;
     } else if (phase === 'tool') {
       row.state = 'running';
-      row.tools.push({ label: data.name || '工具', ok: data.ok !== false,
-                       brief: data.brief || '',
-                       durationMs: Number(data.durationMs) || 0 });
+      const tool = { label: data.name || '工具', ok: data.ok !== false,
+                     brief: data.brief || '',
+                     durationMs: Number(data.durationMs) || 0 };
+      // 派活类工具的那一帧带 jobId（`pentestd/subagent.py` 从 `data.jobId` 抄来）。
+      // 有它，右栏才画得出"这个子智能体下发了哪条任务"和反向的"这条任务是谁派的"。
+      // 没有它就不加这个键——界面按"有没有 jobId"决定那一片点不点得动。
+      if (data.jobId) tool.jobId = String(data.jobId);
+      row.tools.push(tool);
     } else if (phase === 'note') {
       // 报告没按三行格式给出（`subagent.py` 在 `format:"free"` 时发这一帧）。
       // 它不是错误——内容还在，只是没排好版——所以只挂一行说明，**不改状态**：
@@ -5264,10 +5347,26 @@
       row.tools.forEach((tool) => {
         // 复用 live 芯片那一套类名，**不另抄一份颜色**：子智能体调的工具和父轮调的
         // 工具是同一种东西，长得不一样只会让人以为它们是两类事件。
-        const chip = el('span', 'chat-live-chip' + (tool.ok ? '' : ' bad'));
+        //
+        // 派活类工具带着 `jobId`——那一枚芯片换成按钮，点一下去右栏看那条任务。
+        // 别的工具仍是 `span`：它没有可去的地方，做成按钮只会让人白点一次。
+        const chipTag = tool.jobId ? 'button' : 'span';
+        const chip = el(chipTag, 'chat-live-chip' + (tool.ok ? '' : ' bad'));
         chip.append(el('span', 'chat-live-chip-name', tool.label));
         chip.append(el('span', 'chat-live-chip-time', ui().formatDuration(tool.durationMs)));
         if (tool.brief) chip.title = tool.brief;
+        if (tool.jobId) {
+          chip.classList.add('chat-live-chip-job');
+          chip.type = 'button';
+          chip.title = (tool.brief ? tool.brief + '\n' : '') + '点开看这条任务';
+          chip.addEventListener('click', (event) => {
+            // 这一块本身可能挂在 `.chat-subagent-row`（可点、且外层有 details）里，
+            // 不拦住冒泡就会顺手把那一行也点开、把外层折叠块也翻一次。
+            event.stopPropagation();
+            event.preventDefault();
+            focusJob(tool.jobId);
+          });
+        }
         tools.append(chip);
       });
       node.append(tools);

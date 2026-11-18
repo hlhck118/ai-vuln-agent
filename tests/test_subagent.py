@@ -589,6 +589,14 @@ class DelegationTestCase(Base):
         self.assertEqual(child["steps"], 1)
         self.assertEqual(child["toolCalls"][0]["name"], "start_probe")
         self.assertTrue(child["toolCalls"][0]["ok"])
+        # 这一格是"这条任务是谁派的"的唯一凭据（界面靠它把任务与子智能体连起来）。
+        # 落库那份与流里那一帧都要带，缺一个的症状不同：落库缺 → 刷新之后连线消失，
+        # 流里缺 → 刚下发那一刻点不动，而两种都"看起来正常"。
+        self.assertEqual(child["toolCalls"][0]["jobId"], jobs[0]["id"])
+        tool_frames = [event for event in events
+                       if event.get("type") == "subagent" and event.get("phase") == "tool"]
+        self.assertEqual([frame.get("jobId") for frame in tool_frames], [jobs[0]["id"]],
+                         "流里的工具帧没带 jobId，实时那一刻就连不起来")
 
     def test_events_cover_every_phase_in_order(self):
         def responder(record):
@@ -1186,6 +1194,23 @@ class PersistedRowShapeTestCase(Base):
         self.assertEqual(len(failed), 1)
         self.assertIn("502", failed[0]["error"])
         self.assertEqual([row["state"] for row in rows], ["failed", "done"])
+
+    def test_only_the_tools_that_opened_a_job_carry_one(self):
+        """`_tool_row()` 只在真开了任务时给出 `jobId`。
+
+        给没开任务的工具补一个空串，前端就会把每一枚芯片都画成可点——点了没反应，
+        比不可点更糟。所以这里钉两半：有 jobId 的原样带，没有的那个键**不存在**。
+        """
+        opened = chat._tool_row({"name": "start_probe", "ok": True, "brief": "已下发",
+                                "durationMs": 12, "jobId": "job-1a2b3c4d"})
+        self.assertEqual(opened["jobId"], "job-1a2b3c4d")
+        self.assertEqual(set(opened), {"label", "ok", "brief", "durationMs", "jobId"})
+        plain = chat._tool_row({"name": "browse", "ok": True, "brief": "看了"})
+        self.assertNotIn("jobId", plain, "没开任务的工具不该带一个空的 jobId")
+        self.assertEqual(set(plain), {"label", "ok", "brief", "durationMs"})
+        # 空串 / None 与"没有"是同一件事：派活工具失败时也会回一个没有 jobId 的 data
+        self.assertNotIn("jobId", chat._tool_row({"name": "start_probe", "ok": False,
+                                                  "jobId": ""}))
 
     def test_persisted_row_keys_match_the_frontend_row(self):
         """跨文件契约：后端落库的键 == 前端 `newSubagentRow()` 的键。
