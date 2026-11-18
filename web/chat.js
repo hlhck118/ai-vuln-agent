@@ -1527,9 +1527,10 @@
    *  分组解决的是另一个问题：全列出来之后必须看得出"哪几条属于同一个目标"，
    *  否则从上往下读是一盘散沙，点一条就换一次范围会让人以为列表自己在动。
    *
-   *  顺序固定为：**当前目标那一组在最前**（切换范围的入口就在它的标题上，
-   *  点开会话时它也该立刻贴到手边），然后是其余目标（按名下最近一条对话的时间
-   *  倒序），最后是「未归属」。没有选中目标时省掉"当前"这一档，其余不变。
+   *  顺序固定为：**全部目标按组内最近一条对话的时间倒序**，最后是「未归属」。
+   *  当前目标那一组只有「当前」标签与蓝底，**不挪位置**（m17536）：点一条对话会
+   *  把 `state.eid` 换成它归属的目标，一挪就成了"点谁、谁那一组跳到最顶"——
+   *  这一列是导航，每点一次就重排一次，正在读的人当场丢位置。
    */
   function sessionGroups() {
     const byGoal = new Map();
@@ -1549,10 +1550,11 @@
         .localeCompare(String(a.updatedAt || '')));
       groups.push({ eid: owner, sessions, latest: String(sessions[0].updatedAt || '') });
     });
+    // 组序只看**组内最近一条对话的时间**（m17536）。这里原先把 selectedEid() 那一组
+    // 提到最前，理由是"切换范围的入口就挂在当前目标的标题上"；可点一条对话会把
+    // state.eid 换成它归属的目标，于是每点一次，那一组就往上窜——表现正是
+    // "会话记录还是会置顶"。谁是当前那一组由 sessionGroupRow() 的「当前」标签说。
     groups.sort((a, b) => b.latest.localeCompare(a.latest));
-    const eid = selectedEid();
-    const current = eid ? groups.findIndex((group) => group.eid === eid) : -1;
-    if (current > 0) groups.unshift(groups.splice(current, 1)[0]);
     return { groups, orphans };
   }
 

@@ -593,6 +593,20 @@ class OrderIsWhatTheBackendGaveTestCase(unittest.TestCase):
         self.assertIn("localeCompare", self.groups,
                       "组内不再按更新时间倒序了")
 
+    def test_the_group_order_ignores_the_selected_goal(self):
+        """组序只看组内最近一条对话的时间（m17536）。
+
+        点一条对话会把 `state.eid` 换成它归属的目标；组序若再看选中目标，表现就是
+        "点谁、谁那一组跳到最顶"，也就是用户报的「会话记录还是会置顶」。谁是当前
+        那一组由 `sessionGroupRow()` 的「当前」标签说，靠位置说会一碰就变。
+        """
+        self.assertNotIn("selectedEid()", self.groups,
+                         "组序又在看当前选中的目标：点一条对话它就往上窜")
+        self.assertNotIn("unshift", self.groups,
+                         "又把某一组提到最前了")
+        self.assertIn("groups.sort(", self.groups,
+                      "组序不再按时间排了")
+
     def test_a_repaint_keeps_the_goal_scroll_position(self):
         """`#chat-goals` 自己就是滚动区（它是 `.panel-body`），清空会把 `scrollTop` 归零。"""
         self.assertIn("dom.goals.scrollTop", self.goals,
