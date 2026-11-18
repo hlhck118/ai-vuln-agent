@@ -19,8 +19,9 @@
 |---|---|---|
 | 0 | 正文结尾（滚到底） | 末条离卡片上沿 = `--chat-fade`（12px±1.5） |
 | 0b | 同上 | `padding-bottom` 是 12px 量级（JS 写的），不是 CSS 兜底的 188px 量级 |
-| 1 | 末尾挂一张「已批准」审查卡 | 卡底离卡片上沿 = 12（`:last-child` 去掉那 12px 下边距） |
-| 2 | 审查卡后面还有一条消息 | 卡**不再**贴死：卡底与下一条之间留 ~12；末条仍是 12 |
+| 1 | 浮层挂一张「已批准」审查卡 | 浮层底沿离卡片上沿 = `--sp-3`；末条停在**浮层**上沿之上 12px |
+| 2 | 浮层里再多挂一张 | 浮层仍贴卡片上沿；末条仍停在浮层上沿之上 12px（浮层长高要重新量） |
+| 2b | 浮层收起（`hidden`） | 回到卡片上沿：末条仍是 12px |
 | 3 | 排队长出来（卡片被推到记录区下面） | 末尾只留渐隐那一段，不留一整屏空白 |
 | 4 | 排队收起 | 回到 12 |
 | 5 | 模型告警行可见 | 同 3 |
@@ -83,11 +84,10 @@ PROBE = r"""
     node.appendChild(body);
     return node;
   }
-  /* 审查卡按 `web/chat.js` 真正生成的那串 class 造：量的是**产品里的那一张**，
-     不是一个看起来像的盒子（`.chat-log .chat-review` 的边距就是量它的）。 */
+  /* 审查卡按 `web/chat.js` 真正生成的那串 class 造：量的是**产品里的那一张**。
+     m18801 起它画在 `.chat-field` 上沿的浮层 `#chat-review-float` 里（那个 `.chat-review`
+     外壳就是浮层本身，`chat.js` 只往它里面塞卡片），不再进记录区。 */
   function review() {
-    var wrap = document.createElement('div');
-    wrap.className = 'chat-review';
     var card = document.createElement('div');
     card.className = 'chat-review-card chat-review-done';
     card.innerHTML = '<div class="chat-review-head">'
@@ -99,39 +99,52 @@ PROBE = r"""
       + '<li>命令里出现改写型动作（set-content）：它会改动本机的文件或系统状态。</li>'
       + '</ul>'
       + '<p class="chat-review-note">auto: 自动批准并执行（审查档位 auto）</p>';
-    wrap.appendChild(card);
-    return wrap;
+    return card;
+  }
+  /* 浮层的开合由产品自己管（`renderReviews()` 写 `hidden`）；探针做同样的事，
+     不另造一层壳——要量的正是「外壳在不在」这件事本身。 */
+  function floatLayer() { return byId('chat-review-float'); }
+  function floatShow(nodes) {
+    var layer = floatLayer();
+    if (!layer) return null;
+    while (layer.firstChild) { layer.removeChild(layer.firstChild); }
+    for (var i = 0; i < nodes.length; i++) { layer.appendChild(nodes[i]); }
+    layer.hidden = nodes.length === 0;
+    return layer;
   }
   function snap() {
     var log = byId('chat-log'), card = sel('.chat-field');
     var last = log.lastElementChild;
-    var reviewBox = sel('.chat-review');
     var lr = box(log), cr = box(card);
+    /* 可贴的那条边：审查浮层可见时是**它的上沿**（`syncChatTail()` 也是这么量的），
+       收起时才是卡片上沿。浮层收起后 `getClientRects()` 为空，所以判的是"看得见"，
+       不是"节点在不在"。 */
+    var layer = floatLayer();
+    var layerBox = layer && layer.getClientRects().length ? box(layer) : null;
+    var anchor = layerBox ? layerBox.top : cr.top;
     return {
       logBottom: Math.round(lr.bottom),
       cardTop: Math.round(cr.top),
       cardHeight: Math.round(cr.height),
-      /* 叠进深度：正的 = 记录区的盒子伸到卡片上沿下面多少；负的 = 卡片整张
+      anchorTop: Math.round(anchor),
+      floatVisible: !!layerBox,
+      /* 叠进深度：正的 = 记录区的盒子伸到**可贴的那条边**下面多少；负的 = 那条边整条
          落到记录区下面去了（排队行 / 告警行可见时就是这种形态）。 */
-      overlap: Math.round(lr.bottom - cr.top),
+      overlap: Math.round(lr.bottom - anchor),
       /* JS 写进去的那个值。CSS 兜底是 188px 量级，写进来的是 12px 量级——
          两者差一个数量级，所以"跑没跑"一眼可辨。 */
       padBottom: cs(log, 'padding-bottom'),
-      gapLast: last ? Math.round(cr.top - box(last).bottom) : null,
+      gapLast: last ? Math.round(anchor - box(last).bottom) : null,
       gapLogBottom: last ? Math.round(lr.bottom - box(last).bottom) : null,
       lastClass: last ? String(last.className) : '',
-      /* 末条离审查卡底多远：队/告警行可见时卡片的 `gapLast` 里含着它们，
-         "两格之间该留多少"看的是这一个。 */
-      gapCard: reviewBox ? Math.round(cr.top - box(reviewBox).bottom) : null,
-      /* 卡底离记录区**盒底**：卡片叠进记录区时它等于 gapCard，卡片被推到下面时
-         它是"卡底到记录区尽头"的那一段（末条该离盒底多远就看它）。 */
-      gapCardLog: reviewBox ? Math.round(lr.bottom - box(reviewBox).bottom) : null,
-      /* 审查卡底下一条（如果有）与卡底之间的间距：不是末格时那 12px 要留着。 */
-      gapCardNext: (function () {
-        if (!reviewBox) return null;
-        var next = reviewBox.nextElementSibling;
-        return next ? Math.round(box(next).top - box(reviewBox).bottom) : null;
-      })(),
+      /* 浮层底沿离卡片上沿：`.chat-review` 的 `margin-bottom` 该把它钉在 --sp-3 上。
+         这一条是**浮层自己的几何**，和记录区内边距无关——两者混起来就分不出
+         "浮层贴歪了"与"末尾留白算错了"。 */
+      gapFloat: layerBox ? Math.round(cr.top - layerBox.bottom) : null,
+      /* 浮层高多少：它在长高（又挂了一张卡）时记录区那份内边距必须跟着重算，
+         所以"长没长"要能量得到。 */
+      floatHeight: layerBox ? Math.round(layerBox.height) : null,
+      floatCards: layer ? layer.querySelectorAll('.chat-review-card').length : 0,
       vw: window.innerWidth, vh: window.innerHeight
     };
   }
@@ -157,8 +170,10 @@ PROBE = r"""
     function tailOk(s, fade) {
       return s.overlap > 0 ? near(s.gapLast, fade) : near(s.gapLogBottom, fade);
     }
-    function reviewOk(s, fade) {
-      return near(s.overlap > 0 ? s.gapCard : s.gapCardLog, fade);
+    /* 审查浮层自己的几何：底沿贴卡片上沿 --sp-3。它与"末尾留白"是两件事——
+       混成一条就分不出"浮层贴歪了"和"记录区内边距算错了"。 */
+    function floatGapOk(s, gap) {
+      return s.floatVisible && near(s.gapFloat, gap);
     }
     try {
       for (var i = 0; i < 200; i++) {
@@ -168,6 +183,8 @@ PROBE = r"""
       var log = byId('chat-log'), card = sel('.chat-field'), main = sel('.chat-main');
       if (!log || !card || !main) { out.verdict = 'NO_CHAT'; return out; }
       var fade = parseFloat(cs(main, '--chat-fade')) || 12;
+      var gap = parseFloat(cs(main, '--sp-3')) || 12;
+      if (!floatLayer()) { out.verdict = 'NO_FLOAT'; return out; }
 
       // 造内容：30 轮对话，滚到底。
       log.innerHTML = '';
@@ -186,33 +203,43 @@ PROBE = r"""
       add('0b 内边距是 JS 量出来的（不是 CSS 兜底那条）', parseFloat(base.padBottom) < 100,
         { padBottom: base.padBottom });
 
-      // 1：末尾挂一张「已批准」审查卡。
-      log.appendChild(review());
+      // 1：浮层里挂一张「已批准」审查卡。记录区一个字节都没动。
+      floatShow([review()]);
       await settle();
       log.scrollTop = log.scrollHeight;
       await settle();
       var one = snap();
-      add('1 审查卡结尾：卡底离可贴的那条边 = 12（`:last-child` 去掉下边距）',
-        reviewOk(one, fade),
-        { gapCard: one.gapCard, gapCardLog: one.gapCardLog, want: fade,
-          lastClass: one.lastClass });
+      add('1 浮层挂上审查卡：浮层底沿离卡片上沿 = --sp-3，末尾仍是 --chat-fade',
+        floatGapOk(one, gap) && tailOk(one, fade),
+        { gapFloat: one.gapFloat, wantGap: gap, gap: one.gapLast,
+          gapLogBottom: one.gapLogBottom, wantFade: fade,
+          floatHeight: one.floatHeight, floatCards: one.floatCards });
 
-      // 2：卡后面再有一条消息 —— 那 12px 是两格间距，这里要保留。
-      log.appendChild(msg('chat-msg chat-msg-ai', '（这条在审查卡之后）'));
+      // 2：浮层里再挂一张 —— 它长高了，末尾那份内边距必须**重新量过**。
+      var layer = floatLayer();
+      var grown = one.floatHeight;
+      var second = review();
+      second.querySelector('.chat-review-title').textContent = '待确认';
+      floatShow([layer.firstChild, second]);
       await settle();
       log.scrollTop = log.scrollHeight;
       await settle();
       var two = snap();
-      /* 实测 24：审查卡自己的下边距 12 + `.chat-log` 的 flex `gap` 12
-         （flex 容器里相邻外边距不合并，所以是 24 而不是 12）。这里只要它**没被
-         抹成 0**——`:last-child` 那条规则不该影响到非末格。 */
-      add('2 审查卡不是末格：与下一条之间仍留间距（不该被抹成 0）',
-        two.gapCardNext !== null && two.gapCardNext >= 16 && two.gapCardNext <= 28,
-        { gapCardNext: two.gapCardNext });
-      add('2b 末条仍然停在可贴的那条边之上 --chat-fade', tailOk(two, fade),
-        { gap: two.gapLast, gapLogBottom: two.gapLogBottom });
-      log.lastElementChild.remove();
+      add('2 浮层长高：仍贴卡片上沿，末尾跟着让到新的上沿（内边距重算过）',
+        floatGapOk(two, gap) && tailOk(two, fade) && two.floatHeight > grown,
+        { gapFloat: two.gapFloat, gap: two.gapLast, gapLogBottom: two.gapLogBottom,
+          floatHeight: two.floatHeight, grown: grown, floatCards: two.floatCards });
+
+      // 2b：浮层收起（`hidden`）—— 可贴的那条边回到卡片上沿。
+      floatShow([]);
       await settle();
+      log.scrollTop = log.scrollHeight;
+      await settle();
+      var two2 = snap();
+      add('2b 浮层收起：可贴的那条边回到卡片上沿，末条仍是 --chat-fade',
+        !two2.floatVisible && tailOk(two2, fade),
+        { floatVisible: two2.floatVisible, gap: two2.gapLast,
+          gapLogBottom: two2.gapLogBottom, want: fade });
 
       // 3 / 4：排队行。它自己的 `margin-bottom: var(--chat-overlap)` 会把卡片推下去。
       var queue = byId('chat-queue');
@@ -234,8 +261,8 @@ PROBE = r"""
         log.scrollTop = log.scrollHeight;
         await settle();
         var qr = snap();
-        add('4 排队收起：回到 12', near(qr.gapCard, fade),
-          { gapCard: qr.gapCard, overlap: qr.overlap });
+        add('4 排队收起：回到 12', tailOk(qr, fade),
+          { gap: qr.gapLast, gapLogBottom: qr.gapLogBottom, overlap: qr.overlap });
       } else {
         out.notes.push('夹具里没有 #chat-queue，跳过用例 3/4');
       }
@@ -256,8 +283,8 @@ PROBE = r"""
         log.scrollTop = log.scrollHeight;
         await settle();
         var wr = snap();
-        add('6 告警收起：回到 12', near(wr.gapCard, fade),
-          { gapCard: wr.gapCard, overlap: wr.overlap });
+        add('6 告警收起：回到 12', tailOk(wr, fade),
+          { gap: wr.gapLast, gapLogBottom: wr.gapLogBottom, overlap: wr.overlap });
       } else {
         out.notes.push('夹具里没有 #chat-model，跳过用例 5/6');
       }
@@ -276,11 +303,14 @@ PROBE = r"""
         await settle();
         var g = snap();
         var panel = box(choice);
-        /* 面板在卡片上方那一格：它的底沿不该越过卡片上沿，末尾也不该因此跑远。 */
+        /* 面板在卡片上方那一格：它的底沿不该越过卡片上沿，末尾也不该因此跑远。
+           （浮层此刻是收起的；它与面板同时在时的叠放由 z-index 决定，不在本探针
+           的判定里——那属于"两层都看得见时谁在上面"，量法完全不同。） */
         add('7 选项面板出现：末尾仍是 --chat-fade，且面板不压住卡片上沿',
-          reviewOk(g, fade) && (!panel || panel.bottom <= g.cardTop + 1),
-          { gapCard: g.gapCard, gapCardLog: g.gapCardLog, cardHeight: g.cardHeight,
-            panelBottom: panel ? panel.bottom : null, cardTop: g.cardTop });
+          tailOk(g, fade) && (!panel || panel.bottom <= g.cardTop + 1),
+          { gap: g.gapLast, gapLogBottom: g.gapLogBottom, cardHeight: g.cardHeight,
+            panelBottom: panel ? panel.bottom : null, cardTop: g.cardTop,
+            floatVisible: g.floatVisible });
       } else {
         out.notes.push('夹具里没有 #chat-choice，跳过用例 7');
       }

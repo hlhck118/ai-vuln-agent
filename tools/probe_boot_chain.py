@@ -295,16 +295,20 @@ document.addEventListener('DOMContentLoaded', function () {
       __mark__('stopped');
     }, 500);
   }
-  // 第五场：**那张卡片的去留**（t80 起卡片画在对话记录里，不再有输入框上方那一格）。
+  // 第五场：**那张卡片的去留**（m18801 起卡片画在输入卡片上沿的浮层里）。
   //
-  // 契约没变，只是"格"换成了"记录区里的那几张卡"：待批的卡片在，裁决过的卡片停留
-  // 一下就走（`chat.js` 的 `scheduleReviewLeave`），走掉之后记录区里**不留任何
-  // `.chat-review`**（连"这里曾经有东西"的那一圈边距也不留）。
+  // 契约还是那三条，只是"格"换成了 `#chat-review-float`：待批的卡片在，裁决过的
+  // 卡片停留一下就走（`chat.js` 的 `scheduleReviewLeave`），走掉之后那个浮层
+  // 必须**收起**（`hidden`，`renderReviews()` 写的）——节点留着但 `hidden` 也
+  // 不行的那一版会把它自己的一道底边留在输入框上方。
   //
   // 三个快照分别对应三件不同的事实：
-  //   before —— 待批时卡片在、写着「需要你确认这条命令」；
+  //   before —— 待批时浮层可见、写着「需要你确认这条命令」；
   //   after  —— 点完之后**卡片还在**（"我点过了"必须看得见，立刻收掉等于点了没反应）；
-  //   later  —— 停留时间过了之后记录区必须**空掉**（否则它混在对话里却无可做之事）。
+  //   later  —— 停留时间过了之后浮层必须**收起且一张卡不剩**。
+  //
+  // 读的是**浮层自己**，不是记录区：m18801 之后记录区里根本不会有审查卡，要是还读
+  // `#chat-log`，这一场在"卡片压根没画出来"时也会是绿的（空记录区 = "一张不剩"）。
   //
   // ⚠️ **`later` 那个时刻必须落在一个窗口里**：晚于 `DONE_LINGER_MS + DONE_FADE_MS`
   // （卡片该走了），早于 `refreshTranscriptSoon` 最后一次重开（9000ms；那一次会
@@ -313,22 +317,22 @@ document.addEventListener('DOMContentLoaded', function () {
   // 这两个数由 `chat.js` 的常量与 `test_ui_contract` 的一条契约共同保证。
   if (__MODE__ === 'review-band') {
     setTimeout(function () {
-      // 卡片在**记录区**里：`#chat-log` 是滚动容器，卡片与消息同一列。
-      var log = document.getElementById('chat-log');
+      // 卡片在**浮层**里：`.chat-field` 上沿那一层，脱出记录区的文档流。
+      var layer = document.getElementById('chat-review-float');
       function snap(name) {
-        var cards = log ? log.querySelectorAll('.chat-review-card').length : 0;
-        var text = log ? log.textContent : '';
+        var shown = !!layer && layer.getClientRects().length > 0;
+        var cards = shown ? layer.querySelectorAll('.chat-review-card').length : 0;
+        var text = shown ? layer.textContent : '';
         // `band` / `no-band` 这套词留在快照里不变（报告与单元测试都读它），
-        // 含义换成"记录区里还有审查卡" / "一张也不剩"，连 `.chat-review` 的
-        // 外壳算在内——外壳留下就是留下了一圈空边距。
-        var shell = log ? log.querySelector('.chat-review') : null;
+        // 含义是"浮层还看得见" / "浮层收起了"，**看得见但没有卡**也算留下了一圈
+        // 空边——那正是 `hidden` 没写对时的形态。
         document.documentElement.setAttribute('data-probe-' + name, [
-          cards > 0 || shell ? 'band' : 'no-band', cards,
+          shown ? 'band' : 'no-band', cards,
           text.indexOf('已批准') >= 0 ? 'done'
             : (text.indexOf('需要你确认这条命令') >= 0 ? 'pending' : 'none')
         ].join('|'));
       }
-      var btn = log ? log.querySelector('.chat-review-actions button') : null;
+      var btn = layer ? layer.querySelector('.chat-review-actions button') : null;
       document.documentElement.setAttribute('data-probe-review-has-button',
         btn ? 'yes' : 'no');
       snap('review-before');
@@ -686,14 +690,14 @@ def probe_review_band(budget_ms: int = 14000, keep: str = "") -> dict:
     if report["review_has_button"] != "yes":
         problems.append("待批的那张卡片上没有动作按钮——这一场就点不动了")
     if (before_band, before_kind) != ("band", "pending"):
-        problems.append("点之前记录区里应当有那张待批的卡：快照 %r" % report["review_before"])
+        problems.append("点之前浮层里应当有那张待批的卡：快照 %r" % report["review_before"])
     if (after_band, after_kind) != ("band", "done") or after_cards != "1":
         problems.append("点完之后那张卡片必须**还在**（写着已批准）：「我点过了」要看"
                         "得见，立刻收掉等于点了没反应。快照 %r" % report["review_after"])
     if (later_band, later_cards) != ("no-band", "0") or later_kind != "none":
-        problems.append("停留时间过了之后记录区里必须**一张审查卡都不剩**（连外壳算上）："
-                        "它混在对话里，而一张写着已批准的卡片不要人做任何事。快照 %r"
-                        % report["review_later"])
+        problems.append("停留时间过了之后浮层必须**收起且一张卡都不剩**：它挂在输入卡片"
+                        "上沿，一张写着已批准的卡片不要人做任何事，留着就是让输入框"
+                        "一直往上退一截。快照 %r" % report["review_later"])
     return {"ok": not problems, "problems": problems,
             "before": report["review_before"], "after": report["review_after"],
             "later": report["review_later"],

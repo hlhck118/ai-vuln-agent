@@ -466,6 +466,15 @@ function syncChatTail() {
     const dockTop = dock.getBoundingClientRect().top;
     if (dockTop < anchor) anchor = dockTop;
   }
+  /* m18801：审查卡也是卡片上沿的一张浮层（`.chat-review`，同一套 `bottom: 100%`
+     几何），它比坞更高，所以末尾要让到**它的**上沿去。不纳入这里的话，待批时
+     记录区最后几行会压在卡片底下 —— 而"卡片占着位置却看不见最后一句"正是这次
+     要修的症状之一，只是换了个方向。 */
+  const reviews = $('#chat-review-float');
+  if (reviews && reviews.getClientRects().length) {
+    const reviewTop = reviews.getBoundingClientRect().top;
+    if (reviewTop < anchor) anchor = reviewTop;
+  }
   const overlap = log.getBoundingClientRect().bottom - anchor;
   /* 负值不是异常，而且**是那几行可见时的常态**：排队列表与告警行各自用
      `margin/padding-bottom: var(--chat-overlap)` 给自己留出与卡片同高的空档
@@ -490,7 +499,7 @@ function wireNoticeAnchor() {
     if (noticeObserver) noticeObserver.disconnect();
     noticeObserver = new ResizeObserver(scheduleNoticeAnchor);
     // 卡片、记录区、坞：任何一个变高变矮都可能把卡片推上推下。
-    ['.chat-compose', '#chat-log', '#chat-quick'].forEach((selector) => {
+    ['.chat-compose', '#chat-log', '#chat-quick', '#chat-review-float'].forEach((selector) => {
       const node = $(selector);
       if (node) noticeObserver.observe(node);
     });
@@ -4442,6 +4451,9 @@ window.PentestUI = {
   // 侧边栏两个读数块的新鲜度。对话页签进入时由 `loadTabData` 起，切走时停。
   // 对外暴露是为了让契约测试能直接验"探询会比对指纹、只在变了时才重拉"。
   pumpPulse,
+  // 记录区末尾的让位（m18801）。审查卡改成浮层之后，它出现/消失都不一定改变
+  // 被观察元素的尺寸（浮动元素脱出流内），所以画完卡片要主动叫一次。
+  syncChatTail,
 };
 /** 由 boot.js 接管启动：未登录时先只渲染登录门，不渲染控制台内容。 */
 if (!window.PentestConsoleGate) document.addEventListener('DOMContentLoaded', init);

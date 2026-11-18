@@ -7,8 +7,9 @@
      `menuitemradio` 菜单；切到「完全作业」前必须多问一句（勾选后才可启用）。
      原生 `<select id="chat-policy">` 留着当唯一真相源，菜单只改它的值再派发
      `change` —— 落库那段路径因此一条都没变。
-  2. **审批卡进对话记录**：`renderReviews()` 把卡片 append 到 `#chat-log`，
-     输入框上方那一格（`#chat-review-slot`）已经删掉。
+  2. **审批卡浮在输入卡片上沿**：`renderReviews()` 画进常驻浮层
+     `#chat-review-float`（m18801 从对话记录里搬出来——那一版会占记录区高度）。
+     更早的那一格 `#chat-review-slot` 仍然不许回来。
   3. **失败自动继续**：一轮非人为失败后等几秒、自动发一句带幂等提示的「继续」，
      连续失败按 3→20→40→80→120 秒退避，最多 5 次；永久性错误直接跳过并说明；
      人一动（发送 / 停止 / 关开关 / 切会话）就撤销。
@@ -175,14 +176,27 @@ class ComposerControlsTestCase(unittest.TestCase):
         self.assertIn("composedPath", bind)
         self.assertIn("chat-policy", bind)
 
-    # ---- ② 审批卡进对话记录 -------------------------------------------
+    # ---- ② 审批卡浮在卡片上沿 -----------------------------------------
 
-    def test_the_review_card_is_drawn_into_the_transcript(self):
+    def test_the_review_card_is_drawn_into_the_float_layer(self):
+        """m18801：卡片又搬了一次 —— 从记录区流内搬到**输入卡片上沿的浮层**。
+
+        三个理由都关于"它会占位置、又会自己走"：待批时它把记录区最后几行顶到
+        卡片上沿底下；裁决过的卡片还要停留 6 秒再淡出（`DONE_LINGER_MS`），
+        那 6 秒里记录区连着抖两次。浮层两件事都不做。
+        """
         self.assertNotIn('id="chat-review-slot"', self.html,
                          "输入框上方那一格已经撤了；再加回去会出现两份卡片")
+        self.assertIn('id="chat-review-float"', self.html,
+                      "浮层是**常驻节点**：现造的那一块只有自己认识，"
+                      "上一次画的那一块就没有任何人收得掉")
         body = slice_function(self.js, "renderReviews")
-        self.assertIn("dom.log", body)
-        self.assertIn("log.append(box)", body)
+        self.assertIn("dom.reviewFloat", body)
+        self.assertNotIn("dom.log", body,
+                         "画进记录区就会重新占流内高度——这正是这一版要修的症状")
+        self.assertIn("box.hidden = false", body)
+        self.assertIn("box.hidden = true", body,
+                      "没有待批的卡片时那一层要收起来，否则它一直占着卡片上沿")
         self.assertNotIn("dom.reviewSlot", self.js)
 
     # ---- ③ 失败自动继续 -----------------------------------------------

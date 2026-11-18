@@ -430,6 +430,15 @@
                  Tab 键都该先在坞里走、再到输入框；视觉位置由 CSS 的
                  `bottom: 100%` 决定，与 DOM 顺序无关。 -->
             <div class="chat-quick" id="chat-quick" data-dock="none"></div>
+            <!-- m18801：审查卡改成**浮在卡片上沿**的一层（与坞同一个几何：
+                 `position: absolute` + `bottom: 100%`），不再往记录区里塞一行。
+                 为什么：它只在"有人要你批"时存在，却把记录区最后几行顶出去；
+                 而且裁决过的卡片还要停留 6 秒再走（`DONE_LINGER_MS`），那段时间
+                 记录区会连着抖两次。浮层不占记录区的流内高度，`syncChatTail()`
+                 量的是它的上沿（见 app.js）。
+                 节点**常驻**、靠 `hidden` 收放：卡片每次重画都要自己收自己的
+                 ——它不属于任何一条落库消息，`renderLog` 的 `clear(log)` 不认识它。 -->
+            <div class="chat-review" id="chat-review-float" hidden></div>
             <textarea id="chat-input" class="input chat-input" rows="4"
                       placeholder="描述你要做的事，例如：扫描 10.0.0.0/24 的暴露面"
                       aria-label="对话输入" spellcheck="false"></textarea>

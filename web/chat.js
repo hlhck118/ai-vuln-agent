@@ -284,6 +284,10 @@
       // 就像"这里本来有东西、只是没画出来"。
       detailHandle: document.querySelector('.split-handle[data-split="detail"]'),
       quick: byId('chat-quick'), input: byId('chat-input'),
+      // 审查卡那一层（m18801：浮在卡片上沿，见 index.html 那条注释）。它是**常驻
+      // 节点**，空的时候靠 `hidden` 收起来 —— 不能每次现造：现造的那一块只有
+      // 自己认识，"上一次画的那一块"就没有任何人收得掉。
+      reviewFloat: byId('chat-review-float'),
       // 动作按钮只有一颗（发送 / 停止是它的两种身份，见 setSending）：
       // 这里**不许**再出现 `byId('chat-stop')` —— 那个 id 已经不存在，取到的是
       // null，而后面每一处 `dom.stop.X` 都会抛，抛在渲染路径上就是"这一块不见了"。
@@ -5166,19 +5170,30 @@
   const DONE_FADE_MS = 600;
 
   function renderReviews() {
-    const log = dom.log;
-    if (!log) return;
-    // 先撤掉上一次画的那一块。它**不属于任何一条落库消息**（`renderLog` 的
-    // `clear(log)` 不会替我们带走它），所以每次自己收自己的。
-    const previous = log.querySelector('.chat-review');
-    if (previous) previous.remove();
+    /* 画在**输入卡片上沿那一层浮层**里（m18801）。
+     *
+     * 原先它 append 到 `#chat-log` 末尾。两个问题都是"占流内高度"带来的：
+     *   1) 待批时记录区最后几行被顶到卡片上沿底下，读那几行要先把卡片批掉；
+     *   2) 裁决过的卡片还要停留 6 秒再淡出（`DONE_LINGER_MS`），这 6 秒里记录区
+     *      连着抖两次（长出来、缩回去），正读到末尾的人被推来推去。
+     * 浮层不占那一列的高度：它盖在卡片上沿之上，记录区末尾的让位由
+     * `syncChatTail()` 按它的上沿量（与坞同一套做法）。
+     */
+    const box = dom.reviewFloat;
+    if (!box) return;
+    // 这一层是**我们自己的一格**：它不属于任何一条落库消息（`renderLog` 的
+    // `clear(log)` 不会替我们带走它），所以每次画之前自己清一次。
+    clear(box);
     const rows = (view.reviewOrder || [])
       .map((id) => view.reviews[id]).filter(Boolean);
     const waiting = rows.filter((row) => row.pending && row.awaiting);
     const orphan = rows.filter((row) => row.pending && !row.awaiting);
     const done = rows.filter((row) => !row.pending);
-    if (!waiting.length && !orphan.length && !done.length) return;
-    const box = el('div', 'chat-review');
+    if (!waiting.length && !orphan.length && !done.length) {
+      box.hidden = true;
+      markReviewsSettled();
+      return;
+    }
     // 一句"为什么这里会停住"：卡片上写着要批什么，但"不批会怎样"必须说清——
     // 这一轮是真的停在这里等，不是正在后台跑。
     if (waiting.length) {
@@ -5192,11 +5207,22 @@
         `另有 ${orphan.length} 张审查单已经没有等待者了（发起它的那一轮已经结束，`
         + '或控制面重启过），批准它们不会有命令执行；到时间会自动收掉。'));
     }
-    // **追加会让记录变长**：原本就在底部的人跟到底；正在往上翻的人不抢他的位置
-    // （否则"看历史"时每来一张卡片就被拽回底部）。
-    const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 160;
-    log.append(box);
-    if (nearBottom) log.scrollTop = log.scrollHeight;
+    box.hidden = false;
+    /* 这一层自己可以滚（卡片可能很高，见 style.css 的 `max-height`）：新内容在
+       末尾，把它滚到底，等价于原先"在底部的人才跟到底"。 */
+    box.scrollTop = box.scrollHeight;
+    markReviewsSettled();
+  }
+
+  /** 审查层刚变过（有内容 / 空了 / 高度变了）：让记录区的末尾重新量一次。
+   *
+   *  末尾让位是 `app.js` 的 `syncChatTail()` 按**实测矩形**写的，而浮层的出现与
+   *  消失都不触发那条 ResizeObserver 一定跟得上（浮动元素脱出流内，父盒尺寸可能
+   *  一点没变）。所以画完主动叫一次。它内部有去重（值没变就不写样式），多叫无害。
+   */
+  function markReviewsSettled() {
+    const api = ui();
+    if (api && typeof api.syncChatTail === 'function') api.syncChatTail();
   }
 
   function reviewCard(review) {

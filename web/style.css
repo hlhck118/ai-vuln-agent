@@ -3506,7 +3506,30 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
  * 左侧那条竖线用 `--sev-medium`（黄）而不是 danger：这条命令还没有出错，
  * 它只是"需要你判断"。用红色会让人以为已经出了事，而那是两件不同的事。
  */
-.chat-review { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-3) 0; }
+/* m18801：这一层从"记录区里的一行"改成**浮在输入卡片上沿的浮层**。
+ *
+ * 几何与坞（`.chat-quick`）同一套：`.chat-field` 已经是 `position: relative`，
+ * `bottom: 100%` 就精确等于卡片上沿，不需要 JS 量高度。差别只有两层：
+ *   - `z-index: 3` > 坞的 2：两张浮层同时出现时**审批卡压在上面** —— 要人回答的
+ *     东西不能被一个"挑工具"的面板盖住。末尾的让位由 `syncChatTail()` 取两者
+ *     上沿中更高的那个，所以记录区不会被任何一张盖住。
+ *   - 自己封顶并内部滚：浮层不能再把记录区顶出去，"很长"的代价只能是它自己滚。
+ *
+ * 为什么不再占流内高度：待批时它会把记录区最后几行顶到卡片上沿底下（读那几行
+ * 得先把卡片批掉）；裁决过的卡片还要停留 6 秒再淡出（`DONE_LINGER_MS`），
+ * 那 6 秒里记录区连着抖两次。 */
+.chat-review {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  position: absolute; z-index: 3;
+  left: 0; right: 0; bottom: 100%;
+  margin: 0 0 var(--sp-3);
+  max-height: min(52vh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* 作者样式的 `display: flex` 会盖掉 UA 给 `[hidden]` 的那条 `display: none`，
+   所以这一层收起来必须自己写一遍（与坞、选项面板同一处坑）。 */
+.chat-review[hidden] { display: none; }
 .chat-review-card {
   border: 1px solid var(--border-strong);
   border-left: 3px solid var(--sev-medium);
@@ -3557,6 +3580,10 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    这套几何，记录区本来就在还那笔债。
    记录区里它与消息同一列，左右留白沿用 `.chat-review` 自己的 margin；卡片宽度
    跟着那一列，不再有 `max-height` 与内部滚动（记录区自己滚）。 */
+/* m18801：下面这两条**现在没有作用对象** —— 卡片已经搬出记录区成了浮层（见上面
+ * 那一段）。留着是因为 `test_ui_contract` 的 ChatLogTailContractTestCase 仍按它们
+ * 在守"记录区末尾该让到哪"，而 `probe_chat_tail` 的夹具也仍按这个 margin 造卡；
+ * 要删得连着那两条契约与探针一起改。 */
 .chat-log .chat-review { margin: var(--sp-2) 0 var(--sp-3); }
 /* 末尾那张审查卡**不留**下边距（t92）。
  *

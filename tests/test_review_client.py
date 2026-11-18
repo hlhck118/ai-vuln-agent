@@ -50,35 +50,48 @@ class ReviewCardTestCase(unittest.TestCase):
 
     # ---- 卡片在哪
 
-    def test_the_card_is_drawn_into_the_transcript(self):
-        """t80：卡片从"输入框上方那一格"搬进**对话记录**，位置就是那一轮该在的地方。
+    def test_the_card_is_drawn_into_the_float_layer(self):
+        """m18801：卡片画在**输入卡片上沿那一层浮层**里（`#chat-review-float`）。
 
-        DSH 桌面端把审批卡画在对话里；这里跟同一个形态。撤掉那一格之后，
-        `#chat-review-slot` 不该再出现在任何地方——留着它就是第二份真相。
+        走过的三段：气泡里（刷新即丢）→ 输入框上方那一格 → 记录区流内（t80）→
+        现在这一层。前两段的毛病是"位置不属于服务端事实"；记录区那一段的毛病是
+        "占流内高度"：待批时把最后几行顶出去，裁决过的卡片停留 6 秒里记录区抖两次。
         """
         html = self._read("web", "index.html")
         self.assertNotIn('id="chat-review-slot"', html,
-                         "卡片搬进记录里了，输入框上方不再有一格")
+                         "那一格（第二份真相）不该被请回来")
+        self.assertIn('id="chat-review-float"', html,
+                      "浮层是常驻节点，靠 hidden 收放")
         js = strip_comments(self._read("web", "chat.js"))
         render = slice_function(js, "renderReviews")
-        self.assertIn("dom.log", render, "卡片画在 #chat-log 末尾")
-        self.assertIn("chat-review", render)
+        self.assertIn("dom.reviewFloat", render, "卡片画进浮层")
+        self.assertNotIn("dom.log", render,
+                         "还在往记录区里 append，等于没搬")
 
-    def test_the_card_is_not_a_fixed_band_with_its_own_scroll(self):
-        """记录区自己滚，卡片只是其中一条 —— 不再有自己的封顶高度与内部滚动。
+    def test_the_float_hugs_the_card_and_caps_itself(self):
+        """浮层的几何与坞同一套（`bottom: 100%`），并且**自己封顶**。
 
-        封顶 + 内部滚是"输入框上方那一格"的几何；搬进记录之后还留着它，
-        一张长卡片会在记录里再开一个小滚动条。
+        位置：`.chat-field` 已经是 `position: relative`，`bottom: 100%` 精确等于
+        卡片上沿，不需要 JS 量高度（坞就是这么做的）。
+        封顶：浮层不再把记录区顶出去，"很长"的代价只能是它自己滚 —— 所以
+        `max-height` 与 `overflow-y: auto` 必须有；这两条也解释了为什么这条用例
+        与"记录区里不封顶"那条相反：那是另一段历史，两条规则现在并存。
         """
         css = self._read("web", "style.css")
         self.assertNotIn(".chat-review-slot {", css,
                          "那一格的样式应当整段撤掉")
-        self.assertIn(".chat-log .chat-review", css,
-                      "记录里与消息同一列，左右留白沿用卡片自己的 margin")
-        block = css.split(".chat-log .chat-review {")[1].split("}")[0]
-        self.assertNotIn("max-height", block,
-                         "记录区自己滚，卡片不封顶")
-        self.assertNotIn("overflow", block)
+        block = css.split(".chat-review {")[1].split("}")[0]
+        self.assertIn("position: absolute", block)
+        self.assertIn("bottom: 100%", block)
+        self.assertIn("left: 0", block)
+        self.assertIn("right: 0", block)
+        self.assertIn("max-height", block, "浮层不封顶就会顶掉记录区")
+        self.assertIn("overflow-y: auto", block, "封了顶就必须能滚，否则下面是点不到的")
+        # 作者样式的 display 盖掉 UA 的 [hidden]，所以收起来要自己写一遍。
+        self.assertIn(".chat-review[hidden] { display: none; }", css)
+        # 记录里那条历史规则留着（ChatLogTailContractTestCase 与探针仍按它算让位），
+        # 但它现在没有作用对象。
+        self.assertIn(".chat-log .chat-review", css)
 
     # ---- 卡片从哪来
 
