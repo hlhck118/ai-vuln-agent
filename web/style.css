@@ -73,6 +73,11 @@
   /* 漏洞页左栏（目标选择）。默认 300：目标是 IP / 域名 / 一长串 URL，比报告目录
      那栏宽一点才不至于每行都截成一个前缀；与 split.js 的 `def` 必须一致。 */
   --split-findings: 300px;
+  /* 流量页左栏（记录表）。默认 560：五列里地址那一串最长，栏再窄就只剩两列；
+     与 split.js 的 `def` 必须一致，双击复位读的是后者。 */
+  --split-traffic: 560px;
+  /* 请求重发页右栏（流量列表）。默认 420，与 split.js 的 `def` 一致。 */
+  --split-repeater: 420px;
 
   /* ---- 交互色：蓝。焦点环与"可交互/选中"共用同源，按透明度分层 ---- */
   --accent: #4f8cff;
@@ -1973,6 +1978,14 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    漏洞卡片列表（吃满剩余高度、自己滚）。不分这一层的话，卡片列表会跟着内容
    把整页顶出视口——而这一页本来就是靠滚动读的。 */
 .findings-main { gap: var(--sp-2); }
+/* 流量页左栏（记录表）：与资产树 / 报告目录 / 目标栏同形，宽度交给分栏条。
+   默认 560 与 split.js 的 `def` 一致。 */
+.traffic-list-pane { flex: 0 0 var(--split-traffic, 560px); }
+/* 请求重发页右栏（流量列表）：默认 420，同样与 split.js 的 `def` 一致。 */
+.traffic-side { flex: 0 0 var(--split-repeater, 420px); }
+/* 详情那半栏自己纵向排布：卡头固定、正文吃满剩余高度并自己滚。不分这一层的话，
+   一份几 KB 的响应正文会把整页顶出视口——而这一页就是靠读那份正文的。 */
+.traffic-detail-pane, .repeater-main { min-height: 0; }
 /* 资产目录折起来：这一栏收缩成一个只有标题的窄条，让出来的宽度全给右边那份详情
    ——那才是这一页最常读的东西。
 
@@ -1989,13 +2002,16 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    标签"，而不是"一个窄条 + 一张卡"。并且那两个标签的高度还差 2.6px（原因见
    `button.fold-head` 那一段），于是同一条横条上有两个高度不同的标签。
    间隙取 `--sp-3`，与画布上卡片之间的距离同一个数。 */
-.tree-pane.is-folded, .report-side.is-folded, .findings-side.is-folded { flex: 0 0 auto; margin-right: var(--sp-3); }
+.tree-pane.is-folded, .report-side.is-folded, .findings-side.is-folded,
+.traffic-list-pane.is-folded, .traffic-side.is-folded { flex: 0 0 auto; margin-right: var(--sp-3); }
 /* 折起时提示语必须藏掉：它是这一栏为什么会变窄的全部原因（"等一下，我那一栏呢？"），
    留着它这一栏就被撑回原宽度，等于没折。 */
 .tree-pane.is-folded .panel-head-hint, .report-side.is-folded .panel-head-hint,
-.findings-side.is-folded .panel-head-hint { display: none; }
+.findings-side.is-folded .panel-head-hint, .traffic-list-pane.is-folded .panel-head-hint,
+.traffic-side.is-folded .panel-head-hint { display: none; }
 .tree-pane.is-folded .fold-head, .report-side.is-folded .fold-head,
-.findings-side.is-folded .fold-head { white-space: nowrap; }
+.findings-side.is-folded .fold-head, .traffic-list-pane.is-folded .fold-head,
+.traffic-side.is-folded .fold-head { white-space: nowrap; }
 /* 树折起来了，这条线没有可拖的对象。留着它就是一个"按住没反应"的手柄——
    split.js 对不可见手柄本来就有一个早退，不需要它知道折叠这回事。 */
 .split-handle.is-folded { display: none; }
@@ -5359,6 +5375,14 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   #panel-findings .split { flex-direction: column; }
   .split-handle[data-split="findings"] { display: none; }
   .findings-side { flex: 0 0 auto; max-height: 30vh; border-bottom: 1px solid var(--border); }
+  /* 流量页与请求重发页的取舍同上一段：这一档里竖直分栏线不成立，两栏改成上下排，
+     手柄一并隐藏（手柄不可见 = 这条分栏此刻不存在）。流量页把记录表留在上面、
+     原文落在下面读；重发页反过来——表单是主体，流量列表压到下面当"挑一条"的抽屉。 */
+  #panel-traffic .split, #panel-repeater .split { flex-direction: column; }
+  .split-handle[data-split="traffic"] { display: none; }
+  .split-handle[data-split="repeater"] { display: none; }
+  .traffic-list-pane { flex: 0 0 auto; max-height: 40vh; border-bottom: 1px solid var(--border); }
+  .traffic-side { flex: 0 0 auto; max-height: 30vh; border-bottom: 1px solid var(--border); }
   /* 卡片化之后这里不再有 `border-bottom`：整栏已经不是一张贴边的面，每块各是
      一张卡，它们自己就是分隔。留着那条线会变成"卡片下面多一条悬空的横线"。 */
   .chat-side { flex: 0 0 auto; max-height: 32vh; }
@@ -5593,4 +5617,17 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .logs-pre { max-height: 60vh; }
 .logs-limit { width: 92px; }
 .mono { font-family: var(--mono); }
+/* ---- 流量 · 一行是一条记录 ---- */
+/* 整行可点：这一页的动作是「点一条、右边看它的原文」。指针形状是这一行唯一的
+   「可点」暗示（行尾那颗「查看」只标出其中一格），所以在悬停时补一层极淡的底色
+   ——不加的话，鼠标移过去页面毫无反应。
+   选中态用与侧边栏同一套语言（左侧竖条），不用纯底色：底色在这里会和悬停撞在
+   一起，而「我正在读这一条」不该看起来像「鼠标停在这一条上」。 */
+.traffic-row { cursor: pointer; }
+.traffic-row:hover { background: var(--panel-2); }
+.traffic-row.is-picked { box-shadow: inset 3px 0 0 var(--accent); background: var(--panel-2); }
+/* 左栏比整页窄得多，`td.clip` 的 46ch 在这里会把地址挤成两行半——收到 28ch，
+   超出的部分交给 title（悬停可看全文）。侧栏那两列更窄，再收一档。 */
+.traffic-list-pane td.clip { max-width: 28ch; }
+.traffic-side td.clip { max-width: 20ch; }
 

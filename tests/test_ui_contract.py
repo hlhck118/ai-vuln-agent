@@ -5017,6 +5017,10 @@ class SplitPaneResizeTestCase(unittest.TestCase):
         # 在「全部」时按目标分组。
         "findings": ('class="split-pane findings-side"', 'class="split-pane findings-main"'),
         "report": ('class="split-pane report-side"', 'class="panel-head" id="report-doc-head"'),
+        # 流量页：记录表与那一条的原文并排。左栏可折起来，右栏只剩一行标题。
+        "traffic": ('class="split-pane traffic-list-pane"', 'class="split-pane traffic-detail-pane"'),
+        # 请求重发页：左边那张表单，右边挂着流量列表（点一行填进去）。
+        "repeater": ('class="split-pane repeater-main"', 'class="split-pane traffic-side"'),
     }
 
     def test_handles_sit_between_the_two_panes(self):

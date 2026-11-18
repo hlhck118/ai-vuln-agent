@@ -137,6 +137,50 @@
   // 列表上这会儿有几条。只为一件事存在：「清空全部」的确认框要能念出个数——
   // 一个说不出删掉几条的确认框，读的人只会当成又一个要按掉的框。
   let trafficCount = 0;
+  // 左侧列表里当前选中的那一条。选中态**只在前端存**：它回答的是「右边那份原文
+  // 是哪一行」，属于看的人此刻站在哪里，不是数据。
+  let trafficPicked = '';
+  // 当前这条对话的 id。流量按会话收口（`list_traffic` 的 `session_id`）——这一页
+  // 回答的是「**这条对话**里发出去过什么」，不是「我这个人发过什么」。不收口的话，
+  // 上一个会话、或者另一个标签页里跑过的扫描，会一起堆在这里，而列表上没有任何
+  // 东西说明它们不是这一条对话的。
+  //
+  // 拿不到会话（还没点开对话、或对话页还没起来）时退回空串 = 不收口，与后端
+  // `session_id=""` 同一条口径：宁可多列几条，也别在这一页显示成「空」。
+  function trafficSession() {
+    const chat = window.PentestChat;
+    if (!chat || typeof chat.currentSessionId !== 'function') return '';
+    return String(chat.currentSessionId() || '');
+  }
+
+  function trafficQuery(limit) {
+    const session = trafficSession();
+    return '/traffic?limit=' + encodeURIComponent(limit)
+      + (session ? '&sessionId=' + encodeURIComponent(session) : '');
+  }
+
+  // 把选中态画到两处列表上（流量页左栏、重发页侧栏）。两边是同一批记录，点了
+  // 哪一条就在两边都标出来——否则从重发页切回流量页，会以为一条都没选中。
+  function markTrafficPicked(id) {
+    trafficPicked = String(id || '');
+    ['#traffic-body', '#repeater-traffic'].forEach((selector) => {
+      const host = $(selector);
+      if (!host) return;
+      const rows = host.querySelectorAll('tr[data-traffic-id]');
+      for (let i = 0; i < rows.length; i += 1) {
+        rows[i].classList.toggle('is-picked', rows[i].dataset.trafficId === trafficPicked);
+      }
+    });
+  }
+
+  // `intoForm` 为真时（从重发页右栏点的）顺手把这一条填进左边那张表——那一栏
+  // 存在的全部理由就是这个。流量页左栏点的只换右边那份原文。
+  async function pickTraffic(id, intoForm) {
+    markTrafficPicked(id);
+    const record = await showTraffic(id);
+    if (intoForm && record) prefillRepeater(record);
+  }
+
   // 列表**不带正文**（`withBody` 默认关）：一屏几十条，每条几十 KB 正文会把
   // 响应撑到几 MB，而列表上根本显示不了正文。点开某一条才取全文。
   // `quiet` 是**心跳那条路**专用的：`/pulse` 的流量指纹一变就调它一次（见
@@ -157,7 +201,7 @@
     }
     let data = null;
     try {
-      data = await apiGet('/traffic?limit=100');
+      data = await apiGet(trafficQuery(100));
     } catch (error) {
       if (quiet) return;
       clear(host);
@@ -177,13 +221,35 @@
         ? `${formatCount(records.length)} 条${capped}（${data.scope === 'all' ? '全部用户' : '仅自己'}）`
         : '还没有记录';
     }
+    paintTrafficList(host, records, false);
+    // 重发页右栏是**同一批记录**的另一张单子：那边只挑不改，所以列更少。
+    // 两处画同一份数据、同一套点击语义，否则切页签时选中态会「丢」。
+    paintTrafficList($('#repeater-traffic'), records, true);
+    // 右栏还没人点过时给一句话。空着的话看起来像「这条记录没有内容」，
+    // 而真正的意思是「还没选」。
+    const detail = $('#traffic-detail');
+    if (detail && !trafficPicked && records.length) {
+      clear(detail);
+      detail.append(emptyBlock('点左边任意一行，这里显示它的请求头、请求正文与响应。'));
+    }
+  }
+
+  // 画一张流量列表。两处用它：流量页左栏（六列）与请求重发页右栏（两列）。
+  // 侧栏只有四百来像素宽，状态与耗时在那里是噪声——那一栏的用途是「挑一条填进
+  // 左边」，读的人只需要认出「哪一条」。
+  function paintTrafficList(host, records, compact) {
+    if (!host) return;
+    clear(host);
     if (!records.length) {
-      host.append(emptyBlock('还没有发出去过的手工请求。到「请求重发」发一条，这里就会出现。'));
+      host.append(emptyBlock(compact
+        ? '这条对话还没有手工请求。'
+        : '这条对话还没有发出去过手工请求。到「请求重发」发一条，这里就会出现。'));
       return;
     }
+    const columns = compact ? ['时间', '地址'] : ['时间', '方法', '地址', '状态', '耗时', ''];
     const table = el('table', 'data-table');
     const head = el('tr');
-    ['时间', '方法', '地址', '状态', '耗时', ''].forEach((label) => head.append(el('th', null, label)));
+    columns.forEach((label) => head.append(el('th', null, label)));
     // 与「审批记录」那张表同一写法：先建 thead，再把行放进去。旧写法是
     // `el('thead').appendChild(head).parentNode`——结果一样，但它靠 `appendChild`
     // 的返回值再回头取父节点，读起来像在拼两样东西。
@@ -192,24 +258,38 @@
     table.append(thead);
     const body = el('tbody');
     records.forEach((record) => {
+      // 整行可点：这一页的动作是「点一条、右边看它的原文」，而原来只有行尾那颗
+      // 「查看」能点——一屏几十行，鼠标要横着走一个身位才落得到目标上。
+      // 按钮留着：它是这一行**可点**的唯一可见线索，而整行热区没有形状。
       const tr = el('tr');
+      tr.dataset.trafficId = record.id;
+      tr.classList.add('traffic-row');
+      if (record.id === trafficPicked) tr.classList.add('is-picked');
+      tr.addEventListener('click', () => pickTraffic(record.id, compact));
       tr.append(el('td', 'mono', formatTime(record.createdAt)));
-      tr.append(el('td', 'mono', record.method));
+      if (!compact) tr.append(el('td', 'mono', record.method));
       const urlCell = el('td', 'mono clip');
       urlCell.textContent = record.url;                 // 不拼 HTML：URL 来自网络
       urlCell.title = record.url;
       tr.append(urlCell);
-      // 没拿到响应时状态是 0，而"0"看起来像一个状态码。说清楚。
-      tr.append(el('td', 'mono', record.error ? '无响应' : String(record.status)));
-      // 耗时走 `formatDuration`（与任务页、对话里的工具卡同一把尺子）：1200 ms 在这里
-      // 写成「1.2 s」。同一个数在两页上有两种写法，读的人会以为其中一个是别的量。
-      tr.append(el('td', 'mono', formatDuration(record.durationMs)));
-      const actionCell = el('td');
-      const open = el('button', 'btn sm', '查看');
-      open.type = 'button';
-      open.addEventListener('click', () => showTraffic(record.id));
-      actionCell.append(open);
-      tr.append(actionCell);
+      if (!compact) {
+        // 没拿到响应时状态是 0，而「0」看起来像一个状态码。说清楚。
+        tr.append(el('td', 'mono', record.error ? '无响应' : String(record.status)));
+        // 耗时走 `formatDuration`（与任务页、对话里的工具卡同一把尺子）：1200 ms 在这里
+        // 写成「1.2 s」。同一个数在两页上有两种写法，读的人会以为其中一个是别的量。
+        tr.append(el('td', 'mono', formatDuration(record.durationMs)));
+        const actionCell = el('td');
+        const open = el('button', 'btn sm', '查看');
+        open.type = 'button';
+        // 这颗按钮与整行是同一个动作。拦一次冒泡：不拦的话一次点击会走两遍
+        // （按钮一次、冒泡到行再一次），两遍各自发一次取原文的请求。
+        open.addEventListener('click', (event) => {
+          event.stopPropagation();
+          pickTraffic(record.id, false);
+        });
+        actionCell.append(open);
+        tr.append(actionCell);
+      }
       body.append(tr);
     });
     table.append(body);
@@ -227,7 +307,7 @@
     } catch (error) {
       clear(host);
       host.append(errorBlock('这条记录读不出来：' + error.message));
-      return;
+      return null;
     }
     clear(host);
     const head = el('div', 'traffic-head');
@@ -259,6 +339,8 @@
       UI.switchTab('repeater');
     });
     host.append(use);
+    // 取回来的整条记录交回去：重发页右栏点一行时要用它的正文去填表。
+    return record;
   }
 
   /* ------------------------------------------------------------ 请求重发 */
@@ -354,12 +436,16 @@
       clear(out);
       out.append(el('div', 'muted', '正在发送…'));
       try {
+        // `sessionId` 跟着这一条一起上去：服务端把它写进 `traffic.session_id`，
+        // 而「流量」页与右边那一栏都按会话收口。漏了这一格，这里发出去的每一条都
+        // 落到"没有会话"里，于是发完就在列表上找不到自己——而列表看上去完全正常。
         const record = await apiPost('/traffic/replay', {
           method: repeaterState.method,
           url: repeaterState.url,
           headers: parsed,
           body: repeaterState.body,
           engagementId: UI.state.eid || '',
+          sessionId: trafficSession(),
         });
         clear(out);
         const head = el('div', 'traffic-head');
@@ -375,6 +461,10 @@
         if (!record.error && record.responseTruncated) {
           out.append(el('p', 'muted', '响应正文超过 64 KB，上面只是前一段（完整原文没有留下来）。'));
         }
+        // 刚发出去的这一条现在就在库里，右边那一栏要立刻长出来——不能等下一轮心跳
+        // （最长 3 秒）。静默重取：这一页刚画好的结果块在 `#repeater-out` 里，
+        // 列表重画不碰它。
+        loadTraffic(true);
       } catch (error) {
         clear(out);
         out.append(errorBlock('发送失败：' + error.message));
@@ -637,6 +727,9 @@
     repeater: () => {
       if (!repeaterState) repeaterState = { method: 'GET', url: '', headers: '', body: '' };
       repeaterView();
+      // 右栏那张流量单子也要有东西。`quiet` 为真：这一页刚进来，边上不该闪
+      // 一行「正在读取流量…」，表格几毫秒后就位。
+      loadTraffic(true);
     },
     workspace: renderWorkspace,
     approvals: loadApprovals,
@@ -664,6 +757,9 @@
       // `removePlugin`、`removeSkill` 都有）：一次点击删掉的是一整张表。
       //
       // 而且删的是**比列表上看到的多**：列表按 `userId` 收口，只列自己那些；
+      // 这一版还按**当前这条对话**收口（页头那句「N 条」数的是这条对话里的），
+      // 于是屏幕上那几行离「整张表」的距离更远了。**这一条必须写进确认框**：
+      // 否则「清空这 3 条」读起来就是「清掉我看到的这 3 条」。
       // 服务端 `clear_traffic()` 不带 `user_id` 就 `DELETE FROM traffic`，整张表。
       // 于是点了「清空全部」的管理员会顺手清掉别人留下的记录——那些记录里躺着
       // 请求头与响应正文，可能带着别人的 Cookie 与令牌。同一句话只写在按钮上
@@ -673,7 +769,7 @@
       const scope = trafficCount ? `这 ${formatCount(trafficCount)} 条` : '全部';
       const ask = `确定清空${scope}流量记录？\n\n`
         + '记录里存着请求头与响应正文（可能含 Cookie 与令牌），删掉就找不回来。\n'
-        + '清空需要管理员：列表上只看得到自己那些，但清的时候整张表都会清。\n\n'
+        + '清空需要管理员：列表上只列得出现在这条对话里的那些，但清的时候整张表都会清。\n\n'
         + '链路里的证据不受影响——这里清的只是收发记录。';
       if (!window.confirm(ask)) return;
       try {

@@ -288,6 +288,10 @@ const state = {
   // 侧边栏两个读数块（目标 / 对话记录）的新鲜度：上一轮的指纹，以及它那个定时器。
   // `pulse` 存的是 `/pulse` 返回的那组字符串——**比对它**才知道要不要重拉列表。
   pulse: null, pulseTimer: null,
+  // 上一轮心跳量的是**哪一条对话**的流量（`/pulse` 的 `sessionId`）。换对话时流量指纹
+  // 可能两边都是空的（`"n=0 m=0"`），只看指纹判不出变化，而列表该整张换掉。
+  // `null` = 还没量过，第一轮不算换。
+  trafficSession: null,
   // 页面**手上这份目标列表**是在哪个指纹上拉下来的（见 `pumpPulse`）。与 `pulse:`
   // 分开：那个记的是"服务端上一轮说了什么"，这个记的是"我手上这份东西有多新"。
   // `null` = 不清楚（启动刚拉过、或上一次拉失败了）→ 下一轮补拉一次并把指纹记上。
@@ -1128,8 +1132,11 @@ function loadTabData(tab) {
   // 流量页也接进来（m14866「流量根据会话任务实时展示」）：那一页列的是**发出去过的
   // 请求**，而请求是模型在对话里跑工具时发出去的——人在流量页上等的正是"又发了一条"。
   // 不接的话它只在切进来的那一刻读一次，之后整个扫描跑完都不动。
+  // 请求重发页也从这一轮里拿东西：它右栏挂的就是流量列表（点一行填进左边那张表），
+  // 而人在这一页上等的正是「刚才发出去的那条回来了没有」。不接的话，这一页的列表
+  // 只停在切进来那一刻——发完一条自己看不见自己。
   const pulseTab = tab === 'dsh' || tab === 'findings' || tab === 'assets'
-    || tab === 'traffic' || (tab === 'graph' && state.graphAuto);
+    || tab === 'traffic' || tab === 'repeater' || (tab === 'graph' && state.graphAuto);
   if (pulseTab) startPulseAuto();
   else stopPulseAuto();
   if (tab === 'jobs') {
@@ -3890,6 +3897,11 @@ async function pumpPulse() {
   if (!stamps) return null;
   const previous = state.pulse;
   state.pulse = stamps;
+  /* 上一轮心跳量的是**哪一条对话**的流量。换了对话要单独记一笔：两边都还是 0 条时
+     指纹一字不差（`"n=0 m=0"`），而列表该整张换掉——只看指纹的话，从一条空对话切
+     到另一条空对话，屏幕上留着上一条对话的表。`null` 表示还没量过，第一轮不算换。 */
+  const switchedSession = state.trafficSession !== null && state.trafficSession !== sessionId;
+  state.trafficSession = sessionId;
   /* 「目标」那两块判的是"**我手上这份列表**是不是旧的"，不是"服务端上一轮说了什么"。
      两者在启动那几秒里会分叉：`init()` 拉列表与第一次探询是**并发**的，探询先回、
      或者列表那一次请求失败，服务端这一轮的值就已经比页面手上的新——再拿它当基线，
@@ -3905,10 +3917,12 @@ async function pumpPulse() {
     state.listStamps = { engagements: stamps.engagements, nodes: stamps.nodes };
     await refreshEngagementList();
   }
+  // "变了"只在**两边都量过这一项**时成立。上一轮没有这一项（比如那时还没选目标）
+  // 不算变化：那一刻的页签内容是刚加载的，不存在过期。提到 `if (previous)` 外面——
+  // 换对话那一条要与它并列判（见下面流量那段），而它也得在主块之外成立。
+  const changed = (key) => Boolean(previous) && previous[key] !== undefined
+    && previous[key] !== stamps[key];
   if (previous) {
-    // "变了"只在**两边都量过这一项**时成立。上一轮没有这一项（比如那时还没选目标）
-    // 不算变化：那一刻的页签内容是刚加载的，不存在过期。
-    const changed = (key) => previous[key] !== undefined && previous[key] !== stamps[key];
     // 漏洞与资产各自独立判变化：加一条漏洞不该让资产树重画，反过来也一样——而
     // "重画"正是这一整套心跳从头到尾在避免的那件事。
     // 漏洞页的两种范围各有自己的"变了"信号：
@@ -3932,13 +3946,17 @@ async function pumpPulse() {
         && (changed('nodes') || changed('engagements'))) {
       await loadGraph(true);
     }
-    // 流量：这一页的指纹是**那个范围内**的条数与最大行号（服务端按调用者能看见的
-    // 范围取，见 `store.change_stamps` 的 `traffic_user`）。判当前页签，与漏洞 / 资产
-    // 同一条规矩：别的页签上不该为它重画表格。
-    if (state.tab === 'traffic' && changed('traffic')) {
-      const panels = window.PentestPanels;
-      if (panels && typeof panels.loadTraffic === 'function') panels.loadTraffic(true);
-    }
+  }
+  // 流量：指纹是**那条对话里**的条数与最大行号（服务端按调用者与 `sessionId` 收口，
+  // 见 `store.change_stamps` 的 `traffic_user` / `traffic_session`）。判当前页签，与
+  // 漏洞 / 资产同一条规矩：别的页签上不该为它重画表格。
+  //
+  // 两个页签都要：流量页看得见这份列表，请求重发页的右栏也挂着同一份。
+  // `switchedSession` 单独算：「换了对话」时指纹可能都是空的，而列表该换。
+  if ((state.tab === 'traffic' || state.tab === 'repeater')
+      && (switchedSession || changed('traffic'))) {
+    const panels = window.PentestPanels;
+    if (panels && typeof panels.loadTraffic === 'function') panels.loadTraffic(true);
   }
   if (chat && typeof chat.syncFromPulse === 'function') chat.syncFromPulse(stamps);
   return stamps;

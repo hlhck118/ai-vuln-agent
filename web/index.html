@@ -1590,9 +1590,19 @@
         <button id="traffic-clear" class="btn sm danger" type="button">清空全部</button>
       </div>
     </header>
-    <div class="panel-body">
-      <div id="traffic-body"></div>
-      <div id="traffic-detail"></div>
+    <!-- 列表与原文**并排**：点一条、右边立刻换成它。上下排的话，点一条会把表格
+         顶出视口，而这一页的动作恰恰是"一条接一条地翻"。左栏可折起来——折起来
+         只剩一行标题，右栏那份原文独占宽度。 -->
+    <div class="split">
+      <div class="split-pane traffic-list-pane" id="traffic-list-pane" data-fold-part="traffic">
+        <button class="panel-head fold-head" type="button" data-fold="traffic">记录<span class="panel-head-hint">点一行看原文</span><span class="fold-mark" aria-hidden="true"></span></button>
+        <div class="panel-body" id="traffic-body"></div>
+      </div>
+      <div class="split-handle" data-split="traffic" data-fold-part="traffic" role="separator" aria-orientation="vertical" tabindex="0" aria-label="拖动调整记录栏宽度"></div>
+      <div class="split-pane traffic-detail-pane">
+        <div class="panel-head" id="traffic-detail-head">这一条的原文<span class="panel-head-hint">含请求头与响应正文</span></div>
+        <div class="panel-body" id="traffic-detail"></div>
+      </div>
     </div>
   </section>
 
@@ -1609,7 +1619,18 @@
         <span class="muted">目标须在 --probe-scope 内</span>
       </div>
     </header>
-    <div class="panel-body" id="repeater-body"></div>
+    <!-- 右边那一栏是**流量**：这一页的用法是"从「流量」里挑一条改过再发"，
+         而原先要来回切两个页签才挑得到。点一行直接把它填进左边那张表。 -->
+    <div class="split">
+      <div class="split-pane repeater-main">
+        <div class="panel-body" id="repeater-body"></div>
+      </div>
+      <div class="split-handle" data-split="repeater" role="separator" aria-orientation="vertical" tabindex="0" aria-label="拖动调整流量栏宽度"></div>
+      <div class="split-pane traffic-side" id="repeater-side" data-fold-part="repeater-side">
+        <button class="panel-head fold-head" type="button" data-fold="repeater-side">流量<span class="panel-head-hint">点一行填进左边</span><span class="fold-mark" aria-hidden="true"></span></button>
+        <div class="panel-body" id="repeater-traffic"></div>
+      </div>
+    </div>
   </section>
 
   <!-- 页签：工作空间（这一轮对话在盘上留下了什么）。

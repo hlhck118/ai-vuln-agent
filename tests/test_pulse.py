@@ -190,6 +190,47 @@ class ChangeStampsTestCase(unittest.TestCase):
         self.assertNotEqual(before["engagements"], after["engagements"])
         self.assertNotEqual(before["nodes"], after["nodes"])
 
+    def test_the_traffic_stamp_is_narrowed_to_one_session(self):
+        """「流量」那一格按**会话**收口，不按人。
+
+        按人收口的话，同一个人的另一个会话（或者另一个标签页里跑着的扫描）每发
+        一条请求，当前这一页都要白重画一次表格——而画面上永远是那几条。按会话收
+        口之后这一格答的是「**这条对话**里又发出了请求没有」，与 `list_traffic` 的
+        `session_id` 是同一条口径。
+
+        `traffic_user` 与 `traffic_session` 是**两层**（谁 + 哪条对话），所以这里
+        两个都传：只按会话不按人的话，别人的会话 id 撞进来就会串。
+        """
+        self.store.record_traffic(session_id="C-one", user_id="u1",
+                                  method="GET", url="http://127.0.0.1/a")
+        one = self.store.change_stamps(traffic_user="u1",
+                                       traffic_session="C-one")["traffic"]
+        self.assertTrue(one.startswith("n=1 "), one)
+        # 另一条对话里什么都没有：它的那一格必须是 n=0，否则心跳会一直判「变了」。
+        empty = self.store.change_stamps(traffic_user="u1",
+                                         traffic_session="C-two")["traffic"]
+        self.assertEqual("n=0 m=0", empty)
+        self.store.record_traffic(session_id="C-two", user_id="u1",
+                                  method="GET", url="http://127.0.0.1/b")
+        after = self.store.change_stamps(traffic_user="u1",
+                                         traffic_session="C-one")["traffic"]
+        self.assertEqual(one, after, "另一条对话发了请求，这一条不该跟着动")
+        self.assertNotEqual(
+            empty,
+            self.store.change_stamps(traffic_user="u1",
+                                     traffic_session="C-two")["traffic"])
+
+    def test_the_traffic_stamp_is_absent_unless_someone_asks_for_it(self):
+        """没人看流量页时这一格根本不该出现在指纹里。
+
+        多报一格不是「多一点信息」：调用方会拿它跟前一轮比，而这一格在会话切换
+        时天然会动——于是坐在别的页签上也会每 3 秒重画一次流量表。
+        """
+        self.assertNotIn("traffic", self.store.change_stamps())
+        self.store.record_traffic(user_id="u1", method="GET",
+                                  url="http://127.0.0.1/a")
+        self.assertIn("traffic", self.store.change_stamps(traffic_user="u1"))
+
     def test_jobs_are_deliberately_not_in_the_stamps(self):
         """任务读数由既有定时器（10 秒）驱动。两处驱动就会出现两套节奏。"""
         self.assertNotIn("jobs", self.store.change_stamps())
@@ -369,6 +410,57 @@ class PulseWiringContractTestCase(unittest.TestCase):
         # 指纹看不见的两处变化（目标改名、就地补写节点内容）只能靠切页签时重取补上。
         self.assertIn("loadGraph(state.graphAuto)", body,
                       "切回链路页不重取：目标改名与就地补写的内容都看不见")
+
+    def test_the_repeater_tab_runs_the_pulse_too(self):
+        """请求重发页右栏挂着**同一份**流量列表，所以它也要进心跳名单。
+
+        漏掉它的症状很具体：在重发页上看着右栏，模型在左边对话里又发了一条请求，
+        那一栏不动——而人以为这一页是"实时的"。它与流量页的区别只在"点一行会填进
+        左边那张表"，数据来源完全一样。
+        """
+        body = _body(self.app, "function loadTabData(tab)")
+        start = body.index("const pulseTab")
+        gate = body[start:body.index("startPulseAuto", start)]
+        self.assertIn("tab === 'repeater'", gate, "重发页没接进心跳")
+        self.assertIn("tab === 'traffic'", gate, "流量页那一支被顶掉了")
+
+    def test_a_session_switch_refetches_the_traffic_even_when_the_stamp_agrees(self):
+        """从一条空对话切到另一条空对话：指纹一字不差，而列表该整张换掉。
+
+        两条对话都还是 `"n=0 m=0"`，只比指纹的话屏幕上会留着上一条对话的表——
+        而表里那几条请求属于**别的**对话。所以「这一轮量的是哪条对话」要单独记，
+        它不是指纹的一部分。
+        """
+        body = _body(self.app, "async function pumpPulse()")
+        self.assertIn("state.trafficSession", body)
+        self.assertIn("switchedSession", body)
+        # 两个页签都要：流量页看得见，重发页右栏是同一份。
+        self.assertIn("state.tab === 'traffic' || state.tab === 'repeater'", body)
+
+    def test_the_traffic_requests_carry_the_session_id(self):
+        """前端不传 `sessionId` 就等于后端那两层收口全都用不上。
+
+        缺了这一格的症状全部落在"看不见"上：列表把别的对话的请求一起列出来、
+        重发页发出去的那条立刻被自己的过滤器筛掉、心跳那一格按人取于是白重画。
+        三处都在 panels.js 里，所以这里逐处钉。
+        """
+        panels = _source("web", "panels.js")
+        self.assertIn("function trafficSession()", panels)
+        self.assertIn("currentSessionId", panels)
+        self.assertIn("&sessionId=", panels)
+        self.assertIn("sessionId: trafficSession()", panels,
+                      "重发时没把会话带上去，那一条会落到\"没有会话\"里")
+
+    def test_both_traffic_lists_are_painted_from_one_pass(self):
+        """流量页左栏与重发页右栏是**同一批记录**：一次取、两处画。
+
+        各拉一次的话，两边的选中态、截断提示与"到最近 N 条"会分别漂——而它们是
+        同一个问题的两个视图。
+        """
+        panels = _source("web", "panels.js")
+        body = _body(panels, "async function loadTraffic(quiet)")
+        self.assertIn("paintTrafficList(host, records, false)", body)
+        self.assertIn("#repeater-traffic", body)
 
     def test_the_findings_list_keeps_its_scroll_position(self):
         """漏洞列表会在数据变化时整段重画，而此刻人很可能正读到第五条。

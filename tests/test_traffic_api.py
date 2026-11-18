@@ -207,6 +207,39 @@ class TrafficApiTests(unittest.TestCase):
         self.assertEqual(own["scope"], "own")
         self.assertEqual([item["id"] for item in own["records"]], [theirs])
 
+    def test_the_listing_can_be_narrowed_to_one_session(self):
+        """「流量」与「请求重发」右栏列的是**这条对话**里发出去的东西。
+
+        不收口的话，上一个会话、或者同一个人的另一个标签页里跑过的扫描，会一起
+        堆在这里——而列表上没有任何东西说明它们不是这一条对话的。前端为此每次
+        都带 `sessionId`（panels.js 的 `trafficQuery`），这一条钉的是后端真的
+        按它收口。
+        """
+        one = self.store.record_traffic(session_id="C-one", user_id=self.admin_id,
+                                         method="GET", url="http://127.0.0.1/one")
+        two = self.store.record_traffic(session_id="C-two", user_id=self.admin_id,
+                                         method="GET", url="http://127.0.0.1/two")
+        narrow = self.records("/api/v1/traffic?sessionId=C-one")
+        self.assertEqual([item["id"] for item in narrow["records"]], [one])
+        # 不带这一格就是**不收口**：两条都在。宁可多列几条，也别把这一页显示成空。
+        every = self.records()["records"]
+        self.assertEqual(sorted(item["id"] for item in every), sorted([one, two]))
+
+    def test_a_replayed_request_is_filed_under_the_session_it_came_from(self):
+        """重发页发出去的那一条要落进**当前这条对话**。
+
+        漏传 `sessionId` 的症状最难看出来：请求发成功了、响应也画出来了，只是
+        它落在"没有会话"里——于是「流量」页与右边那一栏立刻把刚发的那条过滤掉，
+        看起来像"发了但没记下来"。
+        """
+        status, record = self.admin.post("/api/v1/traffic/replay", {
+            "method": "GET", "url": self.inside(), "sessionId": "C-here"})
+        self.assertEqual(status, 200, record)
+        here = self.records("/api/v1/traffic?sessionId=C-here")["records"]
+        self.assertEqual([item["id"] for item in here], [record["id"]])
+        self.assertEqual(
+            self.records("/api/v1/traffic?sessionId=C-elsewhere")["records"], [])
+
     def test_reading_someone_elses_record_is_refused(self):
         """记录里躺着 Cookie 与令牌，跨用户可读等于把它们摊开。"""
         mine = self.store.record_traffic(user_id=self.admin_id, method="GET",
