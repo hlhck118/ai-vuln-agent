@@ -23,7 +23,7 @@ python deploy/start.py          # 自动选端口并打开浏览器
 python -m pentestd serve --port 8787
 ```
 
-Windows 上也可以双击仓库根目录的 `start.cmd`，它会先出一张「本机 / 局域网 / 外网隧道」菜单。
+仓库根还有一条更短的路径：`./start.sh`。它只做一件事——找到 Python 3.10+，把参数原样交给 `deploy/start.py`（`exec`，Ctrl+C 直接打到控制面）。`./start.sh --host 0.0.0.0` 让同一内网能打开，`./start.sh --port 9000` 换端口。
 
 启动后在浏览器里完成：创建管理员账号（**没有默认口令**）→ 选推理模型 → 部署自检 → 下发任务。
 
