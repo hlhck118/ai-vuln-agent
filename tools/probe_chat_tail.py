@@ -20,7 +20,7 @@
 | 0 | 正文结尾（滚到底） | 末条离卡片上沿 = `--chat-fade`（12px±1.5） |
 | 0b | 同上 | `padding-bottom` 是 12px 量级（JS 写的），不是 CSS 兜底的 188px 量级 |
 | 1 | 浮层挂一张「已批准」审查卡 | 浮层底沿离卡片上沿 = `--sp-3`；末条停在**浮层**上沿之上 12px |
-| 2 | 浮层里再多挂一张 | 浮层仍贴卡片上沿；末条仍停在浮层上沿之上 12px（浮层长高要重新量） |
+| 2 | 浮层里再多挂一张 | 浮层仍贴卡片上沿、高度**不变**（锁在一张卡上）；末条仍是 12px |
 | 2b | 浮层收起（`hidden`） | 回到卡片上沿：末条仍是 12px |
 | 3 | 排队长出来（卡片被推到记录区下面） | 末尾只留渐隐那一段，不留一整屏空白 |
 | 4 | 排队收起 | 回到 12 |
@@ -110,6 +110,12 @@ PROBE = r"""
     while (layer.firstChild) { layer.removeChild(layer.firstChild); }
     for (var i = 0; i < nodes.length; i++) { layer.appendChild(nodes[i]); }
     layer.hidden = nodes.length === 0;
+    /* 产品在 `renderReviews()` 末尾自己钉高；探针不走那条路（它自己塞夹具），
+       所以这里主动叫一次。**这正是把 `pinReviewHeight` 对外暴露出来的原因**：
+       不叫它，量到的就是“没人管”的自由高度，那一条判据也就失去意义了。 */
+    if (window.PentestChat && window.PentestChat.pinReviewHeight) {
+      window.PentestChat.pinReviewHeight();
+    }
     return layer;
   }
   function snap() {
@@ -141,8 +147,8 @@ PROBE = r"""
          这一条是**浮层自己的几何**，和记录区内边距无关——两者混起来就分不出
          "浮层贴歪了"与"末尾留白算错了"。 */
       gapFloat: layerBox ? Math.round(cr.top - layerBox.bottom) : null,
-      /* 浮层高多少：它在长高（又挂了一张卡）时记录区那份内边距必须跟着重算，
-         所以"长没长"要能量得到。 */
+      /* 浮层高多少：高度钉在一张卡上之后它**不该再随卡片数变**，所以这个值要量得到
+         ——判据正是“又挂一张，它没长高”。 */
       floatHeight: layerBox ? Math.round(layerBox.height) : null,
       floatCards: layer ? layer.querySelectorAll('.chat-review-card').length : 0,
       vw: window.innerWidth, vh: window.innerHeight
@@ -215,7 +221,9 @@ PROBE = r"""
           gapLogBottom: one.gapLogBottom, wantFade: fade,
           floatHeight: one.floatHeight, floatCards: one.floatCards });
 
-      // 2：浮层里再挂一张 —— 它长高了，末尾那份内边距必须**重新量过**。
+      // 2：浮层里再挂一张 —— **高度不变**（m20719：钉在一张卡上），第二张在层内滚。
+      //    改版前这里判的是 `floatHeight > grown`（挂一张就长高一张），那条判据
+      //    正是这次要推翻的东西：同时排队三四条时浮层能把半屏占掉。
       var layer = floatLayer();
       var grown = one.floatHeight;
       var second = review();
@@ -225,8 +233,9 @@ PROBE = r"""
       log.scrollTop = log.scrollHeight;
       await settle();
       var two = snap();
-      add('2 浮层长高：仍贴卡片上沿，末尾跟着让到新的上沿（内边距重算过）',
-        floatGapOk(two, gap) && tailOk(two, fade) && two.floatHeight > grown,
+      add('2 再挂一张：浮层不再长高（锁在一张卡上），第二张要在层里滚才看得见',
+        floatGapOk(two, gap) && tailOk(two, fade) && two.floatCards === 2
+          && near(two.floatHeight, grown),
         { gapFloat: two.gapFloat, gap: two.gapLast, gapLogBottom: two.gapLogBottom,
           floatHeight: two.floatHeight, grown: grown, floatCards: two.floatCards });
 

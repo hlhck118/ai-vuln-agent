@@ -159,6 +159,32 @@ class ReviewCardTestCase(unittest.TestCase):
         self.assertIn("还会在", card, "要说清刷新不会弄丢它")
         self.assertNotIn("离开这一页", card)
 
+    # ---- 高度钉在一张卡上（m20719）
+
+    def test_the_float_is_pinned_to_one_card_height(self):
+        """浮层只保持**一张卡**的高度，多出来的在里面滚。
+
+        改版前层高 = 卡片数 × 卡片高：同时排队三四条时它能把半屏占掉，而此刻要做
+        的事只有一件 —— 回答最上面那一张。纯 CSS 写不出这件事（卡片高随 headline /
+        reasons 的行数与窗口宽度变，而 CSS 没有“第一个子元素多高”这种表达），所以
+        由 `pinReviewHeight()` 量一次实测高度写成 `--review-pin`，让 `max-height` 去用。
+        """
+        js = strip_comments(self._read("web", "chat.js"))
+        pin = slice_function(js, "pinReviewHeight")
+        self.assertIn("--review-pin", pin)
+        self.assertIn("chat-review-card", pin, "量的是卡片自己的矩形，不是浮层的")
+        self.assertIn("removeProperty", pin,
+                      "没有卡片时要把这个属性摘掉，否则收起再打开会先按旧高度画一帧")
+        render = slice_function(js, "renderReviews")
+        self.assertIn("pinReviewHeight()", render, "画完必须钉一次")
+        self.assertNotIn("box.scrollTop = box.scrollHeight", render,
+                         "心跳每 3 秒重画，无条件滚到底会把正在层内往回翻的人拽回去")
+        css = self._read("web", "style.css")
+        block = css.split(".chat-review {")[1].split("}")[0]
+        self.assertIn("--review-pin", block)
+        self.assertIn("max-height: min(var(--review-pin), 460px)", block,
+                      "默认值必须是原来那条封顶，量不到时行为不变")
+
     # ---- 停止要结掉单子
 
     def test_stop_settles_the_pending_review_instead_of_leaving_it(self):

@@ -2520,7 +2520,7 @@ class CssLayoutGuardTestCase(unittest.TestCase):
         五个选择器还必须同一条分组规则——分两条时只有一处生效。
 
         t110 又加进一处（使用者原话「悬浮框隐藏滚动条」）：待批浮层 `.chat-review`
-        （`max-height: min(52vh, 460px)` 之后自己滚）。它与坞、选项面板同一形态——
+        （高度锁在一张卡上之后自己滚，见 `--review-pin`）。它与坞、选项面板同一形态——
         浮在输入卡片上沿的一条带，11px 的竖杠正好压在这条带上，看着像"框里又套了个框"。
         """
         css = re.sub(r"/\*.*?\*/", "", self._css, flags=re.S)

@@ -150,6 +150,10 @@
     // 覆盖（同一张单子会来两帧 `pending` / `settled`，各画一块就会出现两张卡片，
     // 其中一张永远停在"等待批准"）。
     reviews: {}, reviewOrder: [],
+    // 浮层里**上一次画出来的是哪一批单子**（`id+pending` 串起来的指纹）。
+    // 只用来决定“要不要重新定位滚动位置”：心跳每 3 秒重画一次，无条件归位会把
+    // 正在层内往回翻的人反复拽回末尾；而批次没变时，位置本来就该待在原处。
+    reviewsKey: '',
     // 流式的实时视图与中断控制器。`live` 只用于"边跑边看"，**不是**消息真相：
     // 每轮结束都以服务端落库的那份为准，否则刷新一次就会看到两个版本的回答。
     live: null, abort: null,
@@ -5191,6 +5195,8 @@
     const done = rows.filter((row) => !row.pending);
     if (!waiting.length && !orphan.length && !done.length) {
       box.hidden = true;
+      // 空掉之后把钉住的高度摘掉，否则下一轮打开会先按旧值画一帧再跳。
+      pinReviewHeight();
       markReviewsSettled();
       return;
     }
@@ -5208,9 +5214,20 @@
         + '或控制面重启过），批准它们不会有命令执行；到时间会自动收掉。'));
     }
     box.hidden = false;
-    /* 这一层自己可以滚（卡片可能很高，见 style.css 的 `max-height`）：新内容在
-       末尾，把它滚到底，等价于原先"在底部的人才跟到底"。 */
-    box.scrollTop = box.scrollHeight;
+    /* 高度钉在“一张卡”上（m20719）：量完再决定这一层多高，见 `pinReviewHeight()`。
+       这一层自己可以滚，多出来的卡片在层内滚，不再把浮层撑高。 */
+    pinReviewHeight();
+    /* 只在**这一批单子真的变了**时挪一次滚动位置。
+     *
+     * 原来是无条件 `box.scrollTop = box.scrollHeight`：心跳每 3 秒重画一次这一格，
+     * 每次都把滚动条拽回末尾 —— 正在浮层里往回翻看第二、第三张单子的人被反复推走。
+     * 而“批次变了”正是唯一需要重新定位的时刻：新来一张待批的（要让人看见它）、
+     * 或刚裁决掉一张（点完必须看见「已批准」）。 */
+    const key = rows.map((row) => row.id + (row.pending ? 'p' : 'd')).join('|');
+    if (key !== view.reviewsKey) {
+      view.reviewsKey = key;
+      scrollReviewsIntoView(box, done.length ? 'done' : 'waiting');
+    }
     markReviewsSettled();
   }
 
@@ -5223,6 +5240,59 @@
   function markReviewsSettled() {
     const api = ui();
     if (api && typeof api.syncChatTail === 'function') api.syncChatTail();
+  }
+
+  /** 把浮层的高度**钉在“一张卡”上**（m20719）。
+   *
+   *  为什么要这一条：`renderReviews()` 把待批的单子全部纵向堆进同一层浮层，层高
+   *  因此等于“卡片数 × 卡片高”。同时挂三四条时它能把半屏占掉，而使用者此刻要做的事
+   *  只有一件——回答**最上面那一张**。高度钉住之后，“还有几张”体现为层内可滚，
+   *  不再体现为浮层越长越高。
+   *
+   *  为什么在 JS 里量、不写成 CSS：卡片高随 headline / reasons 的行数与窗口宽度变，
+   *  写死 px 一定对不上；而 CSS 没有“第一个子元素多高”这种表达。所以量一次实测高度，
+   *  写成自定义属性让 `.chat-review` 的 `max-height` 去用（见 style.css 那一条）。
+   *
+   *  量的是**卡片自己的矩形**，不是浮层的：浮层是 flex 容器且卡片没有 `flex` 简写，
+   *  `min-height: auto` 让卡片下限停在 min-content —— 即使浮层正被 `max-height` 裁着，
+   *  卡片量到的仍是它**需要**的高度。这也是这条路不需要“先清掉自己的值再量”的原因
+   *  （`theme.js` 的 `paintAlpha` 要清，是因为它读的正是自己写进去的那个 CSS 值）。
+   *
+   *  幂等、不动 DOM：只写一个自定义属性。窗口 resize 时重算也安全——
+   *  `decideReview()` 期间按钮是 disabled 的，重建 DOM 会把那个状态弄丢。
+   */
+  function pinReviewHeight() {
+    const box = dom.reviewFloat;
+    if (!box) return;
+    const card = box.hidden ? null : box.querySelector('.chat-review-card');
+    if (!card) {
+      // 收起 / 只剩一句说明时不留旧值：下次打开会先按旧高度画一帧再跳。
+      box.style.removeProperty('--review-pin');
+      return;
+    }
+    const style = window.getComputedStyle(box);
+    const gap = parseFloat(style.rowGap || style.gap) || 0;
+    let height = card.getBoundingClientRect().height;
+    const intro = box.querySelector('.chat-review-intro');
+    if (intro) height += intro.getBoundingClientRect().height + gap;
+    // 兜底封顶与 CSS 里那条一致：窗口再矮也不许把输入卡片挤出视野。
+    const cap = Math.min(window.innerHeight * 0.52, 460);
+    box.style.setProperty('--review-pin', Math.round(Math.min(height, cap)) + 'px');
+  }
+
+  /** 把浮层滚到“该看的那一张”（m20719）。
+   *
+   *  浮层高度钉在一张卡上之后，第二张起就在**折叠线以下**了 —— 不滚过去等于
+   *  “排队了两张，界面上只看得见一张，也没有任何提示”。所以这一批单子一变就挪一次：
+   *  有刚裁决过的卡片时滚到它（点完必须看见「已批准」），否则滚回第一张待批的。
+   *
+   *  `offsetTop` 直接可用：`.chat-review` 是 `position: absolute`，它本身就是卡片
+   *  的 offsetParent，那个值正好是“相对浮层内容顶端”的距离。
+   */
+  function scrollReviewsIntoView(box, kind) {
+    const card = box.querySelector(kind === 'done'
+      ? '.chat-review-card.chat-review-done' : '.chat-review-card');
+    box.scrollTop = card ? Math.max(0, card.offsetTop) : 0;
   }
 
   function reviewCard(review) {
@@ -5562,6 +5632,10 @@
       dom.log.addEventListener(name, () => { view.logTouched = true; },
         { passive: true });
     });
+    // 窗口宽度变一次，审查卡的换行就变一次，卡片高度也跟着变 —— 钉住的那个高度
+    // 必须重算，否则窗口拉窄之后浮层比卡片矮，正文被裁掉一截。
+    // 只重算、不重画 DOM：`decideReview()` 期间按钮是 disabled 的，重建会丢那个状态。
+    window.addEventListener('resize', pinReviewHeight);
     dom.log.addEventListener('scroll', earlierAutoLoad, { passive: true });
     document.addEventListener('keydown', (event) => {
       if (event.defaultPrevented || editing(event.target)) return;
@@ -5817,5 +5891,9 @@
                          // 那条路径要展开折叠的面板、拉开详情栏、把行滚进视野，
                          // 三件事都在 chat.js 里；对外暴露是为了让契约测试能直接验
                          // "点了之后右栏确实换成了这一条"，而不必驱动真实 DOM。
-                         focusJob };
+                         focusJob,
+                         // 把审查浮层的高度重新钉到一张卡上（m20719）。同样是为了
+                         // `tools/probe_chat_tail.py`：那套探针用真实浏览器、自己往浮层
+                         // 里塞夹具卡片，走不到 `renderReviews()`，钉高就得由它主动叫一次。
+                         pinReviewHeight };
 })();

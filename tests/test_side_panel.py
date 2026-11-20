@@ -666,7 +666,7 @@ class TraceRowJumpsToSidebarTestCase(unittest.TestCase):
 
     def test_both_entries_are_exported(self):
         """两个入口都要露出来：`focusJob` 给测试与后续调用点，`loadJobs` 给那次补拉。"""
-        self.assertIn("focusJob }", self.chat, "focusJob 没有对外暴露")
+        self.assertIn("focusJob,", self.chat, "focusJob 没有对外暴露")
         self.assertIn("  loadJobs,", self.app,
                       "补拉任务列表的入口没有给出去，focusJob 里那次补拉是空的")
 
