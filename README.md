@@ -23,7 +23,9 @@ python deploy/start.py          # 自动选端口并打开浏览器
 python -m pentestd serve --port 8787
 ```
 
-仓库根还有一条更短的路径：`./start.sh`。它只做一件事——找到 Python 3.10+，把参数原样交给 `deploy/start.py`（`exec`，Ctrl+C 直接打到控制面）。`./start.sh --host 0.0.0.0` 让同一内网能打开，`./start.sh --port 9000` 换端口。
+仓库根还有更短的路径，两个壳是同一条路：Linux / macOS / Git Bash 用 `./start.sh`，Windows 用 `start.bat`。它们只做一件事——找到 Python 3.10+，把参数原样交给 `deploy/start.py`（`start.sh` 用 `exec`，Ctrl+C 直接打到控制面）。`./start.sh --host 0.0.0.0` 让同一内网能打开，`./start.sh --port 9000` 换端口。
+
+Windows 上还多三个把「远程访问」拼好的短写法：`start.bat --lan`（等于 `--host 0.0.0.0`）、`start.bat --remote`（绑 `0.0.0.0` 并另开一个窗口起 `tools/keep_tunnel.py`）、`start.bat --tunnel`（只起隧道）。其余参数照样原样转发。
 
 启动后在浏览器里完成：创建管理员账号（**没有默认口令**）→ 选推理模型 → 部署自检 → 下发任务。
 

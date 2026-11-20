@@ -37,6 +37,10 @@ PYTHON = sys.executable
 # 机器只跳过执行那一条：静态契约与解释器无关，照旧全跑。
 SHELL = shutil.which("sh") or shutil.which("bash") or ""
 NO_SHELL = "这台机器上没有 sh，跳过 start.sh 的执行用例"
+# Windows 那一侧的同一条路是仓库根的 start.bat。cmd.exe 只在 Windows 上有，
+# 别的平台上静态契约照跑，只有"真跑一遍"那条跳过。
+CMD = shutil.which("cmd") or os.environ.get("COMSPEC", "")
+NO_CMD = "这台机器上没有 cmd.exe，跳过 start.bat 的执行用例"
 ENROLL_SECRET = "console-secret"
 ENROLL_HEADERS = {"Content-Type": "application/json",
                   "X-Enroll-Token": ENROLL_SECRET}
@@ -763,6 +767,223 @@ class StartScriptTestCase(unittest.TestCase):
         self.assertIn("--host", completed.stdout, "参数没有交到 start.py")
 
 
+class StartBatchTestCase(unittest.TestCase):
+    """`start.bat` 是 Windows 上的同一条路，契约与 `start.sh` 对齐。
+
+    为什么不是"Windows 上让人装个 sh 就行了"：双击、从桌面快捷方式、从计划
+    任务拉起时，机器上有没有 Git 自带的 sh 是不确定的，而 .bat 是每台 Windows
+    都认的那一种。所以它是壳，不是第二套逻辑——壳只做四件事：站到仓库根、找
+    一个 Python 3.10+、把参数原样交下去、以及在 `--remote` 时顺手开隧道。
+
+    以下几处是这条路上真出过问题的写法：
+
+      * 行尾必须是 CRLF。cmd.exe 按字节读批处理，LF-only 的 `goto` 标签在
+        某些版本上会跳到文件末尾——症状是"双击之后窗口一闪就没了"。
+      * 不能写死 `C:\\...\\python.exe`。换台机器、或用 Microsoft Store 版的
+        python 转发器，路径就落空。
+      * 不能只有一个 `python`。装了 3.9 与 3.12 两台解释器的机器上，PATH 里
+        第一个未必够 3.10——所以先验版本再采用。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.path = os.path.join(ROOT, "start.bat")
+        with open(cls.path, "rb") as handle:
+            cls.raw = handle.read()
+        cls.text = cls.raw.decode("utf-8")
+
+    def test_the_launcher_exists_at_the_project_root(self):
+        self.assertTrue(os.path.isfile(self.path), "Windows 的一键启动脚本不见了")
+
+    def test_line_endings_are_crlf_and_there_is_no_bom(self):
+        """cmd.exe 按字节读批处理：LF-only 的 goto 标签会跳飞。
+
+        症状是"双击之后窗口一闪就没了"，而文件里每一行都写得好好的——
+        去读逻辑的人找不到问题，因为问题在行尾。BOM 则会让第一行变成
+        `\ufeff@echo off`，于是那一行被当成一条命令，先在屏幕上打一句
+        "'@echo' is not recognized"。
+        """
+        self.assertNotEqual(b"\xef\xbb\xbf", self.raw[:3], "start.bat 带了 BOM")
+        self.assertIn(b"\r\n", self.raw, "start.bat 必须是 CRLF 行尾")
+        self.assertEqual(0, self.text.count("\n") - self.text.count("\r\n"),
+                         "start.bat 里有 LF-only 的行")
+
+    def test_it_does_not_depend_on_the_callers_directory(self):
+        """双击时 cwd 是桌面，计划任务里是 System32。
+
+        `--db` 与 Web 资源的默认路径都按仓库根算：少这一次 pushd，就会在
+        随机目录里建一个空库，然后报"未找到 Web 界面资源"。
+        """
+        self.assertIn('pushd "%~dp0"', self.text)
+        self.assertIn("popd", self.text)
+
+    def test_it_hands_the_whole_job_to_python(self):
+        self.assertIn("deploy\\start.py", self.text)
+        self.assertIn("%ARGS%", self.text, "参数没有原样交下去：--host / --port 会被吞掉")
+        self.assertNotIn("--launcher", self.text,
+                         "--launcher 那一层已经撤掉了，壳不该再传它")
+
+    def test_it_does_not_pin_an_absolute_python_path(self):
+        self.assertNotIn("C:\\", self.text)
+        for candidate in ("python3", "python", "py"):
+            self.assertIn(candidate, self.text)
+
+    def test_it_checks_the_interpreter_version_before_using_it(self):
+        """deploy/start.py 用到 3.10 才有的语法。
+
+        不验版本的话，机器上只有 3.9 时错误会以 SyntaxError 的形式出现在
+        一个完全不相干的文件行号上。
+        """
+        self.assertIn("sys.version_info", self.text)
+        self.assertIn("3,10", self.text.replace(" ", ""))
+
+    def test_it_passes_the_exit_code_through(self):
+        """0 / 1 / 2 是三种不同结局（2 = 已经有一个实例在跑）。
+
+        批处理里 `exit /b` 只退一层：不把 RC 从 setlocal 里带出来，调用方
+        （计划任务、包装脚本）永远看到 0，于是"端口上已经有一个实例"被当成
+        "启动成功"。
+        """
+        self.assertIn('set "RC=%ERRORLEVEL%"', self.text)
+        self.assertIn("exit /b %RC%", self.text)
+
+    def test_it_says_something_when_python_is_missing(self):
+        self.assertIn("was not found", self.text)
+        self.assertIn("python.org", self.text)
+        self.assertIn('set "RC=1"', self.text)
+
+    def test_remote_flag_binds_all_interfaces_and_keeps_the_user_host(self):
+        """`--lan` / `--remote` 只是把两件事拼起来的短写法。
+
+        `--remote` 要同时绑 0.0.0.0 并起隧道；但用户自己写了 `--host` 时
+        不能再补一个——两个 `--host` 争同一个参数位，后一个会盖掉前一个，
+        症状是"我明明写了只监听回环，它还是开在网卡上"。
+        """
+        self.assertIn('if /i "%~1"=="--lan"', self.text)
+        self.assertIn('if /i "%~1"=="--remote"', self.text)
+        self.assertIn('if /i "%~1"=="--tunnel"', self.text)
+        self.assertIn('if defined LAN if not defined HAVE_HOST', self.text)
+        self.assertIn("0.0.0.0", self.text)
+
+    def test_the_tunnel_is_started_from_the_script_that_already_knows_the_port(self):
+        """隧道对端连的始终是 127.0.0.1:<端口>。
+
+        端口改成 9000 时要跟着改的正是这一处：不然隧道连到 8787 上，公网
+        地址能打开但对面是 502，看起来像"隧道坏了"。
+        """
+        self.assertIn("tools\\keep_tunnel.py", self.text)
+        self.assertIn("--url-file", self.text)
+        self.assertIn("%TUNNEL_PORT%", self.text)
+
+    def test_a_flag_without_its_value_is_refused_instead_of_swallowed(self):
+        """`start.bat --port` 少了值。
+
+        直接透传的话 deploy/start.py 会拿 `--host` 当 `--port` 的值，报一句
+        "端口不是数字：--host"，把人指向错误的方向。
+        """
+        self.assertIn("goto missing_value", self.text)
+        self.assertIn(":missing_value", self.text)
+
+    @unittest.skipUnless(CMD, NO_CMD)
+    def test_the_script_runs_through_the_command_shell(self):
+        """`--help` 能打出来，说明标签跳转与参数机都被 cmd.exe 读懂了。
+
+        静态检查看不出 `goto` 少了冒号、`:gather` 与 `:gathered` 撞名这类
+        写法，而这种脚本看起来与正常脚本一模一样。cwd 故意给系统临时目录：
+        这一条同时验证它自己不依赖调用目录。
+        """
+        completed = subprocess.run([CMD, "/c", self.path, "--help"],
+                                   cwd=tempfile.gettempdir(),
+                                   capture_output=True, timeout=120,
+                                   encoding="utf-8", errors="replace")
+        self.assertEqual(completed.returncode, 0, completed.stderr or "")
+        self.assertIn("--host", completed.stdout, "参数没有交到 start.py")
+
+    @unittest.skipUnless(CMD, NO_CMD)
+    def test_the_argument_machine_rewrites_only_the_flags_it_owns(self):
+        """参数机只认三个自己的旗标，别的一律原样加引号转发。
+
+        这里在临时目录里搭一棵最小的树（假 `deploy/start.py` 只打印 argv、
+        假 `tools/keep_tunnel.py` 只落一份 argv），所以断言的是"壳到底把什么
+        交下去了"，不需要真起控制台。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "deploy"))
+            os.makedirs(os.path.join(tmp, "tools"))
+            shutil.copy(self.path, os.path.join(tmp, "start.bat"))
+            with open(os.path.join(tmp, "deploy", "start.py"), "w",
+                      encoding="utf-8") as handle:
+                handle.write("import json, sys\n"
+                             "print('ARGV=' + json.dumps(sys.argv[1:]))\n")
+            with open(os.path.join(tmp, "tools", "keep_tunnel.py"), "w",
+                      encoding="utf-8") as handle:
+                handle.write("import sys\n"
+                             "open('tunnel-args.txt', 'w', encoding='utf-8')"
+                             ".write(' '.join(sys.argv[1:]))\n")
+
+            def argv_of(*args):
+                completed = subprocess.run(
+                    [CMD, "/c", os.path.join(tmp, "start.bat")] + list(args),
+                    cwd=tmp, capture_output=True, timeout=120,
+                    encoding="utf-8", errors="replace")
+                self.assertEqual(completed.returncode, 0,
+                                 completed.stderr or completed.stdout or "")
+                for line in (completed.stdout or "").splitlines():
+                    if line.startswith("ARGV="):
+                        return json.loads(line[len("ARGV="):])
+                self.fail("start.py 没有被调用：%r" % (completed.stdout,))
+
+            self.assertEqual([], argv_of())
+            self.assertEqual(["--port", "9000"], argv_of("--port", "9000"))
+            self.assertEqual(["--host", "0.0.0.0"], argv_of("--lan"))
+            self.assertEqual(["--port", "9000", "--no-browser", "--host", "0.0.0.0"],
+                             argv_of("--lan", "--port", "9000", "--no-browser"))
+            # 用户自己给了 --host 就不再补第二个。
+            self.assertEqual(["--host", "127.0.0.1"],
+                             argv_of("--host", "127.0.0.1", "--lan"))
+            # 带空格的值不能被再切一次。
+            self.assertEqual(["--db", os.path.join("a b", "c.db")],
+                             argv_of("--db", os.path.join("a b", "c.db")))
+            # 不认识的参数原样过去。
+            self.assertEqual(["--enroll-token", "abc", "--no-auth"],
+                             argv_of("--enroll-token", "abc", "--no-auth"))
+
+    @unittest.skipUnless(CMD, NO_CMD)
+    def test_remote_also_opens_the_tunnel_in_its_own_window(self):
+        """`--remote` 要真的把隧道派出去，且用的是同一个端口。
+
+        隧道在另一个窗口里起（`start`），所以这里等一会儿再读它落的 argv：
+        断言的是"派出去的命令对不对"，而不是"隧道连上没有"——后者取决于网络，
+        不该让测试变红。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "deploy"))
+            os.makedirs(os.path.join(tmp, "tools"))
+            shutil.copy(self.path, os.path.join(tmp, "start.bat"))
+            with open(os.path.join(tmp, "deploy", "start.py"), "w",
+                      encoding="utf-8") as handle:
+                handle.write("pass\n")
+            stamp = os.path.join(tmp, "tunnel-args.txt")
+            with open(os.path.join(tmp, "tools", "keep_tunnel.py"), "w",
+                      encoding="utf-8") as handle:
+                handle.write("import sys\n"
+                             "open(%r, 'w', encoding='utf-8')"
+                             ".write(' '.join(sys.argv[1:]))\n" % stamp)
+            subprocess.run([CMD, "/c", os.path.join(tmp, "start.bat"),
+                            "--remote", "--port", "9311"],
+                           cwd=tmp, capture_output=True, timeout=120,
+                           encoding="utf-8", errors="replace")
+            deadline = time.time() + 30
+            while time.time() < deadline and not os.path.exists(stamp):
+                time.sleep(0.2)
+            self.assertTrue(os.path.exists(stamp), "起了控制台却没起隧道")
+            with open(stamp, encoding="utf-8") as handle:
+                tunnelled = handle.read()
+            self.assertIn("--port 9311", tunnelled,
+                          "隧道连的端口和 --port 不一致：公网地址能打开但对面是 502")
+            self.assertIn("--url-file", tunnelled)
+
+
 class LauncherDocumentationTestCase(unittest.TestCase):
     """启动路径只有一个，文档里那几处必须跟着它走。"""
 
@@ -781,6 +1002,21 @@ class LauncherDocumentationTestCase(unittest.TestCase):
             text = self._text(name)
             self.assertIn("start.sh", text, "%s 里没有新的启动路径" % name)
             self.assertNotIn("start.cmd", text, "%s 还在讲已经删掉的 .cmd" % name)
+
+    def test_windows_gets_the_same_shell_and_the_same_remote_switch(self):
+        """两个壳是同一条路，文档不能只讲 Unix 那一侧。
+
+        只在手册里讲 start.sh 的后果很具体：Windows 用户双击不到它（机器上
+        未必有 sh），于是回去敲 `python deploy\\start.py`，然后发现"远程访问"
+        这件事仍然没人替他拼——`--host 0.0.0.0` 与 `tools/keep_tunnel.py` 两步，
+        少一步就是"手机打不开"。
+        """
+        for name in ("使用手册.md", "README.md", "项目说明.md"):
+            text = self._text(name)
+            self.assertIn("start.bat", text, "%s 没写 Windows 的启动脚本" % name)
+        guide = self._text("使用手册.md")
+        for flag in ("--lan", "--remote", "--tunnel"):
+            self.assertIn(flag, guide, "指南没写 %s 这个短写法" % flag)
 
 
 class TunnelDocumentationTestCase(unittest.TestCase):

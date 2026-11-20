@@ -93,7 +93,8 @@ def main():
     print("包内文件数 %d" % len(names))
     # 关键项抽查
     for k in ["data/pentest.db", "data/secret.key", "data/skills/", "data/tools/",
-              "data/dsh-home/profiles/", "vendor/dsh/node_modules/", "start.sh"]:
+              "data/dsh-home/profiles/", "vendor/dsh/node_modules/",
+              "start.sh", "start.bat"]:
         hit = [n for n in names if n.endswith("/" + k) or k in n and (k.endswith("/") or n.split("/")[-1] == k.split("/")[-1])]
         print("  关键项 %-30s -> %s" % (k, "有 %d 个" % len(hit) if hit else "缺"))
     return 0

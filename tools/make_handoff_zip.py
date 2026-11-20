@@ -83,8 +83,9 @@ INCLUDE_TOP = (
     # 文档
     "使用手册.md", "使用手册.docx", "架构设计.md", "交互规范.md",
     "视觉设计系统.md", "视觉评审.md", "DSH集成说明.md",
-    # 启动入口与版本库约定
-    "start.sh", ".gitignore",
+    # 启动入口与版本库约定（两个壳是同一条路：POSIX 的 start.sh、
+    # Windows 的 start.bat。后者漏了的话，Windows 上双击不到启动入口）
+    "start.sh", "start.bat", ".gitignore",
     # 代码
     "pentestd", "web", "deploy", "tests", "tools", "dsh-plugins",
     # 产品数据（`data/skills/` 是 `data/` 整棵排除之下的例外，见 DATA_KEEP）
