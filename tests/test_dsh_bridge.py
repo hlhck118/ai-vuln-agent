@@ -24,7 +24,9 @@ if ROOT not in sys.path:
 from pentestd import dsh_bridge as br                             # noqa: E402
 from pentestd import dsh_runtime as rt                           # noqa: E402
 
-# 实测：readonly 23 / probe 35 / audit 38 / full 44（full 按操作员计，管理员 47）
+# 实测：readonly 23 / probe 36 / audit 39 / full 45（full 按操作员计，管理员 48）
+# 加 `http_request`（探测档）：probe 35→36，而 audit / full 是累加口径，跟着 38→39、
+# 44→45，管理员侧 47→48。与上面几次一样，这几行必须一次改完。
 # 加 `agent_loop`、`netscan`（都是探测档）时各漏改过一次：代码与 guide.js 都加了，只有这里还写着旧数。
 # 加 `context_search` / `context_decompress` / `context_status`（都是只读档）时又漏了第三次——
 # 这一次是**这一组数本身**没有跟着变：它们漂了整整三项而没有任何地方会红，因为
@@ -33,11 +35,11 @@ from pentestd import dsh_runtime as rt                           # noqa: E402
 # 清空任务队列那次是**反向**的：`clear_finished_jobs` 进了 `policy.ADMIN_TOOLS`（清空任务
 # 队列是跨用户的动作，与 `POST /jobs/clear` 同一条判据），于是操作员的 full 档从 45 掉到
 # 44，而管理员那一侧不动。数字变小同样要改这一行 —— 否则漂移只是换了个方向。
-EXPECTED_COUNTS = {"readonly": 23, "probe": 35, "audit": 38, "full": 44}
+EXPECTED_COUNTS = {"readonly": 23, "probe": 36, "audit": 39, "full": 45}
 
 # 管理员那一档多出来的三个正是 `policy.ADMIN_TOOLS`：单钉操作员那个数会漏掉"某一项被
 # 悄悄挪到管理员侧"这种改动（操作员少了 1、管理员没变，两边都不红）。
-EXPECTED_ADMIN_FULL = 47
+EXPECTED_ADMIN_FULL = 48
 
 
 class _Store:

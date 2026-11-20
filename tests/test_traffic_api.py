@@ -32,9 +32,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from pentestd import httpreplay                                  # noqa: E402
+from pentestd import chat, httpreplay                            # noqa: E402
 from pentestd.server import ControlPlane                         # noqa: E402
 from tests import support                                        # noqa: E402
+
+WEB_DIR = os.path.join(ROOT, "web")
 
 OPERATOR = ("ut-traffic-operator", "Operator-Pass1!")
 # 203.0.113.0/24 是文档保留段（TEST-NET-3）：它不会被路由出去，因此把"作用域外"
@@ -353,3 +355,96 @@ class ReplayUrlTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ------------------------------------------------------ 对话侧的流量生产者
+
+class ChatHttpRequestToolTestCase(unittest.TestCase):
+    """对话里发出去的那条请求，要真的落进「流量」页。
+
+    这条用例守的是一件产品事实，不是一段代码：流量页此前**只有一个写入点**——
+    人在「请求重发」里按下的那一条。模型在对话里用工具打出去的请求（`netscan` 的
+    banner 探测就是）走裸 socket，一条都不进那张表。于是「流量跟随对话实时显示」
+    这件事在页面上表现为「永远只有我手工发的那几条」。
+
+    要验证它，必须断言**两侧**：工具返回里带着 `trafficId`（说明它走了记账那条路），
+    以及库里真的多了一行、且归属落在这个会话上（否则页面上按 `sessionId` 收口时
+    会被过滤掉，看起来和「没记下来」一模一样）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = ThreadingHTTPServer(("127.0.0.1", 0), _Echo)
+        cls.fixture_thread = threading.Thread(target=cls.fixture.serve_forever,
+                                              daemon=True)
+        cls.fixture_thread.start()
+        cls.fixture_port = cls.fixture.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fixture.shutdown()
+        cls.fixture.server_close()
+
+    def setUp(self):
+        self.directory, self.store = support.temporary_store("traffic-chat.db")
+        self.addCleanup(self.directory.cleanup)
+        self.addCleanup(self.store.close)
+        # `probe_scope` 用库层默认（回环 + 私有网段）：这条用例要打的正是回环。
+        self.plane = ControlPlane(self.store, WEB_DIR)
+
+    def call(self, session=None, **args):
+        return chat.HANDLERS["http_request"](self.plane, args, "", session or {})
+
+    def inside(self):
+        return INSIDE % self.fixture_port
+
+    def test_the_catalog_advertises_it_as_a_probe_tool(self):
+        catalog = {item["name"]: item for item in chat.tool_catalog()}
+        self.assertIn("http_request", catalog)
+        self.assertEqual(catalog["http_request"]["level"], "probe")
+        self.assertEqual(sorted(catalog["http_request"]["parameters"]),
+                         ["body", "headers", "method", "timeout", "url"])
+
+    def test_a_request_sent_in_chat_lands_in_the_traffic_table(self):
+        """工具返回的 `trafficId` 必须能在库里查到，且归属这条会话。"""
+        session = {"sessionId": "C-here", "userId": "u-1"}
+        result = self.call(session=session, url=self.inside(),
+                           headers={"X-Probe": "yes"})
+        self.assertTrue(result["data"]["trafficId"].startswith("X-"),
+                        result["data"]["trafficId"])
+        rows = self.store.list_traffic(session_id="C-here")
+        self.assertEqual([row["id"] for row in rows], [result["data"]["trafficId"]])
+        self.assertEqual(rows[0]["method"], "GET")
+        self.assertEqual(rows[0]["status"], 200)
+        self.assertEqual(rows[0]["userId"], "u-1")
+        # 列表默认摘正文（`with_body=False`），原文要从详情那条取。
+        detail = self.store.get_traffic(rows[0]["id"])
+        self.assertIn("GET /hello", detail["responseBody"])
+
+    def test_the_same_request_is_invisible_to_another_session(self):
+        """收口是「这一条对话」：别的会话不该看到它，否则页面又变成大杂烩。"""
+        self.call(session={"sessionId": "C-here"}, url=self.inside())
+        self.assertEqual(self.store.list_traffic(session_id="C-elsewhere"), [])
+
+    def test_a_failed_send_is_still_recorded(self):
+        """连不上也要留一条：`error` 非空才是「我发过」的证据。"""
+        result = self.call(session={"sessionId": "C-here"},
+                           url="http://127.0.0.1:1/", timeout=3)
+        self.assertEqual(result["data"]["status"], 0)
+        self.assertTrue(result["data"]["error"])
+        rows = self.store.list_traffic(session_id="C-here")
+        self.assertEqual(len(rows), 1, rows)
+        self.assertTrue(rows[0]["error"])
+
+    def test_an_address_outside_the_scope_is_refused_before_connecting(self):
+        """门禁在 `httpreplay` 那一层，和「请求重发」共用；越界要报成 ValueError。"""
+        with self.assertRaises(ValueError) as caught:
+            self.call(session={"sessionId": "C-here"}, url=OUTSIDE)
+        self.assertIn("作用域", str(caught.exception))
+        self.assertEqual(self.store.list_traffic(), [])
+
+    def test_no_session_still_records_under_the_empty_session(self):
+        """没有会话（CLI / 脚本化调用）不该炸，只是这一行落进「没有会话」里。"""
+        result = self.call(url=self.inside())
+        self.assertTrue(result["data"]["trafficId"])
+        self.assertEqual(len(self.store.list_traffic()), 1)

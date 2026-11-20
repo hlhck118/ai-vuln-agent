@@ -583,7 +583,10 @@ def build_index(included, skipped, label, counts, diff=None, prev_name=None) -> 
         "（`d1.py`–`d5.py` 章节内容、`render.py` 渲染器、`base.docx` 模板）、"
         "架构决策记录（ADR）、集成说明。重建 docx 需 `pip install python-docx`，"
         "**不是工作台的运行依赖** |",
-        "| `tools/cloudflared.exe` | 隧道用的 Cloudflare 客户端（54 MB，随包分发以免接收方另行下载） |",
+        "| `tools/keep_tunnel.py` | 让外网打开控制台的 SSH 反向隧道守护（默认 serveo 的 443），"
+        "用法见 §4.5.2 |",
+        "| `tools/cloudflared.exe` | Cloudflare 隧道客户端（54 MB，随包分发以免接收方另行下载）；"
+        "本机链路上快速隧道拿到的地址全程 530，**对外走 keep_tunnel.py** |",
         "",
         "## 本包**故意不含**的内容",
         "",

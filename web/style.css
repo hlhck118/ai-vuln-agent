@@ -2637,8 +2637,8 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); background-clip: padding-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
-/* 两处**自带滚动、但不画滚动条**的容器（t97，使用者原话「隐藏输入框和浮层中的滚动条」）：
-   输入框在文字超过四行时滚、坞在卡片超过一行时滚。两者都是"内容溢出"的地方，不是
+/* 三处**自带滚动、但不画滚动条**的容器（t97，使用者原话「隐藏输入框和浮层中的滚动条」）：
+   输入框在文字超过四行时滚、坞在卡片超过一行时滚。三者都是"内容溢出"的地方，不是
    "可导航的长列表"——记录区那种滚动条留着才是有用的信息，这两条只是多出来的一条边。
    ⚠️ 必须与元素自身的 `scrollbar-width: none` **成对**写，缺一半都不完整：只有
    webkit 伪元素，Firefox 会画一条细杠；只有 `scrollbar-width`，本机 Edge 仍按上面
@@ -2651,12 +2651,16 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    长到 96px 上限之后框内滚）。同一类东西、同一条理由：Chromium 的经典滚动条是**布局**
    滚动条，吃掉的是 11px 文字行宽（长候选因此多折一行）；而它画在面板的圆角边框以内，
    看着像"框里又套了一根棍"。
-   ⚠️ 四条选择器**必须留在同一条规则里**：拆成几条同特异性的分组，谁盖谁只看源码顺序，
+   ⚠️ t110 又加进一处（使用者原话「悬浮框隐藏滚动条」）：待批浮层 `.chat-review`
+   （`max-height: min(52vh, 460px)` 之后自己滚）。它与坞、选项面板同一形态——浮在
+   输入卡片上沿的一条带，11px 的竖杠正好压在这条带上，看着像"框里又套了一个框"。
+   ⚠️ 五条选择器**必须留在同一条规则里**：拆成几条同特异性的分组，谁盖谁只看源码顺序，
    症状是"只有其中一处没有滚动条"（t40 在 `.tab-entry` 上正是这么踩的）。 */
 .chat-input::-webkit-scrollbar,
 .chat-quick::-webkit-scrollbar,
 .chat-choice::-webkit-scrollbar,
-.chat-choice-other-input::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.chat-choice-other-input::-webkit-scrollbar,
+.chat-review::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 @media (max-width: 1100px) {
   /* 这里原本有一条 `.side-panel { width: 300px; flex-basis: 300px }`。
@@ -3596,6 +3600,12 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   margin: 0 0 var(--sp-3);
   max-height: min(52vh, 460px);
   overflow-y: auto;
+  /* t110：自带滚动、但不画滚动条——与上面那条 `::-webkit-scrollbar` 分组规则成对写，
+     缺一半都不完整（只有伪元素 Firefox 还画细杠；只有这一条本机 Edge 仍留 11px 位）。 */
+  scrollbar-width: none;
+  /* t110：指针落在这一层时滚轮只滚它自己。此前只写了 `overflow-y: auto`，
+     浮层滚到底之后余下的滚轮量会**链式传给下面的记录区**——浮层还开着、底下的对话
+     已经翻到别处，看起来像"面板自己在跳"。`.chat-choice` 早就有这一条，三张浮层一致。 */
   overscroll-behavior: contain;
 }
 /* 作者样式的 `display: flex` 会盖掉 UA 给 `[hidden]` 的那条 `display: none`，
@@ -4266,6 +4276,12 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
      ⚠️ 封顶与"只装一行"的算式不含这条滚动条：`clientHeight` 从 110 变 110
      （112 − 上下 2px 描边），行高与"完整可见 3 张"都没有动。 */
   scrollbar-width: none;
+  /* t110：鼠标划过就能滚，不必先点一下把焦点放进坞里。
+     Chromium 本来自带这一半（指针在 `overflow-y: auto` 的元素上，滚轮直接滚它），
+     缺的是另一半：**滚到底之后余量会传给下层**。坞与待批浮层底下就是记录区，
+     用户滚坞滚到头忽然开始滚对话，会当成"坞在乱跳"。`contain` 把余量截在这一层里。
+     三张浮层（坞、待批、选项面板）写法一致。 */
+  overscroll-behavior: contain;
   /* ⚠️ t93：**脱出文档流，浮在卡片上沿之上**。此前它是 `.chat-compose` 的 flex
      子项（排在卡片前面、在卡片里往上长），而那被卡片整块盖住：卡片用
      `margin-top: calc(-1 * var(--chat-overlap))` 往上叠进记录区，坞只要还在流里
@@ -5303,6 +5319,39 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .accent-dot.is-none { background: none; border-style: dashed; border-color: var(--muted); }
 /* 磨砂档位的说明行。当前主题不用材质时要明说，否则"换了没反应"会被读成坏了。 */
 .frost-note-inline { color: var(--muted); font-size: var(--fs-caption); }
+
+/* ---- 透明度：一条滑块 ----
+ *
+ * 与前两组不同，这一项的量是连续的，所以不用胶囊档位。滑块本身只写一条规则：
+ * 原生 input[type=range] 在五套主题下各自带着**浏览器的**默认配色（Edge 是深蓝、
+ * 纸感下那个蓝色配白底还行、终端主题下就成了一条突兀的亮杠），必须整条接管。
+ *
+ * 轨道用 --panel-3 而不是 --border：这一行本身就长在卡片（--panel-2）上，
+ * 用描边色只画得出一条发丝，拇指小到读不出"我现在能拖它"。 */
+.alpha-row { display: flex; align-items: center; gap: var(--sp-2); }
+.alpha-range {
+  flex: 1 1 auto; min-width: 0; width: 100%; height: 22px; margin: 0;
+  background: transparent; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+}
+.alpha-range::-webkit-slider-runnable-track {
+  height: 6px; border-radius: var(--r-pill);
+  background: var(--panel-3); border: 1px solid var(--border);
+}
+.alpha-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; margin-top: -6px; border-radius: 50%;
+  background: var(--accent); border: 1px solid var(--accent-dim);
+}
+.alpha-range::-moz-range-track {
+  height: 6px; border-radius: var(--r-pill);
+  background: var(--panel-3); border: 1px solid var(--border);
+}
+.alpha-range::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent); border: 1px solid var(--accent-dim);
+}
+.alpha-range:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* 设置页里的折叠块（插件操作记录）。
    形状与对话侧栏那几块**完全一致**：`[data-fold-part]` 容器 + 一个

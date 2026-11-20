@@ -242,8 +242,9 @@
     clear(host);
     if (!records.length) {
       host.append(emptyBlock(compact
-        ? '这条对话还没有手工请求。'
-        : '这条对话还没有发出去过手工请求。到「请求重发」发一条，这里就会出现。'));
+        ? '这条对话还没有请求记录。'
+        : '这条对话还没有请求记录。在「请求重发」发一条，或让模型在对话里用 '
+        + 'http_request 打一条，这里就会出现。'));
       return;
     }
     const columns = compact ? ['时间', '地址'] : ['时间', '方法', '地址', '状态', '耗时', ''];

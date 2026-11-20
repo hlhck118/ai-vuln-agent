@@ -100,6 +100,8 @@
       themeNote: byId('theme-note'),
       accentRow: byId('accent-row'), accentNote: byId('accent-note'),
       frostRow: byId('frost-row'), frostNote: byId('frost-note'),
+      alphaRange: byId('alpha-range'), alphaValue: byId('alpha-value'),
+      alphaNote: byId('alpha-note'),
       policyList: byId('policy-list'), policyCurrent: byId('policy-current'),
       policyNote: byId('policy-note'), policyMessage: byId('policy-message'),
       hubMeta: byId('hub-meta'), hubQuery: byId('hub-query'),
@@ -1463,7 +1465,40 @@
     }
   }
 
+  /** 透明度：一条 0-100 的滑块。
+   *
+   *  为什么是滑块而不是像上面三组那样排一排胶囊：这一项的量是**连续**的。"再来一点"
+   *  是它唯一有意义的用法，切成五档会让人在相邻两档之间反复横跳、却总差那么一点。
+   *  代价是它没有"当前档叫什么"可显示，所以数字必须实时跟着走——否则拖完之后
+   *  界面变了、可它到底调到了多少没人知道（刷新之后也未必记得）。
+   *
+   *  input 事件而不是 change：拖的过程中就要看见变化。这一项只写五个内联自定义属性，
+   *  没有布局重排（面令牌被引用的地方都是颜色），每帧一次的开销可以接受。 */
+  function renderAlpha() {
+    if (!dom.alphaRange || !window.PentestTheme) return;
+    const T = window.PentestTheme;
+    const value = T.alpha();
+    dom.alphaRange.value = String(value);
+    dom.alphaRange.setAttribute('aria-valuetext', value + '%');
+    if (dom.alphaValue) dom.alphaValue.textContent = value + '%';
+    if (dom.alphaNote) {
+      dom.alphaNote.textContent = '只调卡片、侧栏、坞这些底的透明程度，不动文字色，'
+        + '也不动窗口底——调到 0 时内容仍然读得出来，只是背后的壁纸透不进来。'
+        + '和主题一样只存在这台机器的浏览器里。';
+    }
+  }
+
   function bindAppearanceEvents() {
+    if (dom.alphaRange) {
+      dom.alphaRange.addEventListener('input', () => {
+        if (!window.PentestTheme) return;
+        const value = window.PentestTheme.applyAlpha(dom.alphaRange.value);
+        // 只更新数字与 aria，不重画整行：重画会把正在拖的滑块从手底下换掉，
+        // 拖动当场中断（Firefox 上尤其明显）。
+        if (dom.alphaValue) dom.alphaValue.textContent = value + '%';
+        dom.alphaRange.setAttribute('aria-valuetext', value + '%');
+      });
+    }
     if (dom.accentRow) {
       dom.accentRow.addEventListener('click', (event) => {
         const chip = event.target.closest ? event.target.closest('[data-accent-id]') : null;
@@ -3101,11 +3136,13 @@
     renderThemes();
     renderAccents();
     renderFrosts();
+    renderAlpha();
     renderHubInstalled(null);
   }
 
   window.PentestSettings = { init, load, reload, ensureLoaded, onSignedOut, renderUsers,
                              renderAgentModes, renderThemes, renderAccents, renderFrosts,
+                             renderAlpha,
                              showGroup, enter: () => showGroup(view.group),
                              loadHubInstalled, searchHub };
 })();

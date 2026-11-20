@@ -1,30 +1,34 @@
 'use strict';
 /* ============================================================================
- * 外观 —— 主题 / 重点色 / 磨砂的**唯一真相**
+ * 外观 —— 主题 / 重点色 / 磨砂 / 透明度的**唯一真相**
  *
- * 三件事各自一个属性，都落在 <html> 上，由 CSS 各自消费：
+ * 四件事各自一个属性，都落在 <html> 上；前三件由 CSS 各自消费，第四件由本文件算：
  *
  *   data-theme   五套主题        （style.css 1a 节）
  *   data-accent  重点色六档      （style.css 1b 节）
  *   data-frost   磨砂四档        （style.css 1c 节）
+ *   data-alpha   面的不透明度    （**没有 CSS 块**，见下面「透明度」一段）
  *
- * 为什么是三个独立的属性而不是一个"外观"对象：这三项**互不依赖**——换主题不该重置
- * 重点色，调磨砂不该重置主题。合成一个对象之后，任何一次写入都要先读回另外两项，
- * 而"读回"这一步在首屏（那三行内联脚本）里根本不存在。
+ * 为什么是四个独立的属性而不是一个"外观"对象：这四项**互不依赖**——换主题不该重置
+ * 重点色，调磨砂不该重置主题，调透明度前两项都不该动。合成一个对象之后，任何一次
+ * 写入都要先读回另外几项，而"读回"这一步在首屏（那段内联脚本）里根本不存在。
  *
  * 三处消费者必须共用这一份定义，否则会出现"列表里能选、选了没反应"这类最难查的
  * 不一致：
  *
- *   1. index.html <head> 里的内联脚本 —— **首屏之前**就把这三个属性落到 <html>。
+ *   1. index.html <head> 里的内联脚本 —— **首屏之前**就把属性落到 <html>。
  *      它不能引用本文件：那要多一次网络往返，而多出来的那一帧就是整页白闪
  *      （深色主题的用户每次刷新都会被闪一下浅色底，这正是"主题功能做了一半"的观感）。
  *      两边靠同一组常量对齐，契约测试逐字比对。
- *   2. 设置页「外观」分组 —— 渲染三组可选项与实时预览。
- *   3. 任何需要知道"现在是哪一档"的地方 —— 读 current() / accent() / frost()。
+ *   2. 设置页「外观」分组 —— 渲染三组可选项、一条透明度滑块与实时预览。
+ *   3. 任何需要知道"现在是哪一档"的地方 —— 读 current() / accent() / frost() /
+ *      alpha()。
  *
- * 取值全在 style.css 的 1a-1c 节。本文件**只认 id 和展示信息**，不复制颜色：
+ * 前三轴的取值全在 style.css 的 1a-1c 节。本文件**只认 id 和展示信息**，不复制颜色：
  * 复制过来的颜色迟早会和 CSS 漂移，而症状是"预览卡片和点下去的样子不一样"。
  * 唯一需要的色值是最下面那些预览点，它们有契约测试盯着与 CSS 核对。
+ * 透明度一轴连 id 都不认——它读的就是 1a 节里那几个面令牌的**原值**，算完再写回去，
+ * 所以它永远跟着主题走，换主题不需要在这里复制一份新的色号。
  * ==========================================================================*/
 window.PentestTheme = (function () {
   const STORAGE_KEY = 'pentest.theme';
@@ -38,6 +42,21 @@ window.PentestTheme = (function () {
   const FROST_KEY = 'pentest.frost';
   const FROST_ATTR = 'data-frost';
   const DEFAULT_FROST = 'theme';
+
+  /* 透明度。**唯一一轴没有 CSS 块**，而且它不能有：面令牌（--panel 一族）在
+   * style.css 里是 hex 或 rgba 字面量，CSS 里没有"把这个颜色整体乘 0.6"的写法
+   * （color-mix 只能在一层里混，而且它会把取值变成颜色解析器读不懂的表达式——
+   * tests/test_theme.py 的 _color() 只认 hex / rgb() / rgba() / var 链）。
+   *
+   * 所以这一轴的值由本文件在运行时算：读回 CSS 里的原值 → 按百分比乘 alpha →
+   * **内联**写回 <html>。内联优先级最高，消费面令牌的那一百多处一处都不用改。
+   *
+   * 只乘面令牌，**不动 --bg**：窗口底必须始终不透明，否则 0% 时桌面会从整页底下
+   * 透出来，界面变成一团糊。原值本来就带 alpha 的（玻璃 .58）按比例再乘一次。 */
+  const ALPHA_KEY = 'pentest.alpha';
+  const ALPHA_ATTR = 'data-alpha';
+  const DEFAULT_ALPHA = 100;
+  const ALPHA_TOKENS = ['--panel', '--panel-2', '--panel-3', '--code-bg', '--overlay'];
 
   /* 每套主题一句话说清**它为什么存在**，而不只是它什么颜色：
    * 使用者要选的是"我现在的处境"（亮环境、投影仪、整天泡终端），不是色号。
@@ -141,6 +160,17 @@ window.PentestTheme = (function () {
   function normalizeAccent(value) { return accentIds.indexOf(value) >= 0 ? value : DEFAULT_ACCENT; }
   function normalizeFrost(value) { return frostIds.indexOf(value) >= 0 ? value : DEFAULT_FROST; }
 
+  /** 透明度是 0..100 的整数。滑块与 localStorage 给的都可能是空串或字母，
+   *  parseInt 之后 NaN 由 isFinite 拦住——不收敛的话，坏值会让 paintAlpha 算出
+   * NaN 写进 style，那个属性整条失效，看起来就是"拖了没反应"。 */
+  function normalizeAlpha(value) {
+    const num = parseInt(value, 10);
+    if (!isFinite(num)) return DEFAULT_ALPHA;
+    if (num < 0) return 0;
+    if (num > 100) return 100;
+    return num;
+  }
+
   /** localStorage 在隐私模式、被企业策略禁用时会**读写即抛**。
    *  这里漏一个 try，整页会因为一份"上次选了哪套主题"的偏好而启动失败，
    *  而症状与主题毫无关系——排查要花很久。 */
@@ -176,20 +206,27 @@ window.PentestTheme = (function () {
     return frostIds.indexOf(attr) >= 0 ? attr : DEFAULT_FROST;
   }
 
+  function alpha() {
+    return normalizeAlpha(document.documentElement.getAttribute(ALPHA_ATTR));
+  }
+
   /** 当前主题是亮色还是深色。重点色预览与「亮色」标签都读它。 */
   function mode() {
     const theme = get(current());
     return theme ? theme.mode : 'dark';
   }
 
-  /** 把三项落到 <html> 上。这是唯一改 DOM 的入口。
+  /** 把主题落到 <html> 上。
    *
-   *  三件事共用一个入口，是为了让"通知监听者"只发生一次——分开三个入口的话，
-   *  一次"换成纸感 + 青 + 关磨砂"会触发三次回调，而每个回调都要重画一遍列表。 */
+   *  换主题要把透明度**重算一遍**：面令牌的原值跟着主题走（玻璃是 rgba，纸感是
+   *  hex），而内联写回的是"原值 × 百分比"，所以原值一变，写回的那份就过期了。
+   *  不重算的症状很具体：在 60% 下从玻璃切到纸感，面还是玻璃那份半透明色，
+   *  而设置页的滑块仍停在 60%——两个地方各自看都对。 */
   function apply(id, options) {
     const next = normalize(id);
     document.documentElement.setAttribute(ATTR, next);
     if (!options || options.persist !== false) writeStored(STORAGE_KEY, next);
+    paintAlpha(alpha());
     notify(next);
     return next;
   }
@@ -209,8 +246,76 @@ window.PentestTheme = (function () {
     return next;
   }
 
+  /** 把一行颜色文本拆成 [r, g, b, a]。只认 hex（三位 / 六位）、rgb()、rgba()——
+   *  style.css 1a 节里出现过的就这三种。认不出来返回 null，调用方跳过这个令牌，
+   *  而不是写一个坏值把整条自定义属性作废（那会静默回落成 initial，比不生效更难查）。
+   *
+   *  为什么自己解：自定义属性**不会**被解析成计算色，getPropertyValue 拿回来的
+   *  就是作者写的那串字面量原文。 */
+  function parseColor(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+    if (raw.charAt(0) === '#') {
+      let hex = raw.slice(1);
+      if (hex.length === 3) {
+        hex = hex.charAt(0) + hex.charAt(0) + hex.charAt(1) + hex.charAt(1)
+            + hex.charAt(2) + hex.charAt(2);
+      }
+      if (hex.length !== 6) return null;
+      const num = parseInt(hex, 16);
+      if (!isFinite(num)) return null;
+      return [(num >> 16) & 255, (num >> 8) & 255, num & 255, 1];
+    }
+    const match = raw.match(/^rgba?\(([^)]*)\)$/);
+    if (!match) return null;
+    const parts = match[1].split(/[\s,\/]+/).filter((one) => one.length > 0);
+    if (parts.length < 3) return null;
+    const rgb = parts.slice(0, 3).map((one) => {
+      const num = parseFloat(one);
+      return isFinite(num) ? num : 0;
+    });
+    const last = parts.length > 3 ? parseFloat(parts[3]) : 1;
+    return [rgb[0], rgb[1], rgb[2], isFinite(last) ? last : 1];
+  }
+
+  /** 把透明度落到面令牌上。**读的是 CSS 原值，不是上次算出来的结果**。
+   *
+   *  顺序是刻意的：先摘掉自己的内联值，再读，最后写。若从当前值读，拖滑块时每一帧
+   *  都会在上一帧的结果上再乘一次（100→60 变成 0.6 的等比衰减，很快就不透了），
+   *  而症状是"拖到底和拖到一半看起来一样"。
+   *
+   *  100% 时**什么都不写**：把 CSS 原值抄成内联等于钉住一份拷贝，主题换色时那份拷贝
+   *  不跟着走。撤掉内联之后又回到 CSS 的层叠，换主题自动生效。 */
+  function paintAlpha(percent) {
+    const root = document.documentElement;
+    ALPHA_TOKENS.forEach((token) => { root.style.removeProperty(token); });
+    const value = normalizeAlpha(percent);
+    if (value >= 100) return;
+    const scale = value / 100;
+    const computed = window.getComputedStyle(root);
+    const original = ALPHA_TOKENS.map((token) => [token, parseColor(computed.getPropertyValue(token))]);
+    original.forEach((pair) => {
+      const token = pair[0];
+      const color = pair[1];
+      if (!color) return;
+      root.style.setProperty(token, 'rgba(' + color[0] + ', ' + color[1] + ', ' + color[2]
+        + ', ' + (color[3] * scale).toFixed(3) + ')');
+    });
+  }
+
+  /** 透明度唯一入口。**不 notify**：它不改配色，也没有哪一处要跟着重画
+   *  （设置页自己调完就重画滑块那一行）。与 applyFrost 同理。 */
+  function applyAlpha(percent, options) {
+    const next = normalizeAlpha(percent);
+    document.documentElement.setAttribute(ALPHA_ATTR, String(next));
+    if (!options || options.persist !== false) writeStored(ALPHA_KEY, String(next));
+    paintAlpha(next);
+    return next;
+  }
+
   /* 主题切换**不需要重绘任何东西**：图谱是 SVG + CSS，没有 canvas，也没有哪处
-   * 用 getComputedStyle 把颜色读进 JS。通知只是给"想跟着变"的模块留的口子
+   * 用 getComputedStyle 把颜色读进 JS（唯一一处是上面的透明度重算，那是它自己的
+   * 职责）。通知只是给"想跟着变"的模块留的口子
    * ——重点色预览的色块要在主题明暗换边时重画，它是目前唯一的订阅者。 */
   function notify(id) {
     listeners.forEach((fn) => {
@@ -234,7 +339,11 @@ window.PentestTheme = (function () {
   /** 启动时对齐一次。内联脚本正常情况下已经做过同样的事，这里是**兜底**：
    *  内联脚本被 CSP 拦掉、或 <head> 里那段被谁删了，DOM 上就没有属性，
    *  于是 CSS 回落到 :root（午夜外观）而 current() 报"液态玻璃"——两边说法不一致，
-   *  设置页会显示成没选中任何一项。这里把三个属性拉回来，代价是三次属性写入。 */
+   *  设置页会显示成没选中任何一项。这里把四个属性拉回来，代价是四次属性写入。
+   *
+   *  透明度**总是重算**，不做"属性一样就跳过"的批发：内联脚本只写得了属性，
+   *  写不了内联的令牌值（那要等样式表解析完）。所以 init() 里这一遍是页面生命
+   *  周期中第一次真正把透明度作用到面令牌上——跳过它就等于刷新之后透明度失效。 */
   function init() {
     if (document.documentElement.getAttribute(ATTR) !== normalize(readStored(STORAGE_KEY))) {
       apply(readStored(STORAGE_KEY), { persist: false });
@@ -245,11 +354,15 @@ window.PentestTheme = (function () {
     if (document.documentElement.getAttribute(FROST_ATTR) !== normalizeFrost(readStored(FROST_KEY))) {
       applyFrost(readStored(FROST_KEY), { persist: false });
     }
+    if (document.documentElement.getAttribute(ALPHA_ATTR) !== String(alpha())) {
+      document.documentElement.setAttribute(ALPHA_ATTR, String(alpha()));
+    }
+    paintAlpha(alpha());
     return current();
   }
 
   return {
-    /* 三项对齐锚点：内联脚本与契约测试都按这些名字比对 */
+    /* 四项对齐锚点：内联脚本与契约测试都按这些名字比对 */
     STORAGE_KEY: STORAGE_KEY,
     ATTR: ATTR,
     DEFAULT_ID: DEFAULT_ID,
@@ -259,6 +372,10 @@ window.PentestTheme = (function () {
     FROST_KEY: FROST_KEY,
     FROST_ATTR: FROST_ATTR,
     DEFAULT_FROST: DEFAULT_FROST,
+    ALPHA_KEY: ALPHA_KEY,
+    ALPHA_ATTR: ALPHA_ATTR,
+    DEFAULT_ALPHA: DEFAULT_ALPHA,
+    ALPHA_TOKENS: ALPHA_TOKENS,
     THEMES: THEMES,
     ACCENTS: ACCENTS,
     FROSTS: FROSTS,
@@ -271,13 +388,16 @@ window.PentestTheme = (function () {
     normalize: normalize,
     normalizeAccent: normalizeAccent,
     normalizeFrost: normalizeFrost,
+    normalizeAlpha: normalizeAlpha,
     current: current,
     accent: accent,
     frost: frost,
+    alpha: alpha,
     mode: mode,
     apply: apply,
     applyAccent: applyAccent,
     applyFrost: applyFrost,
+    applyAlpha: applyAlpha,
     subscribe: subscribe,
     init: init,
   };

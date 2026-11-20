@@ -384,6 +384,20 @@ class ThemeContractTestCase(unittest.TestCase):
         match = re.search(r"const %s = \[(.*?)\n  \];" % name, self._js, flags=re.S)
         self.assertTrue(match, "theme.js 里找不到清单 %s" % name)
         return re.findall(r"id:\s*'([^']+)'", match.group(1))
+    def _module_tokens(self, name: str) -> list:
+        """theme.js 里某个令牌清单（`const X = ['--a', '--b'];`）。"""
+        match = re.search(r"const %s = \[([^\]]*)\]" % name, self._js)
+        self.assertTrue(match, "theme.js 里找不到清单 %s" % name)
+        return re.findall(r"'([^']+)'", match.group(1))
+
+    def _html_tokens(self, name: str) -> list:
+        """首屏内联脚本里某个令牌清单（同样的 `var X = ['--a', ...]`）。
+
+        首屏那段是**独立的一份**，不是 theme.js 的引用（引用要多一次往返，
+        那一次往返就是整页白闪）——两份定义只能靠这里比对。"""
+        match = re.search(r"var %s = \[([^\]]*)\]" % name, self._html)
+        self.assertTrue(match, "首屏脚本里找不到清单 %s" % name)
+        return re.findall(r"'([^']+)'", match.group(1))
 
     def test_inline_script_agrees_with_the_module_on_all_three_axes(self):
         """首屏那段内联脚本与 theme.js 的常量必须完全一致。
@@ -427,6 +441,72 @@ class ThemeContractTestCase(unittest.TestCase):
         self.assertLess(self._html.index("apply('data-accent'"),
                         self._html.index('href="style.css"'),
                         "首屏外观脚本必须在 <link rel=stylesheet> 之前")
+    def test_the_alpha_axis_is_wired_the_same_way_in_both_places(self):
+        """透明度这一轴没有 CSS 块，所以两处代码（首屏内联 / theme.js）必须逐字对齐。
+
+        它和上面三条轴的区别在于：那三条改的是**属性**，CSS 自己认；透明度改的是
+        五个令牌的**内联值**，CSS 里一个字都没有。也就是说这里对不上时，没有任何
+        一处声明会报错——症状只是"刷新之后回到 100%"。而且两段代码各自看都对：
+        内联那段先写属性、等样式表解析完再补令牌值；theme.js 的 init() 兜底再算一遍。
+        所以只能靠逐字比对。
+        """
+        key = self._module_const("ALPHA_KEY")
+        attr = self._module_const("ALPHA_ATTR")
+        tokens = self._module_tokens("ALPHA_TOKENS")
+        self.assertEqual(attr, "data-alpha", "属性名以 DOM 上的写法为准")
+        self.assertTrue(key.startswith("pentest."), "存储键沿用 pentest.* 前缀：%s" % key)
+        # 首屏那段是自己写的一份（它读不了 theme.js），三样都得在。
+        self.assertIn("'%s'" % key, self._html, "首屏脚本没有用同一个存储键")
+        self.assertIn("'%s'" % attr, self._html, "首屏脚本没有落同一个属性名")
+        self.assertEqual(sorted(self._html_tokens("TOKENS")), sorted(tokens),
+                         "首屏脚本的令牌清单与 theme.js 的 ALPHA_TOKENS 不一致")
+
+    def test_the_alpha_axis_never_touches_the_window_floor(self):
+        """透明度只乘"面上的那几层"，**不许动 --bg**。
+
+        --bg 是窗口底。它一旦跟着调，0% 时整页背后就是桌面的壁纸，文字浮在半空——
+        那时"调淡一点好读"的初衷正好反过来。同理不许动文字色与 --border：
+        淡的是底，不是墨。
+        """
+        tokens = self._module_tokens("ALPHA_TOKENS")
+        self.assertEqual(sorted(tokens),
+                         sorted(["--panel", "--panel-2", "--panel-3",
+                                 "--code-bg", "--overlay"]),
+                         "透明度能改的令牌清单变了，先想清楚文字还能不能读")
+        for banned in ("--bg", "--text", "--text-dim", "--muted", "--border"):
+            self.assertNotIn(banned, tokens, "透明度不得改动 %s" % banned)
+
+    def test_the_alpha_painter_reads_the_css_value_not_its_own_last_result(self):
+        """先摘内联、再读、最后写——顺序反了就是等比衰减。
+
+        从"当前值"读的话，拖滑块时每一帧都在上一帧的结果上再乘一次（100→60 一路
+        乘成 0.6 的幂），而症状是"拖到底和拖到一半看起来一样"，看着像滑块坏了。
+        这条只能靠源码顺序核：两种写法都能跑，跑起来都"有反应"。
+        """
+        start = self._js.index("function paintAlpha(")
+        body = self._js[start:self._js.index("\n  }", start)]
+        self.assertIn("removeProperty", body, "paintAlpha 必须先摘掉自己的内联值")
+        self.assertLess(body.index("removeProperty"), body.index("getComputedStyle"),
+                        "必须先 removeProperty 再 getComputedStyle")
+        self.assertIn("parseColor", body, "令牌原值要通过 parseColor 解析")
+        # 100% 时不写内联（写一份拷贝会钉住主题换色时该跟着走的值）。
+        self.assertIn(">= 100", body, "100% 时必须直接返回，不写内联")
+
+    def test_switching_the_theme_repaints_the_alpha(self):
+        """换主题要把透明度重算一遍：面令牌的原值跟着主题走（玻璃是 rgba、纸感是 hex），
+        内联写回的是"原值 × 百分比"，原值一变那份就过期了。
+
+        漏掉的症状很具体：60% 下从玻璃切到纸感，面还是玻璃那份半透明色，而设置页的
+        滑块仍停在 60%——两处各自看都对。
+        """
+        start = self._js.index("function apply(id, options)")
+        body = self._js[start:self._js.index("\n  }", start)]
+        self.assertIn("paintAlpha(alpha())", body, "apply() 里换完主题要重算透明度")
+        # init() 也必须无条件算一次：内联脚本只写得了属性，写不了内联令牌值。
+        init_start = self._js.index("function init()")
+        init_body = self._js[init_start:self._js.index("\n  }", init_start)]
+        self.assertIn("paintAlpha(alpha())", init_body,
+                      "init() 必须无条件重算，否则刷新之后透明度失效")
 
     def test_theme_module_survives_a_hostile_localstorage(self):
         """localStorage 读取即抛时不能把整页带崩（隐私模式、企业策略）。
@@ -721,10 +801,11 @@ class ThemeContractTestCase(unittest.TestCase):
         只加数据不加渲染，症状是"设置页里少了一组"——而它看起来像"这一版没做那个功能"，
         不像 bug。
         """
-        for hook in ("accent-row", "accent-note", "frost-row", "frost-note"):
+        for hook in ("accent-row", "accent-note", "frost-row", "frost-note",
+                     "alpha-range", "alpha-value", "alpha-note"):
             self.assertIn('id="%s"' % hook, self._html, "index.html 缺少 #%s" % hook)
             self.assertIn("byId('%s')" % hook, self._settings, "设置页没有取到 #%s" % hook)
-        for fn in ("renderAccents", "renderFrosts"):
+        for fn in ("renderAccents", "renderFrosts", "renderAlpha"):
             self.assertIn("function %s(" % fn, self._settings, "设置页缺少 %s" % fn)
             self.assertIn("%s," % fn, self._settings, "%s 没有被导出" % fn)
 

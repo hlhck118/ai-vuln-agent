@@ -2517,11 +2517,15 @@ class CssLayoutGuardTestCase(unittest.TestCase):
         textarea 那把是 Chromium 的**原生**滚动条，`::-webkit-scrollbar` 对它不生效
         （把 `--scrollbar` 改成品红后那一格里一个品红像素都没有，gutter 仍是 11），
         真正去掉它的是**元素上的** `scrollbar-width: none`。所以两半都得写，
-        四个选择器还必须同一条分组规则——分两条时只有一处生效。
+        五个选择器还必须同一条分组规则——分两条时只有一处生效。
+
+        t110 又加进一处（使用者原话「悬浮框隐藏滚动条」）：待批浮层 `.chat-review`
+        （`max-height: min(52vh, 460px)` 之后自己滚）。它与坞、选项面板同一形态——
+        浮在输入卡片上沿的一条带，11px 的竖杠正好压在这条带上，看着像"框里又套了个框"。
         """
         css = re.sub(r"/\*.*?\*/", "", self._css, flags=re.S)
         for sel in (".chat-input", ".chat-quick", ".chat-choice",
-                    ".chat-choice-other-input"):
+                    ".chat-choice-other-input", ".chat-review"):
             rule = re.search(r"%s\s*\{([^}]*)\}" % re.escape(sel), css)
             self.assertIsNotNone(rule, "样式表里找不到规则 %s" % sel)
             self.assertRegex(rule.group(1), r"scrollbar-width:\s*none\b",
@@ -2531,13 +2535,15 @@ class CssLayoutGuardTestCase(unittest.TestCase):
         # 两条伪元素必须写在**同一条分组规则**里：分两条时，后写的那条会把前一条的
         # 某个声明盖掉一半，症状是"只有一个容器没有滚动条"。
         # 分组里可以不止这两个：选项面板自己也会滚（`.chat-choice`、
-        # `.chat-choice-other-input`），面板里的滚动条同样不该画。但必须**同一条规则**。
+        # `.chat-choice-other-input`），待批浮层也会滚（`.chat-review`），
+        # 它们画的滚动条同样不该出现。但必须**同一条规则**。
         group = re.search(r"\.chat-input::-webkit-scrollbar\s*,\s*"
                           r"\.chat-quick::-webkit-scrollbar"
                           r"(?:\s*,\s*\.[\w-]+::-webkit-scrollbar)*"
                           r"\s*\{([^}]*)\}", css)
         self.assertIsNotNone(group, "两条 `::-webkit-scrollbar` 必须写成一条分组规则")
-        for more in (".chat-choice", ".chat-choice-other-input"):
+        for more in (".chat-choice", ".chat-choice-other-input",
+                     ".chat-review"):
             self.assertIn("%s::-webkit-scrollbar" % more, group.group(0),
                           "面板里的滚动条也该在这条分组规则里：%s" % more)
         body = group.group(1)
@@ -2572,6 +2578,38 @@ class CssLayoutGuardTestCase(unittest.TestCase):
         self.assertIn("field-sizing: content", ta,
                       "「其他」那一格丢了 field-sizing：写第二件事时框不会长高，"
                       "只剩一行、框内滚，用户看到的就是框又在滚")
+
+
+    def test_the_floats_scroll_under_the_pointer_without_taking_focus(self):
+        """三张浮层（选项面板 / 输入辅助坞 / 待批浮层）：划过就能滚，且不抢焦点。
+
+        用户原话是「不抢鼠标焦点（能过随时滚动）」。这两件事在浏览器里本来是
+        **同一条**：滚动是"指针在谁身上就滚谁"，不需要先点一下拿到焦点。能破坏
+        它的只有两种写法，所以各钉一条：
+
+        * 浮层出现时替使用者 `.focus()` —— 光标被抢走，正在输入框里写的那半句话
+          就断了（`sendChoice()` 的注释里已经写明这条，它不是新顾虑）；
+        * 在浮层上 `preventDefault()` 掉 wheel —— 滚轮不再滚这一层，而指针明明
+          停在它上面，"过一下就能滚"退化成"先把鼠标挪开再挪回来"。
+
+        另外 `overscroll-behavior: contain` 必须三张都在：缺了它，滚到头的余量会
+        链式传给记录区，于是"往下翻这张浮层"读着读着整页开始往上跑——那正是
+        "抢"的另一种形态，只不过抢的是滚动而不是焦点。
+        """
+        js = _strip_js_comments(_read("chat.js"))
+        for name in ("quick", "reviewFloat", "choice"):
+            self.assertNotRegex(js, r"dom\.%s\.focus\(" % name,
+                                "浮层出现时替使用者抢了焦点：dom.%s" % name)
+        css = re.sub(r"/\*.*?\*/", "", _read("style.css"), flags=re.S)
+        for selector in (".chat-choice", ".chat-quick", ".chat-review"):
+            head = chr(10) + selector + " {"
+            self.assertIn(head, css, "%s 的规则块找不到了" % selector)
+            start = css.index(head)
+            block = css[start:css.index("}", start)]
+            self.assertIn("overflow-y: auto", block,
+                          "%s 不再可滚：装不下的那部分永远拿不到" % selector)
+            self.assertIn("overscroll-behavior: contain", block,
+                          "%s 滚到头会把余量甩给记录区" % selector)
 
 
 class FixtureScriptCoverageTestCase(unittest.TestCase):

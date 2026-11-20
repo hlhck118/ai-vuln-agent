@@ -30,6 +30,63 @@
 })();
 </script>
 <link rel="stylesheet" href="style.css">
+<!-- 透明度：**必须在这行之后**，不能并到上面那段。
+     上一段要抢在样式表之前（否则白闪），代价是那时候 style.css 还没解析，读不到
+     --panel 这类面令牌；而透明度做的事正是"读出面令牌的原值、乘一个比例、内联写回"，
+     读不到就什么也做不了。在这里写：样式表是本请求内的渲染阻塞资源，紧随其后的内联
+     脚本拿到的是已解析的令牌值，所以第一帧就是调好的半透明，不会先不透明再跳一下。
+     这一份逻辑与 web/theme.js 的 paintAlpha 是同一套规则（解析 hex / rgb / rgba，
+     按 num/100 乘 alpha，100% 时一个字节都不写），两边由契约测试比对。 -->
+<script>
+(function () {
+  var KEY = 'pentest.alpha';
+  var ATTR = 'data-alpha';
+  var TOKENS = ['--panel', '--panel-2', '--panel-3', '--code-bg', '--overlay'];
+  var num = 100;
+  try {
+    num = parseInt(localStorage.getItem(KEY), 10);
+  } catch (err) {
+    /* 隐私模式 / 企业策略下读取即抛。用默认档继续。 */
+  }
+  if (!isFinite(num)) num = 100;
+  if (num < 0) num = 0;
+  if (num > 100) num = 100;
+  document.documentElement.setAttribute(ATTR, String(num));
+  if (num >= 100) return;
+  var root = document.documentElement;
+  var css = getComputedStyle(root);
+  var scale = num / 100;
+  var parts = function (raw) {
+    if (raw.charAt(0) === '#') {
+      var hex = raw.slice(1);
+      if (hex.length === 3) {
+        hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+      }
+      if (hex.length !== 6) return null;
+      var n = parseInt(hex, 16);
+      if (!isFinite(n)) return null;
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 1];
+    }
+    var m = raw.match(/^rgba?\(([^)]*)\)$/);
+    if (!m) return null;
+    var bits = m[1].split(/[\s,\/]+/);
+    var out = [];
+    for (var i = 0; i < bits.length; i += 1) {
+      if (bits[i].length) out.push(parseFloat(bits[i]));
+    }
+    if (out.length < 3) return null;
+    var alpha = out.length > 3 ? out[3] : 1;
+    if (!isFinite(alpha)) alpha = 1;
+    return [out[0], out[1], out[2], alpha];
+  };
+  for (var t = 0; t < TOKENS.length; t += 1) {
+    var color = parts(String(css.getPropertyValue(TOKENS[t]) || '').trim());
+    if (!color) continue;
+    root.style.setProperty(TOKENS[t], 'rgba(' + color[0] + ', ' + color[1] + ', '
+      + color[2] + ', ' + (color[3] * scale).toFixed(3) + ')');
+  }
+})();
+</script>
 </head>
 <body>
 
@@ -1052,6 +1109,19 @@
           <div class="settings-subhead">磨砂</div>
           <div class="frost-row" id="frost-row" role="group" aria-label="磨砂强度"></div>
           <p class="muted" id="frost-note"></p>
+
+          <!-- 透明度：**滑块**，不是档位。这一项的量是连续的（"再淡一点"是它唯一
+               有意义的用法），切成五档会让人在"轻"和"中"之间反复横跳却总差一点。
+               它调的是面令牌（卡片、侧栏、坞这些底）的不透明度，不动文字色，
+               也不动窗口底——见 web/theme.js 的 ALPHA_TOKENS 与 paintAlpha。 -->
+          <div class="settings-subhead">透明度
+            <span class="muted" id="alpha-value">100%</span>
+          </div>
+          <div class="alpha-row" id="alpha-row">
+            <input type="range" id="alpha-range" class="alpha-range" min="0" max="100" step="1"
+                   value="100" aria-label="界面的不透明度（百分比）">
+          </div>
+          <p class="muted" id="alpha-note"></p>
         </div>
       </section>
 
@@ -1597,7 +1667,7 @@
     <div class="panel-body" id="dashboard-body"></div>
   </section>
 
-  <!-- 页签：流量（已经发出去过的手工请求）。
+  <!-- 页签：流量（这条对话里发出去过的请求：对话里让模型打的、以及「请求重发」里手工打的）。
        列表**不带正文**：一屏几十条，每条几十 KB 正文会把响应撑到几 MB，而列表上
        根本显示不了正文。点开一条才取全文——这也正是这一页的用途：看到一条，
        改一个字段再发。 -->
@@ -1605,7 +1675,7 @@
     <header class="page-head">
       <div class="ph-title">
         <h1 class="ph-name">流量</h1>
-        <span class="ph-sub">手工请求的记录，按时间倒序</span>
+        <span class="ph-sub">这条对话发出去的请求，按时间倒序</span>
       </div>
       <div class="ph-status">
         <span class="muted" id="traffic-meta">尚未加载</span>

@@ -783,6 +783,54 @@ class LauncherDocumentationTestCase(unittest.TestCase):
             self.assertNotIn("start.cmd", text, "%s 还在讲已经删掉的 .cmd" % name)
 
 
+class TunnelDocumentationTestCase(unittest.TestCase):
+    """对外那条路只有一条，文档必须说的是那条。
+
+    实测（本机出口 211.20.18.216，CGNAT 下没有公网入口）：Cloudflare 快速隧道
+    `--protocol http2` 能注册成功，但分配到的 `*.trycloudflare.com` 地址全程 530
+    （Argo 1033 / Unable to resolve）；`quic` 永远 "failed to dial to edge"；
+    `--ha-connections 4` 直接 `Post https://api.trycloudflare.com/tunnel: EOF`。
+    Tailscale 的 `machine/register` 十秒超时、三个 DERP 探测全 000。
+    serveo.net 会话 200–330s 就断、中段大量 502。留下的是 localhost.run。
+
+    文档漂移的代价在这条路上特别大：照旧写 cloudflared，读者会拿到一个永远 530
+    的地址，然后以为是自己的防火墙没开。所以这里钉三件事——手册要给的是那条能用的、
+    要写明为什么另一条不通、给出的命令必须真的存在。
+    """
+
+    def _text(self, name):
+        return _read_text(os.path.join(ROOT, name))
+
+    def test_the_guide_points_at_the_working_tunnel(self):
+        guide = self._text("使用手册.md")
+        self.assertIn("keep_tunnel.py", guide, "指南没给那条实测可用的隧道")
+        self.assertIn("localhost.run", guide, "指南没写默认 provider")
+        self.assertIn("data/tunnel-url.txt", guide, "指南没写地址落在哪")
+        self.assertIn("530", guide, "指南没写 Cloudflare 快速隧道在这条链路上不通")
+        # 「用 cloudflared」当唯一答案是旧写法：它现在只能作为"别照这个试"的注脚出现。
+        self.assertNotIn("要从外网（手机流量、异地电脑）打开：用 Cloudflare", guide,
+                         "指南仍把 Cloudflare 快速隧道当成对外那条路")
+
+    def test_the_overview_agrees(self):
+        overview = self._text("项目说明.md")
+        self.assertIn("keep_tunnel.py", overview, "项目说明没跟着换隧道方式")
+
+    def test_the_tunnel_script_is_real(self):
+        path = os.path.join(ROOT, "tools", "keep_tunnel.py")
+        self.assertTrue(os.path.isfile(path), "缺少 tools/keep_tunnel.py")
+        completed = subprocess.run([PYTHON, "-m", "py_compile", path],
+                                   capture_output=True, timeout=60,
+                                   encoding="utf-8", errors="replace")
+        self.assertEqual(completed.returncode, 0,
+                         "keep_tunnel.py 语法错误：%s" % (completed.stderr or ""))
+        source = _read_text(path)
+        # 两个 provider 的地址形状不同，抓错一个就等于写了一个永远打不开的地址。
+        # 正则里那段是转义过的字面量（`app\.lhr\.life`），照着源码写的形状核。
+        for token in ("app\\.lhr\\.life", "serveousercontent\\.com",
+                      "ExitOnForwardFailure=yes", "os.replace"):
+            self.assertIn(token, source, "keep_tunnel.py 里没有 %s" % token)
+
+
 class DeploymentAssetsTestCase(unittest.TestCase):
     """部署产物的静态检查：不引 Docker，但有部署脚本与 systemd 单元。"""
 
