@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-"""生成 8 分钟成果发布 PPT（.pptx）—— 面向领导，全部用大白话。
+"""生成 8 分钟参赛汇报 PPT（.pptx）。
 
-版式取自项目自己的视觉令牌（视觉设计系统.md 的深色面板 + Apple HIG 的层级），
-用 python-pptx 直接画，不维护 .potx 模板。
-
-写法约定：**页面上只放领导和评委能一眼看懂的话**，所有技术名词、文件名、
-协议细节都放进演讲者备注（讲的时候说，不摆在投影上）。
+素材唯一来源：系统设计说明书（V1.0）与优秀 AI 应用项目设计大赛参赛方案书。
+主线：**自动化漏洞发掘**——形势与困境、现有手段为何不够、七阶段闭环与五层架构、
+七项创新、工程实测、效益与推广。措辞按正式汇报体，不写标语口号。
 
 用法：
     python -X utf8 docs/deck_release.py --out 成果发布-8分钟.pptx
@@ -23,25 +21,32 @@ from pptx.util import Inches, Pt
 
 W, H = 13.333, 7.5
 
-BG = RGBColor(0x0B, 0x0B, 0x0D)
-SURF1 = RGBColor(0x16, 0x16, 0x1A)
-SURF2 = RGBColor(0x1E, 0x1E, 0x23)
-LINE = RGBColor(0x34, 0x34, 0x3B)
-TEXT = RGBColor(0xF5, 0xF5, 0xF7)
-DIM = RGBColor(0xAD, 0xAD, 0xB8)
-MUTED = RGBColor(0x9A, 0x9A, 0xA6)
-ACCENT = RGBColor(0x0A, 0x84, 0xFF)
-ACCENT_T = RGBColor(0x40, 0x9C, 0xFF)
-OK = RGBColor(0x30, 0xD1, 0x58)
-WARN = RGBColor(0xFF, 0xD6, 0x0A)
-DANGER = RGBColor(0xFF, 0x45, 0x3A)
-CYAN = RGBColor(0x40, 0xC8, 0xE0)
-VIOLET = RGBColor(0x5E, 0x5C, 0xE6)
+# 浅色阅读版：纸张白底 + 深墨字，正文对比度均在 7:1 以上，投影与打印同时可读
+BG = RGBColor(0xFA, 0xFB, 0xFD)
+SURF1 = RGBColor(0xFF, 0xFF, 0xFF)
+SURF2 = RGBColor(0xF2, 0xF4, 0xF8)
+EDGE = RGBColor(0xDD, 0xE2, 0xEA)
+LINE = RGBColor(0xC9, 0xCF, 0xDA)
+TEXT = RGBColor(0x16, 0x18, 0x1D)
+DIM = RGBColor(0x45, 0x4A, 0x54)
+MUTED = RGBColor(0x6B, 0x71, 0x7C)
+ACCENT = RGBColor(0x0B, 0x5C, 0xC4)
+ACCENT_T = RGBColor(0x0B, 0x5C, 0xC4)
+OK = RGBColor(0x0F, 0x71, 0x39)
+WARN = RGBColor(0x8A, 0x60, 0x00)
+DANGER = RGBColor(0xB3, 0x24, 0x1A)
+CYAN = RGBColor(0x0B, 0x62, 0x7A)
+VIOLET = RGBColor(0x45, 0x3F, 0xAE)
+AMBER = RGBColor(0x96, 0x52, 0x08)
+PURPLE = RGBColor(0x63, 0x22, 0xC4)
+BLUEL = RGBColor(0x0A, 0x55, 0x7C)
 
-FONT = "微软雅黑"
+FONT = "等线"
 
 
 def set_font(run, size, bold=False, color=TEXT, name=FONT):
+    if size < 11:
+        size = size + 1.0          # 小字统一放大一档，浅底细体更易读
     font = run.font
     font.size = Pt(size)
     font.bold = bold
@@ -67,22 +72,24 @@ def textbox(slide, x, y, w, h):
     return tf
 
 
-def para(tf, text, size=16, bold=False, color=TEXT, first=False, space_before=6,
-         line=1.32, align=PP_ALIGN.LEFT):
+def para(tf, text, size=16, bold=False, color=TEXT, first=False,
+         space_before=6, line=1.30, align=PP_ALIGN.LEFT):
     p = tf.paragraphs[0] if first else tf.add_paragraph()
     p.alignment = align
-    p.space_before = Pt(space_before)
     p.line_spacing = line
+    p.space_before = Pt(0 if first else space_before)
+    p.space_after = Pt(0)
     run = p.add_run()
     run.text = text
     set_font(run, size, bold, color)
     return p
 
 
-def rich(tf, parts, size=16, first=False, space_before=6, line=1.32):
+def rich(tf, parts, size=15, first=False, space_before=6, line=1.28):
     p = tf.paragraphs[0] if first else tf.add_paragraph()
-    p.space_before = Pt(space_before)
     p.line_spacing = line
+    p.space_before = Pt(0 if first else space_before)
+    p.space_after = Pt(0)
     for text, bold, color in parts:
         run = p.add_run()
         run.text = text
@@ -92,15 +99,18 @@ def rich(tf, parts, size=16, first=False, space_before=6, line=1.32):
 
 def blank(prs):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    fill = slide.background.fill
-    fill.solid()
-    fill.fore_color.rgb = BG
+    bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0,
+                                Inches(W), Inches(H))
+    bg.line.fill.background()
+    bg.shadow.inherit = False
+    bg.fill.solid()
+    bg.fill.fore_color.rgb = BG
     return slide
 
 
-def card(slide, x, y, w, h, fill=SURF1, edge=None, radius=0.06):
-    shape = slide.shapes.add_shape(
-        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+def card(slide, x, y, w, h, fill=SURF1, edge=EDGE, radius=0.06):
+    shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                   Inches(x), Inches(y), Inches(w), Inches(h))
     shape.adjustments[0] = radius
     shape.shadow.inherit = False
     shape.fill.solid()
@@ -109,14 +119,13 @@ def card(slide, x, y, w, h, fill=SURF1, edge=None, radius=0.06):
         shape.line.fill.background()
     else:
         shape.line.color.rgb = edge
-        shape.line.width = Pt(1)
+        shape.line.width = Pt(0.9)
     return shape
 
 
 def bar(slide, x, y, w, h, color):
-    shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
                                    Inches(x), Inches(y), Inches(w), Inches(h))
-    shape.adjustments[0] = 0.5
     shape.shadow.inherit = False
     shape.fill.solid()
     shape.fill.fore_color.rgb = color
@@ -125,20 +134,20 @@ def bar(slide, x, y, w, h, color):
 
 
 def head(slide, kicker, title, sub=None):
-    bar(slide, 0.85, 0.60, 0.10, 0.56, ACCENT)
-    tf = textbox(slide, 1.10, 0.52, 11.3, 1.0)
-    para(tf, kicker, 12.5, True, ACCENT_T, first=True, space_before=0)
-    para(tf, title, 27, True, TEXT, space_before=4, line=1.2)
+    bar(slide, 0.85, 0.58, 0.10, 0.58, ACCENT)
+    tf = textbox(slide, 1.10, 0.50, 11.3, 1.05)
+    para(tf, kicker, 12, True, ACCENT_T, first=True, space_before=0)
+    para(tf, title, 25, True, TEXT, space_before=4, line=1.16)
     if sub:
-        tf2 = textbox(slide, 1.10, 1.52, 11.3, 0.46)
-        para(tf2, sub, 13.5, False, DIM, first=True, space_before=0)
+        tf2 = textbox(slide, 1.10, 1.46, 11.3, 0.44)
+        para(tf2, sub, 12.5, False, DIM, first=True, space_before=0)
 
 
 def footer(slide, idx, total, note=""):
-    tf = textbox(slide, 0.85, 6.95, 10.4, 0.32)
-    para(tf, note, 10, False, MUTED, first=True, space_before=0)
-    tf2 = textbox(slide, 11.7, 6.95, 0.95, 0.32)
-    para(tf2, "%02d / %02d" % (idx, total), 10, False, MUTED, first=True,
+    tf = textbox(slide, 0.85, 6.96, 10.4, 0.30)
+    para(tf, note, 9.5, False, MUTED, first=True, space_before=0)
+    tf2 = textbox(slide, 11.7, 6.96, 0.95, 0.30)
+    para(tf2, "%02d / %02d" % (idx, total), 9.5, False, MUTED, first=True,
          space_before=0, align=PP_ALIGN.RIGHT)
 
 
@@ -146,18 +155,19 @@ def notes(slide, text):
     slide.notes_slide.notes_text_frame.text = text
 
 
-def kpi(slide, x, y, w, value, label, color=ACCENT, h=1.20):
+def stat(slide, x, y, w, value, label, color=ACCENT, h=1.16, vs=22):
     card(slide, x, y, w, h, SURF1)
-    tf = textbox(slide, x + 0.26, y + 0.18, w - 0.44, h - 0.26)
-    para(tf, value, 24, True, color, first=True, space_before=0)
-    para(tf, label, 11.5, False, DIM, space_before=3)
+    bar(slide, x, y + 0.18, 0.06, h - 0.36, color)
+    tf = textbox(slide, x + 0.24, y + 0.16, w - 0.42, h - 0.24)
+    para(tf, value, vs, True, color, first=True, space_before=0)
+    para(tf, label, 10.5, False, DIM, space_before=3, line=1.2)
 
 
-def bullet(slide, x, y, w, items, size=15, gap=0.86, mark_color=ACCENT):
+def bullet(slide, x, y, w, items, size=13, gap=0.72, mark_color=ACCENT):
     for i, (title, body) in enumerate(items):
         yy = y + i * gap
-        bar(slide, x, yy + 0.12, 0.09, 0.09, mark_color)
-        tf = textbox(slide, x + 0.27, yy - 0.02, w, gap)
+        bar(slide, x, yy + 0.10, 0.08, 0.08, mark_color)
+        tf = textbox(slide, x + 0.25, yy - 0.02, w, gap)
         if body:
             rich(tf, [(title, True, TEXT), ("　" + body, False, DIM)],
                  size=size, first=True, space_before=0)
@@ -169,381 +179,617 @@ def build(path):
     prs = Presentation()
     prs.slide_width = Inches(W)
     prs.slide_height = Inches(H)
-    total = 12
+    total = 16
 
     # ── 01 封面 ──────────────────────────────────────────────
     s = blank(prs)
-    glow = s.shapes.add_shape(MSO_SHAPE.OVAL, Inches(8.4), Inches(-1.6),
-                              Inches(7.2), Inches(7.2))
-    glow.shadow.inherit = False
-    glow.line.fill.background()
-    glow.fill.solid()
-    glow.fill.fore_color.rgb = RGBColor(0x10, 0x14, 0x1C)
-
-    bar(s, 1.0, 1.80, 0.12, 0.76, ACCENT)
-    tf = textbox(s, 1.30, 1.66, 9.8, 2.6)
-    para(tf, "成果发布 · 8 分钟", 14, True, ACCENT_T, first=True, space_before=0)
-    para(tf, "AI 智能体渗透测试工作台", 44, True, TEXT, space_before=10)
-    para(tf, "让「找漏洞」这件事，有据可查、说得清楚", 20, False, DIM,
-         space_before=12)
-
-    card(s, 1.0, 4.62, 6.4, 0.60, SURF1)
-    tf = textbox(s, 1.24, 4.74, 6.0, 0.4)
-    para(tf, "一台电脑就能装 · 不用连外网 · 每一步都留记录", 13, False, MUTED,
+    bar(s, 1.0, 1.66, 0.12, 0.78, ACCENT)
+    tf = textbox(s, 1.30, 1.50, 10.2, 2.4)
+    para(tf, "优 秀 A I 应 用 项 目 设 计 大 赛 · 汇 报", 12.5, True, ACCENT_T,
          first=True, space_before=0)
+    para(tf, "基于 AI 智能体的自动化漏洞发掘系统", 34, True, TEXT,
+         space_before=12, line=1.16)
+    para(tf, "技术创新研究 · 成果汇报", 18, False, DIM, space_before=12)
 
-    stats = [("48", "项能力"), ("7", "类任务"), ("15", "个界面"),
-             ("3142", "项自检全过")]
+    card(s, 1.0, 4.40, 8.20, 0.62, SURF1)
+    tf = textbox(s, 1.26, 4.54, 7.8, 0.36)
+    para(tf, "规划—探索—验证—复盘四阶段智能体 · 证据链驱动 · 全离线私有化",
+         12, False, MUTED, first=True, space_before=0)
+
+    stats = [("七", "阶段端到端闭环"), ("五", "层体系架构"),
+             ("七", "项技术创新"), ("100", "％结论可复现")]
     for i, (v, l) in enumerate(stats):
-        x = 1.0 + i * 1.55
-        tf = textbox(s, x, 5.60, 1.45, 0.9)
-        para(tf, v, 24, True, ACCENT_T, first=True, space_before=0)
-        para(tf, l, 11.5, False, MUTED, space_before=2)
-    notes(s, "40 秒。开场只说一句话：我们把'靠老师傅翻代码找漏洞'这件事，"
-             "做成了一套看得见、查得到、能交代的流程。"
-             "四个数字先立住：48 项能力、7 类任务、15 个界面、3142 项自检全过。")
+        x = 1.0 + i * 1.90
+        tf = textbox(s, x, 5.42, 1.80, 0.9)
+        para(tf, v, 22, True, ACCENT_T, first=True, space_before=0)
+        para(tf, l, 10, False, MUTED, space_before=2)
+    notes(s, "15 秒。开场说明汇报对象：一套把漏洞发掘从人工经验判断，"
+             "改成四阶段智能体协同、每一步都有证据支撑的系统。"
+             "四个数字分别是七阶段闭环、五层架构、七项创新、结论可复现率百分之百。")
     footer(s, 1, total, "")
 
-    # ── 02 一句话讲清 ────────────────────────────────────────
+    # ── 02 形势 ──────────────────────────────────────────────
     s = blank(prs)
-    head(s, "01 这是什么", "一句话：把老师傅脑子里的判断，变成一套看得见的流程",
-         "电脑上开个网页就能用，不用装数据库、不用装框架、不用连外网")
-    kpi(s, 0.85, 2.14, 2.55, "48 项", "能做的事，说一句就能调", ACCENT)
-    kpi(s, 3.55, 2.14, 2.55, "7 类", "任务类型，从查代码到查网络", CYAN)
-    kpi(s, 6.25, 2.14, 2.55, "15 个", "界面，从下命令到出报告", VIOLET)
-    kpi(s, 8.95, 2.14, 3.35, "0", "需要另装的外部组件", OK)
-    tf = textbox(s, 0.98, 3.46, 11.3, 0.4)
-    para(tf, "查代码 · 查网络 · 验证能不能真打进去 · 测口令 · 投递载荷 · 绕出去 · 调外部工具",
-         11, False, MUTED, first=True, space_before=0)
-    bullet(s, 0.85, 4.06, 11.4, [
-        ("大脑在服务器，手脚在目标旁边",
-         "网页只是屏幕，判断都在服务器；真正去扫的那部分，装在能连到目标的那台机器上"),
-        ("一份规则，两头都认",
-         "能扫哪儿、能做什么，只写了一遍；服务器和目标机不会各说各话"),
-        ("结果只存一份",
-         "所有结论落在一个文件里，随时能备份、能整包导出来给人看"),
-    ], size=14, gap=0.88)
-    notes(s, "45 秒。这一页就讲一个比喻：大脑在服务器，手脚在目标旁边。"
-             "为什么手脚要分开装？因为有些目标在别人内网里，只有那台机器够得着。")
-    footer(s, 2, total, "")
-
-    # ── 03 以前为什么贵 ──────────────────────────────────────
-    s = blank(prs)
-    head(s, "02 为什么要做", "过去查漏洞，贵在「来回跑四趟」")
-    steps = [("① 先读懂", "翻代码、翻文档、翻测试环境"),
-             ("② 再往下追", "一个入口牵出十几个文件"),
-             ("③ 搭环境真打一次", "造请求、看反应、复现"),
-             ("④ 再核实一遍", "证明「这不是误报」")]
-    for i, (t, b) in enumerate(steps):
-        x = 0.85 + i * 3.02
-        card(s, x, 1.86, 2.78, 1.44, SURF1)
-        tf = textbox(s, x + 0.26, 2.06, 2.32, 1.1)
-        para(tf, t, 15, True, TEXT, first=True, space_before=0)
-        para(tf, b, 11.5, False, DIM, space_before=7, line=1.3)
-
-    card(s, 0.85, 3.70, 5.82, 2.42, SURF1, edge=RGBColor(0x3A, 0x1B, 0x1B))
-    tf = textbox(s, 1.12, 3.94, 5.3, 2.0)
-    para(tf, "靠人做", 13, True, DANGER, first=True, space_before=0)
-    para(tf, "以小时、以天算，而且估不准", 16, False, TEXT, space_before=10)
-    para(tf, "结论写在报告里，依据留在脑子里", 13, False, DIM, space_before=8)
-    para(tf, "换个人接手，等于从零再来一遍", 13, False, DIM, space_before=5)
-
-    card(s, 6.88, 3.70, 5.6, 2.42, SURF1, edge=RGBColor(0x3A, 0x1B, 0x1B))
-    tf = textbox(s, 7.15, 3.94, 5.1, 2.0)
-    para(tf, "靠传统扫描器", 13, True, DANGER, first=True, space_before=0)
-    para(tf, "报得多，准得少", 16, False, TEXT, space_before=10)
-    para(tf, "项目一大，每次改动都得全量重扫", 13, False, DIM, space_before=8)
-    para(tf, "最后要么扫不起，要么扫得少", 13, False, DIM, space_before=5)
-    notes(s, "45 秒。四个断点要用'人'的话说：读代码、往下追、真打一次、再核实。"
-             "右边这条是给传统扫描器留的位置：不是它没用，是它只能告诉你'看着像'。")
-    footer(s, 3, total, "")
-
-    # ── 04 现在怎么做 ────────────────────────────────────────
-    s = blank(prs)
-    head(s, "03 怎么做的", "一条流水线：下命令 → 派活 → 就地干 → 带证据回来")
-    card(s, 4.55, 1.92, 4.25, 0.74, SURF2)
-    tf = textbox(s, 4.75, 2.08, 3.9, 0.48)
-    para(tf, "使用者 · 打开网页下命令", 14, True, TEXT, first=True, space_before=0,
-         align=PP_ALIGN.CENTER)
-
-    card(s, 4.55, 2.94, 4.25, 1.20, SURF2, edge=ACCENT)
-    tf = textbox(s, 4.78, 3.10, 3.8, 0.95)
-    para(tf, "指挥中心 · 服务器", 14, True, ACCENT_T, first=True, space_before=0,
-         align=PP_ALIGN.CENTER)
-    para(tf, "排任务 · 发指令 · 存结果", 11, False, DIM, space_before=4,
-         align=PP_ALIGN.CENTER)
-    para(tf, "三道锁都在这一层", 11, False, DIM, space_before=2,
-         align=PP_ALIGN.CENTER)
-
-    for i, (t, b) in enumerate([("内网", "别人机房里的那台"),
-                                ("隔离区", "能出去的跳板"),
-                                ("构建机", "改一次就扫一次")]):
-        x = 1.15 + i * 3.40
-        card(s, x, 4.68, 3.20, 1.28, SURF1)
-        tf = textbox(s, x + 0.24, 4.86, 2.75, 1.0)
-        para(tf, "手脚 · " + t, 14, True, TEXT, first=True, space_before=0,
-             align=PP_ALIGN.CENTER)
-        para(tf, b, 11, False, DIM, space_before=5, align=PP_ALIGN.CENTER)
-
-    bar(s, 6.65, 2.66, 0.06, 0.26, LINE)
-    bar(s, 6.65, 4.14, 0.06, 0.52, LINE)
-    tf = textbox(s, 9.02, 2.02, 4.0, 0.6)
-    para(tf, "只在内网里说话，不必连外网", 11.5, False, MUTED, first=True,
-         space_before=0)
-    tf = textbox(s, 9.02, 3.10, 4.0, 1.4)
-    para(tf, "谁在哪、有没有在线、能不能干活", 11.5, False, MUTED, first=True,
-         space_before=0, line=1.35)
-    para(tf, "都是它自己报上来的", 11.5, False, MUTED, space_before=6)
-    notes(s, "40 秒。这张图要讲的只有一句：装的位置由'谁够得着目标'决定。"
-             "所以在自己机房、在客户内网、在流水线上，用的是同一套东西。")
-    footer(s, 4, total, "")
-
-    # ── 05 创新一 证据链 ─────────────────────────────────────
-    s = blank(prs)
-    head(s, "04 创新一", "每个结论都带一条证据链，不是一句空口断言",
-         "从「想查什么」到「查到什么」到「因此是什么」——一路都挂着依据")
-    chain = [("要查的目标", VIOLET), ("想查什么", RGBColor(0xBF, 0x5A, 0xF2)),
-             ("查到的事实", CYAN), ("结论", RGBColor(0xFF, 0x9F, 0x0A)),
-             ("影响的东西", RGBColor(0x64, 0xD2, 0xFF))]
-    for i, (name, color) in enumerate(chain):
-        x = 0.85 + i * 2.42
-        card(s, x, 2.02, 1.85, 1.00, SURF2, edge=color)
-        tf = textbox(s, x + 0.10, 2.28, 1.65, 0.5)
-        para(tf, name, 14, True, TEXT, first=True, space_before=0,
-             align=PP_ALIGN.CENTER)
-        if i < 4:
-            bar(s, x + 1.90, 2.47, 0.45, 0.06, LINE)
-
-    bullet(s, 0.85, 3.32, 11.4, [
-        ("不合格的结论进不去",
-         "说不清依据、给不出复现步骤，系统当场拒收，而不是存下来等出报告时才发现"),
-        ("结论一生成就挂在依据上",
-         "不用事后补文档；过半年再翻，还看得出当时凭什么下这个判断"),
-        ("查的时候能筛，底账不动",
-         "界面上怎么过滤都不改数据，整条链路随时能导出、能离线看"),
-        ("一个项目一份账",
-         "不会出现「你这边验过、我这边还没验」的分裂"),
-    ], size=13.5, gap=0.86)
-    notes(s, "45 秒。用办案打比方：不是抓到人就算，得有证据链。"
-             "这一页的重点是'当场拒收'——不合格的结论根本进不了库，事后不用再清理。")
-    footer(s, 5, total, "")
-
-    # ── 06 创新二 敢说不是 ───────────────────────────────────
-    s = blank(prs)
-    head(s, "05 创新二", "敢说「不是漏洞」，也敢说「我不知道」",
-         "拿不准的交给人，不硬给一个结论——这是最难、也最值钱的一条")
-    card(s, 0.85, 1.98, 3.55, 1.66, SURF1)
-    tf = textbox(s, 1.10, 2.18, 3.05, 1.3)
-    para(tf, "有问题的版本", 12.5, True, WARN, first=True, space_before=0)
-    para(tf, "真打进去了", 19, True, TEXT, space_before=8)
-    para(tf, "在隔离环境里真的打一次，有反应", 11, False, DIM, space_before=6)
-
-    card(s, 4.62, 1.98, 3.55, 1.66, SURF1)
-    tf = textbox(s, 4.87, 2.18, 3.05, 1.3)
-    para(tf, "修好的版本", 12.5, True, OK, first=True, space_before=0)
-    para(tf, "打不进去", 19, True, TEXT, space_before=8)
-    para(tf, "同一套打法，打到修好的版本上", 11, False, DIM, space_before=6)
-
-    card(s, 8.39, 1.98, 4.09, 1.66, SURF2, edge=OK)
-    tf = textbox(s, 8.64, 2.18, 3.6, 1.3)
-    para(tf, "两边对上，才算成立", 12.5, True, OK, first=True, space_before=0)
-    para(tf, "修好的版本：0 条误报", 17, True, TEXT, space_before=8)
-    para(tf, "不会把「看着像」报成漏洞", 11, False, DIM, space_before=6)
-
-    bullet(s, 0.85, 4.02, 11.4, [
-        ("打不动 ≠ 漏洞不存在",
-         "环境不对、权限不够、目标报错——一律标「待人工确认」，不当误报，也不当成没问题"),
-        ("不认编出来的行号",
-         "模型说在第几行，对不上就丢掉，不许它「大概在第 40 行左右」"),
-        ("没依据的猜测不立项",
-         "拿不出依据的猜测，在生成阶段就被删掉，不会进到后面的流程"),
-    ], size=13.5, gap=0.86)
-    notes(s, "50 秒。这一页是全场最能打的：我们不是'报得多'，是'报得准、说得清'。"
-             "两句要念出来：不确定不等于不存在；宁可交给人工复核，也不把没查清的事说成已排除。"
-             "修好的版本扫出 0 条，是当场跑出来的，不是承诺。")
-    footer(s, 6, total, "")
-
-    # ── 07 创新三 三道锁 ─────────────────────────────────────
-    s = blank(prs)
-    head(s, "06 创新三", "三道锁同时开才行，而且只能收紧、不能放松",
-         "写在提示里的话能糊弄模型，但糊弄不了这三道锁")
-    gates = [
-        ("第一道 · 能扫哪儿", "只放行写明的网段；写「随便扫」也要当场过一遍", ACCENT),
-        ("第二道 · 谁能用哪些能力",
-         "四档：只读 · 探测 · 审计 · 完全；只能在会话里往回收", CYAN),
-        ("第三道 · 危险动作逐项批",
-         "利用验证 / 口令测试 / 投递载荷 / 横向 / 外部工具，一项一项开", WARN),
-    ]
-    for i, (t, b, c) in enumerate(gates):
-        y = 1.94 + i * 1.32
-        card(s, 0.85, y, 5.55, 1.18, SURF1, edge=RGBColor(0x24, 0x24, 0x2A))
-        bar(s, 0.85, y + 0.18, 0.08, 0.82, c)
-        tf = textbox(s, 1.12, y + 0.16, 5.05, 0.95)
-        para(tf, t, 14.5, True, TEXT, first=True, space_before=0)
-        para(tf, b, 11, False, DIM, space_before=6, line=1.3)
-
-    tf = textbox(s, 6.72, 1.92, 5.8, 0.4)
-    para(tf, "为什么这三把锁拆不掉", 13, True, ACCENT_T, first=True, space_before=0)
-    rows = [
-        ("给清单 ≠ 给许可", "告诉它有哪些工具，不等于允许它动手；真动手之前再判一次"),
-        ("对不上就起不来", "谁的权限漏写一项，程序直接报错，不允许「悄悄地放宽」"),
-        ("两套身份不互通", "网页登录的账号拿不到干活的权限，反过来也一样"),
-        ("工具返回的话也不可信", "它可能被返回内容带偏，所以每次动手前都重新判一次"),
-    ]
-    for i, (t, b) in enumerate(rows):
-        yy = 2.42 + i * 1.06
-        bar(s, 6.72, yy + 0.09, 0.08, 0.08, MUTED)
-        tf2 = textbox(s, 6.98, yy - 0.04, 5.45, 1.0)
-        para(tf2, t, 13, True, TEXT, first=True, space_before=0)
-        para(tf2, b, 11, False, DIM, space_before=3, line=1.28)
-    notes(s, "50 秒。这是评委最爱问的一页：这种工具自己会不会失控。"
-             "一句话回答：能顺手放宽权限的开关，本身就是个后门，所以这种开关我们不放。"
-             "门锁在系统里，不在提示词里。")
-    footer(s, 7, total, "")
-
-    # ── 08 创新四 对话 ───────────────────────────────────────
-    s = blank(prs)
-    head(s, "07 创新四", "像跟同事说话一样用它，但每一步都记账",
-         "说人话下命令，动作还是走原来那套流程——没有一步能绕开")
-    cards = [
-        ("说人话就行", "查哪儿、要什么、出报告，一句话；"
-                  "不用记命令、不用点十几层菜单", 0.85, 1.96),
-        ("断线不丢活", "一步干完才记账，不会留下"
-                  "「任务下了、没人对结果负责」的空账", 3.72, 1.96),
-        ("几条线同时跑", "切走不打断，切回来接着看；"
-                   "几个人同时用也不串台", 6.59, 1.96),
-        ("一句话派多路", "一句话里提到两个目标，"
-                   "自动分头去查，各自回来汇报", 9.46, 1.96),
-    ]
-    for t, b, x, y in cards:
-        card(s, x, y, 2.74, 1.72, SURF1)
-        tf = textbox(s, x + 0.24, y + 0.20, 2.30, 1.4)
-        para(tf, t, 14, True, ACCENT_T, first=True, space_before=0)
-        para(tf, b, 11, False, DIM, space_before=7, line=1.32)
-
-    card(s, 0.85, 3.94, 11.35, 1.30, SURF2, edge=ACCENT)
-    tf = textbox(s, 1.12, 4.14, 10.9, 1.0)
-    para(tf, "口径可以按人来定，不是一个全局开关", 13, True, ACCENT_T, first=True,
-         space_before=0)
-    para(tf, "同一个人可以一边做合规评估、一边做对抗演练，两边口径不同、互不影响；"
-             "做成一个总开关，切换就是打断别人正在做的事", 12, False, DIM,
-         space_before=7, line=1.3)
-
-    tf = textbox(s, 0.85, 5.46, 11.3, 1.1)
-    para(tf, "最要紧的一条：它只会「决定做什么」，不会「自己做」——"
-             "每一次动手，都还是走原来那套流程，该过的锁一道不少，该留的记录一条不缺",
-         13.5, True, TEXT, first=True, space_before=0, line=1.35)
-    notes(s, "50 秒。这一页回答'AI 会不会乱来'。答案是：它只负责决定该做什么，"
-             "动手执行走的还是老流程。所以能力变强了，门禁一点没松。")
-    footer(s, 8, total, "")
-
-    # ── 09 三个限制变优势 ────────────────────────────────────
-    s = blank(prs)
-    head(s, "08 三个取舍", "三个「自己给自己加的限制」，反而成了优势")
-    items = [
-        ("不装任何外部组件", "只靠系统自带的东西",
-         "内网断网也能跑；不用等审批装东西；没有「上游一升级、我们全崩」的风险", OK),
-        ("一个程序加一个网页", "不用配数据库、不用起容器",
-         "装完就能用；一台机器就是一个完整系统，出了问题只查一处", ACCENT),
-        ("平时完全不连外网", "需要更强能力时才接上外部智能体",
-         "默认不外联；要升级能力是一次显式动作，不是默认行为", CYAN),
-    ]
-    for i, (t, sub, body, c) in enumerate(items):
-        y = 1.86 + i * 1.56
-        card(s, 0.85, y, 11.63, 1.36, SURF1)
-        bar(s, 0.85, y + 0.20, 0.09, 0.96, c)
-        tf = textbox(s, 1.15, y + 0.18, 4.2, 1.05)
-        para(tf, t, 16.5, True, TEXT, first=True, space_before=0)
-        para(tf, sub, 11, False, MUTED, space_before=6)
-        tf2 = textbox(s, 5.50, y + 0.30, 6.75, 0.95)
-        para(tf2, body, 12, False, DIM, first=True, space_before=0, line=1.35)
-    notes(s, "40 秒。这三条不是省事，是取舍。零依赖换来的是内网能跑、信创能过；"
-             "单进程换来的是装得上；默认不外联换来的是能交代。")
-    footer(s, 9, total, "")
-
-    # ── 10 效益 ─────────────────────────────────────────────
-    s = blank(prs)
-    head(s, "09 效益", "四个维度：更快、更准、更省、更说得清",
-         "能落到数字的给数字，落不到的就说清楚边界")
-    dims = [
-        ("更快", "过去几小时到几天，现在几十秒到几分钟",
-         "三个样例项目当场跑：单文件约 1 秒；改动一处只查受影响的那几块", ACCENT),
-        ("更准", "修好的版本实测 0 条误报",
-         "报出来的每一条都能复现；拿不准的明确标「待人工确认」", OK),
-        ("更省", "每千行代码的算力开销比人工低七成以上",
-         "这是设计目标：改动多少查多少，不是每次全量重来", WARN),
-        ("更说得清", "谁授权、扫了哪、凭什么下结论，都能翻出来",
-         "每一步留痕；没有出厂口令；对外的模型默认关闭", CYAN),
-    ]
-    for i, (t, a, b, c) in enumerate(dims):
-        x = 0.85 + (i % 2) * 6.02
-        y = 1.92 + (i // 2) * 2.02
-        card(s, x, y, 5.72, 1.78, SURF1)
-        bar(s, x, y + 0.18, 0.09, 1.42, c)
-        tf = textbox(s, x + 0.30, y + 0.16, 5.2, 1.5)
-        para(tf, t, 16, True, c, first=True, space_before=0)
-        para(tf, a, 13, True, TEXT, space_before=7, line=1.3)
-        para(tf, b, 10.5, False, DIM, space_before=6, line=1.3)
-    notes(s, "50 秒。「更省」那一条要主动说清是设计目标、还没在真实大项目上量过 —— "
-             "把实测和估算分开讲，比含糊过去更可信。")
-    footer(s, 10, total, "")
-
-    # ── 11 凭什么信 ─────────────────────────────────────────
-    s = blank(prs)
-    head(s, "10 凭什么信", "每一条结论背后，都有可以自己复算的证据", "")
-    kpi(s, 0.85, 1.90, 2.75, "3142", "项自检全部通过", OK, h=1.16)
-    kpi(s, 3.72, 1.90, 2.75, "113", "组自检，覆盖各个角落", ACCENT, h=1.16)
-    kpi(s, 6.59, 1.90, 2.75, "5.2 万行", "后端代码", CYAN, h=1.16)
-    kpi(s, 9.46, 1.90, 3.02, "0", "需要另装的外部组件", VIOLET, h=1.16)
+    head(s, "一、形势", "漏洞披露量在涨，可修补的时间窗口在缩",
+         "攻防两侧同时加速，防御侧仍以人工方式主导，这个速度差就是立项起点")
+    nums = [("4.8 万", "2025 年全球新披露漏洞，较上年增约 20%", DANGER),
+            ("28%", "其中完成完整分析与富化的比例", WARN),
+            ("5 天", "披露到在野利用的平均间隔，2018 年为 63 天", AMBER),
+            ("1%", "确认在野利用的比例，约 422 个", CYAN)]
+    for i, (v, l, c) in enumerate(nums):
+        x = 0.85 + i * 2.86
+        card(s, x, 1.86, 2.72, 1.30, SURF1)
+        bar(s, x, 2.04, 0.06, 0.94, c)
+        tf = textbox(s, x + 0.24, 2.02, 2.34, 1.0)
+        para(tf, v, 21, True, c, first=True, space_before=0)
+        para(tf, l, 9.5, False, DIM, space_before=3, line=1.28)
 
     bullet(s, 0.85, 3.36, 11.4, [
-        ("秒级不是估出来的", "三个样例项目当场跑：单文件约 1 秒，跨三个文件也是秒级"),
-        ("界面上的每个数字都能复算", "颜色、字号、对比度都有专门的小工具算给你看，不是拍脑袋"),
-        ("一条命令起全套", "脚本只做三件事：切目录、挑 Python、把活交出去；外网入口一条隧道命令"),
-        ("连「门锁」本身都有自检", "权限、范围、会话隔离都有用例守着，改坏了直接报错"),
-    ], size=13.5, gap=0.88)
-    notes(s, "40 秒。这一页只做一件事：把「我们说的」换成「你可以自己去看的」。"
-             "3142 项自检是我们跑的，跑全了一千六百多秒，一条没错。")
-    footer(s, 11, total, "")
+        ("窗口以小时计", "约 28% 的漏洞在披露后 24 小时内即出现利用；"
+                    "CVE-2025-55182 公开不到一个月，已累积 236 个有效公开利用"),
+        ("告警与结论脱节", "披露量大、分析量小，未经富化的告警无法直接支撑修补决策"),
+        ("防御侧靠人力", "ISC2 2024 统计全球从业约 550 万、缺口 480 万；"
+                    "国内 2027 年预计缺口 327 万，2024 年底持证在岗约 32 万"),
+    ], size=12.5, gap=0.78)
 
-    # ── 12 小结 ─────────────────────────────────────────────
+    card(s, 0.85, 5.72, 11.35, 0.94, SURF2, edge=ACCENT)
+    tf = textbox(s, 1.12, 5.86, 10.9, 0.72)
+    para(tf, "结论：漏洞发现必须从「想起来做一次」变成「跟着变更节奏反复做」，"
+             "而人工方式最撑不住的正是重复", 12.5, True, ACCENT_T, first=True,
+         space_before=0, line=1.32)
+    notes(s, "35 秒。四个数字：披露量四点八万、完成分析只有两成八、"
+             "披露到利用五天、真正被利用的百分之一。"
+             "再叠加人力缺口——每年新增的漏洞远超分析人力的增长速度。")
+    footer(s, 2, total, "数据来源：参赛方案书第一章（VulnCheck 2025、Google Cloud、ISC2 2024）")
+
+    # ── 03 三重困境 ──────────────────────────────────────────
     s = blank(prs)
-    glow = s.shapes.add_shape(MSO_SHAPE.OVAL, Inches(-2.2), Inches(4.4),
-                              Inches(7.0), Inches(7.0))
-    glow.shadow.inherit = False
-    glow.line.fill.background()
-    glow.fill.solid()
-    glow.fill.fore_color.rgb = RGBColor(0x10, 0x14, 0x1C)
-
-    bar(s, 1.0, 1.16, 0.12, 0.72, ACCENT)
-    tf = textbox(s, 1.30, 1.10, 10.8, 1.6)
-    para(tf, "10 小结", 13, True, ACCENT_T, first=True, space_before=0)
-    para(tf, "三句话讲完", 30, True, TEXT, space_before=8)
-
-    pts = [
-        ("有据可查", "每个结论都能翻到依据，换谁来复核都认"),
-        ("越改越省", "只查改动影响到的地方，不是每次从头再来"),
-        ("装得上、跑得动", "不挑环境，内网断网也能用，出事只查一处"),
+    head(s, "二、问题分析", "人力、工具、制度三条线，各卡在一个环节",
+         "把三类现实约束放在一起看，能看出同一个缺口")
+    cols = [
+        ("人力供给", DANGER,
+         ["资深安全顾问 3000–6000 元／人天",
+          "代码审计 1000–3000 元／千行",
+          "经验留在个人身上，人员流动即失效"]),
+        ("工具现状", WARN,
+         ["单一 SAST 仅在 52% 的漏洞引入函数告警",
+          "这些函数内逾 76% 的告警与漏洞无关",
+          "漏检 22% 的漏洞引入提交"]),
+        ("制度要求", CYAN,
+         ["漏洞须在 2 日内报送工信部平台",
+          "修补前不得公开、不得向境外提供",
+          "关基运营者每年至少一次检测评估"]),
     ]
-    for i, (t, b) in enumerate(pts):
-        y = 3.10 + i * 0.98
-        card(s, 1.0, y, 9.6, 0.82, SURF1)
-        tf = textbox(s, 1.28, y + 0.15, 9.1, 0.66)
-        rich(tf, [(t, True, ACCENT_T), ("　" + b, False, DIM)], size=13.5,
+    for i, (name, color, rows) in enumerate(cols):
+        x = 0.85 + i * 3.86
+        card(s, x, 1.86, 3.60, 2.70, SURF1, edge=EDGE)
+        bar(s, x, 2.02, 3.60, 0.06, color)
+        tf = textbox(s, x + 0.24, 2.22, 3.14, 0.40)
+        para(tf, name, 13.5, True, color, first=True, space_before=0)
+        for j, row in enumerate(rows):
+            bar(s, x + 0.26, 2.78 + j * 0.58, 0.07, 0.07, MUTED)
+            tf2 = textbox(s, x + 0.46, 2.70 + j * 0.58, 2.94, 0.54)
+            para(tf2, row, 10, False, DIM, first=True, space_before=0, line=1.28)
+
+    tf = textbox(s, 0.85, 4.74, 11.4, 1.5)
+    para(tf, "动态手段同样受限：Project Zero 用 AFL 对 SQLite 该缺陷持续跑 150 CPU 小时，仍未触发",
+         12, False, TEXT, first=True, space_before=0, line=1.32)
+    para(tf, "模糊测试的覆盖依赖种子与变异策略，遇到需要跨模块语义才能到达的逻辑缺陷，"
+             "成功率迅速下降", 12, False, DIM, space_before=6, line=1.32)
+
+    card(s, 0.85, 5.96, 11.35, 0.86, SURF2, edge=ACCENT)
+    tf = textbox(s, 1.12, 6.10, 10.9, 0.64)
+    para(tf, "共同缺口：发现靠人、判断靠经验、结论缺证据，三者都无法随变更节奏复制",
+         12.5, True, ACCENT_T, first=True, space_before=0)
+    notes(s, "35 秒。三条线：人力贵且留不住经验；工具告警多但准确率低；"
+             "制度要求两日内报送、修补前不得公开。"
+             "动态扫描也不是万能——AFL 跑一百五十个 CPU 小时都没触发那个缺陷。")
+    footer(s, 3, total, "数据来源：参赛方案书第二章（ISSTA 2024 实证、Project Zero 实验）")
+
+    # ── 04 现有 AI 的边界 ────────────────────────────────────
+    s = blank(prs)
+    head(s, "二、问题分析", "把提示词交给大模型，并不等于能挖漏洞",
+         "公开基准的实测结果说明：通用智能体的自主完成率离工程可用还有距离")
+    rows = [
+        ("CVE-Bench", "13%", "最佳成绩，端到端复现真实 CVE", DANGER),
+        ("CyberGym", "20%", "真实项目环境下的漏洞复现成功率", WARN),
+        ("AutoPenBench", "21% / 64%", "完全自主 21%，人机协同 64%", AMBER),
+        ("脆弱与已修复代码判别", "0.06–0.14", "大模型区分二者与随机的准确率区间", CYAN),
+    ]
+    for i, (name, val, desc, c) in enumerate(rows):
+        y = 1.86 + i * 0.92
+        card(s, 0.85, y, 11.35, 0.80, SURF1)
+        bar(s, 0.85, y + 0.14, 0.06, 0.52, c)
+        tf = textbox(s, 1.12, y + 0.22, 3.4, 0.40)
+        para(tf, name, 12.5, True, TEXT, first=True, space_before=0)
+        tf2 = textbox(s, 4.60, y + 0.16, 2.3, 0.50)
+        para(tf2, val, 17, True, c, first=True, space_before=0)
+        tf3 = textbox(s, 7.10, y + 0.24, 4.9, 0.40)
+        para(tf3, desc, 11, False, DIM, first=True, space_before=0)
+
+    tf = textbox(s, 0.85, 5.60, 11.4, 1.2)
+    para(tf, "原因不在模型不够强，而在漏洞发掘本身是一个需要外部事实验证的任务："
+             "模型给出的是判断，不是证据", 12.5, True, TEXT, first=True,
+         space_before=0, line=1.34)
+    para(tf, "因此技术空间不在「让模型更敢说」，而在用程序分析、沙箱执行与差分对照，"
+             "结构性地补偿模型的不确定性", 12, False, DIM, space_before=8, line=1.34)
+    notes(s, "35 秒。这四个数字是全篇的立论基础：通用智能体直接上，"
+             "端到端复现也就一到两成；连区分脆弱代码和已修复代码都接近随机。"
+             "所以我们的路线不是把模型换得更大，而是给它加外部事实约束。")
+    footer(s, 4, total, "数据来源：参赛方案书 1.3 节（CVE-Bench、CyberGym、AutoPenBench 及判别实验）")
+
+    # ── 05 七阶段闭环 ────────────────────────────────────────
+    s = blank(prs)
+    head(s, "三、总体方案", "七阶段端到端闭环，每阶段有确定产出",
+         "前一阶段的产出是后一阶段的输入；任一阶段不成立，结论就不成立")
+    steps = ["接入与基线", "侦察与建模", "规划与预算", "假设生成",
+             "反证与筛选", "验证与定级", "报告与闭环"]
+    for i, name in enumerate(steps):
+        x = 0.85 + i * 1.60
+        card(s, x, 1.86, 1.42, 1.00, SURF1,
+             edge=ACCENT if i < 5 else OK)
+        tf = textbox(s, x + 0.06, 1.96, 1.30, 0.82)
+        para(tf, "%02d" % (i + 1), 10, True, ACCENT_T if i < 5 else OK,
+             first=True, space_before=0, align=PP_ALIGN.CENTER)
+        para(tf, name, 9.5, True, TEXT, space_before=4, line=1.2,
+             align=PP_ALIGN.CENTER)
+
+    three = [
+        ("接入与建模", "代码仓库接入、指纹清单建基线；解析符号与调用关系，"
+                  "形成入口、汇聚点与可达路径", CYAN),
+        ("假设与反证", "每条假设必须挂载静态证据或图谱证据；先主动构造推翻条件，"
+                  "带着主观确认往下跑是最常见的失效路径", AMBER),
+        ("验证与闭环", "隔离环境执行验证用例，缺陷版与修复版两侧对照；"
+                  "结论、证据、合规要素四份产物同源生成", VIOLET),
+    ]
+    for i, (t, b, c) in enumerate(three):
+        x = 0.85 + i * 3.86
+        card(s, x, 3.10, 3.60, 1.94, SURF1, edge=EDGE)
+        bar(s, x, 3.10, 3.60, 0.05, c)
+        tf = textbox(s, x + 0.26, 3.30, 3.14, 1.66)
+        para(tf, t, 12.5, True, TEXT, first=True, space_before=0)
+        para(tf, b, 10, False, DIM, space_before=7, line=1.36)
+
+    tf = textbox(s, 0.85, 5.30, 11.4, 1.5)
+    para(tf, "七个阶段都定义了失败出口：目录不可读判任务失败；语法错误文件跳过并记录；"
+             "超出预算的切片记为未审计", 12, False, TEXT, first=True, space_before=0,
+         line=1.34)
+    para(tf, "模型不可用时降级为确定性推理；验证跑不起来时标注待人工确认——"
+             "既不当成漏洞，也不当成不存在", 12, False, DIM, space_before=7, line=1.34)
+    para(tf, "这一条决定系统能否交付：把不确定静默算成没有，比没有结论更危险", 12.5,
+         True, TEXT, space_before=8, line=1.34)
+    notes(s, "40 秒。七阶段是一条串行链，重点讲最后一句：每个阶段都有失败出口。"
+             "不确定必须有地方去，不能悄悄消失。")
+    footer(s, 5, total, "流水线实现：vulnagent（config · resolver · analysis · agents · orchestrator · tools · report）")
+
+    # ── 06 五层架构 ─────────────────────────────────────────
+    s = blank(prs)
+    head(s, "三、总体方案", "五层体系架构，模块职责与失败处理一一对应",
+         "分层的目的不是画图好看，而是让每层的降级行为可以被单独定义和测试")
+    layers = [
+        ("接入层", "config.py · cli.py", "配置装载、参数校验、扫描入口；目录不可读即任务失败", ACCENT),
+        ("编排层", "orchestrator.py · incremental.py · llm.py", "预算控制、阶段调度、增量计划、模型路由与降级", CYAN),
+        ("智能体层", "agents.py", "侦察、规划、审计、反证、验证、利用链、报告七个角色 + 共享黑板", VIOLET),
+        ("工具层", "analysis.py · tools.py", "AST 分析、沙箱执行、差分验证；子进程超时 20 秒、输出截断 64KB", AMBER),
+        ("知识层", "resolver.py · memory.py", "调用图索引、经验记忆库；符号解析带置信度，解析不到记 unknown", OK),
+    ]
+    for i, (name, mods, duty, c) in enumerate(layers):
+        y = 1.86 + i * 0.78
+        card(s, 0.85, y, 11.35, 0.68, SURF1)
+        bar(s, 0.85, y, 0.06, 0.68, c)
+        tf = textbox(s, 1.10, y + 0.20, 1.30, 0.36)
+        para(tf, name, 12, True, c, first=True, space_before=0)
+        tf2 = textbox(s, 2.50, y + 0.22, 3.60, 0.36)
+        para(tf2, mods, 9.5, False, BLUEL, first=True, space_before=0)
+        tf3 = textbox(s, 6.30, y + 0.22, 5.70, 0.36)
+        para(tf3, duty, 9.5, False, DIM, first=True, space_before=0)
+
+    card(s, 0.85, 5.86, 11.35, 0.94, SURF2, edge=ACCENT)
+    tf = textbox(s, 1.12, 5.98, 10.9, 0.78)
+    para(tf, "预算默认值：单任务最多 8 轮、60 次工具调用、40 万 token、100 个切片、"
+             "每切片 3 条假设", 11.5, True, ACCENT_T, first=True, space_before=0,
+         line=1.3)
+    para(tf, "上下文预算按比例分配：代码切片约 50%、图谱 10%、静态证据 20%、"
+             "历史案例 10%（最多 2 条）、输出约束 10%", 10.5, False, DIM,
+         space_before=5, line=1.3)
+    notes(s, "35 秒。五层从上到下：接入、编排、智能体、工具、知识。"
+             "重点在每层都有明确的降级行为，以及预算和上下文的硬上限——"
+             "成本可控是设计出来的，不是省出来的。")
+    footer(s, 6, total, "技术栈：Python 3.10+，解析用标准库 ast，持久化用 sqlite3，模型接入不依赖第三方 SDK")
+
+    # ── 07 创新一：多智能体 ─────────────────────────────────
+    s = blank(prs)
+    head(s, "四、技术创新（一）", "多智能体分工协作，共享黑板统一事实",
+         "七个角色各自有输入、输出与预算，避免单一上下文里既要发现又要自证")
+    roles = [("侦察", "入口与暴露面", ACCENT), ("规划", "切片与优先级", CYAN),
+             ("审计", "提出假设", VIOLET), ("反证", "构造推翻条件", AMBER),
+             ("验证", "沙箱执行", OK), ("利用链", "串联影响", PURPLE),
+             ("报告", "证据与合规", BLUEL)]
+    for i, (name, duty, c) in enumerate(roles):
+        x = 0.85 + i * 1.62
+        card(s, x, 1.86, 1.50, 0.94, SURF1, edge=c)
+        tf = textbox(s, x + 0.08, 1.98, 1.34, 0.76)
+        para(tf, name, 12, True, c, first=True, space_before=0,
+             align=PP_ALIGN.CENTER)
+        para(tf, duty, 8.5, False, DIM, space_before=4, line=1.2,
+             align=PP_ALIGN.CENTER)
+
+    mech = [
+        ("共享黑板", "事实、假设、证据集中登记，任一角色可读，避免同一结论被重复推导三次", CYAN),
+        ("预算约束", "轮次、工具调用、token 三重上限；触顶即安全早停并输出已有结论", WARN),
+        ("失败升级", "角色连续失败则上调验证强度或转人工，而不是无限重试烧预算", VIOLET),
+    ]
+    for i, (t, b, c) in enumerate(mech):
+        x = 0.85 + i * 3.86
+        card(s, x, 3.02, 3.60, 1.62, SURF1, edge=EDGE)
+        bar(s, x, 3.02, 3.60, 0.05, c)
+        tf = textbox(s, x + 0.26, 3.22, 3.14, 1.34)
+        para(tf, t, 12.5, True, TEXT, first=True, space_before=0)
+        para(tf, b, 10, False, DIM, space_before=7, line=1.36)
+
+    tf = textbox(s, 0.85, 4.94, 11.4, 1.6)
+    para(tf, "职责分离带来的直接收益是减少自我确认：提出假设的角色不负责证明假设，"
+             "负责验证的角色不参与构造假设", 12.5, True, TEXT, first=True,
+         space_before=0, line=1.34)
+    para(tf, "反证角色是这套分工里最关键的一环——它的任务是把假设推翻，"
+             "而不是把它做实；能推翻的先推翻，剩下的才进入验证", 12, False, DIM,
+         space_before=7, line=1.34)
+    notes(s, "30 秒。七个角色不是七个提示词，是七个带独立输入输出和预算的执行单元。"
+             "关键设计是反证角色——专门负责推翻，降低自我确认。")
+    footer(s, 7, total, "实现：vulnagent/agents.py（角色定义、黑板、预算与升级策略）")
+
+    # ── 08 创新二：语义图谱约束的混合检索 ───────────────────
+    s = blank(prs)
+    head(s, "四、技术创新（二）", "语义图谱约束的混合检索，先证明可达再谈漏洞",
+         "向量、图谱、关键词三路召回后融合重排，按入口—传播链—汇聚点组装上下文")
+    card(s, 0.85, 1.86, 6.20, 3.30, SURF1)
+    chain = [("controller.handle", "入口：HTTP 处理", ACCENT),
+             ("service.load_profile", "传播：业务层转发", CYAN),
+             ("dao.find_user", "汇聚：数据访问", VIOLET),
+             ("cur.execute", "缺陷点：SQL 拼接", DANGER)]
+    for i, (code, note, color) in enumerate(chain):
+        y = 2.06 + i * 0.76
+        card(s, 1.12, y, 5.66, 0.60, SURF2, edge=color)
+        tf = textbox(s, 1.34, y + 0.09, 5.2, 0.46)
+        para(tf, code, 10.5, True, TEXT, first=True, space_before=0)
+        para(tf, note, 9, False, DIM, space_before=1)
+        if i < 3:
+            bar(s, 3.90, y + 0.62, 0.05, 0.12, LINE)
+
+    tf = textbox(s, 7.35, 1.86, 5.1, 0.36)
+    para(tf, "样例目标 webapp（3 文件 / 97 行）解析统计", 11, True, ACCENT_T,
+         first=True, space_before=0)
+    grid = [("20", "调用点", TEXT), ("10", "内部解析", OK),
+            ("1", "外部调用", CYAN), ("5", "无法静态确定", WARN)]
+    for i, (v, l, c) in enumerate(grid):
+        x = 7.35 + (i % 2) * 2.60
+        y = 2.30 + (i // 2) * 1.04
+        card(s, x, y, 2.45, 0.92, SURF1)
+        tf2 = textbox(s, x + 0.22, y + 0.11, 2.1, 0.74)
+        para(tf2, v, 17, True, c, first=True, space_before=0)
+        para(tf2, l, 9.5, False, DIM, space_before=2)
+
+    card(s, 7.35, 4.44, 5.13, 0.72, SURF2, edge=WARN)
+    tf = textbox(s, 7.60, 4.56, 4.7, 0.54)
+    para(tf, "解析率 50%；其余 5 处记 unknown 0.0，不按不可达处理", 10.5, True,
+         TEXT, first=True, space_before=0, line=1.26)
+
+    bullet(s, 0.85, 5.32, 11.4, [
+        ("三路召回", "向量相似度解决语义相近、调用图解决结构可达、关键词解决标识符精确匹配，三路融合重排"),
+        ("置信度分级", "模块级函数与类实例化 1.0、跨模块 import 0.9、self 属性 0.9、"
+                  "基类回溯 0.7、标准库 external 0.6–0.7、无法确定 0.0"),
+        ("漏报主战场", "缺陷在数据层、入口在控制层，只做单文件近邻匹配会把真实可达的注入判为不可达"),
+    ], size=11.5, gap=0.54)
+    notes(s, "40 秒。这一页讲两件事：一是检索不是向量相似度一条路，"
+             "要有调用图约束；二是解析有边界，解析不出来要标 unknown，不能默认不可达。"
+             "样例里二十个调用点，解析率五成，剩下五处明确标注。")
+    footer(s, 8, total, "实现：vulnagent/resolver.py（作用域、导入、轻量类型推断、基类回溯）")
+
+    # ── 09 创新三：双向反馈 ─────────────────────────────────
+    s = blank(prs)
+    head(s, "四、技术创新（三）", "大模型与程序分析双向反馈",
+         "模型提假设、分析工具供事实、执行结果回灌下一轮，形成闭环而不是单向调用")
+    card(s, 0.85, 1.86, 11.35, 1.56, SURF1, edge=CYAN)
+    tf = textbox(s, 1.12, 2.00, 3.0, 0.34)
+    para(tf, "① 模型 → 分析工具", 12, True, CYAN, first=True, space_before=0)
+    tf = textbox(s, 1.12, 2.38, 10.85, 0.94)
+    para(tf, "假设转成可执行的分析任务：为疑似解析漏洞生成定向模糊测试种子与 harness、"
+             "为约束满足类缺陷生成符号执行条件、为污点传播类缺陷生成定向污点查询",
+         11, False, DIM, first=True, space_before=0, line=1.36)
+
+    card(s, 0.85, 3.54, 11.35, 1.56, SURF1, edge=OK)
+    tf = textbox(s, 1.12, 3.68, 3.0, 0.34)
+    para(tf, "② 分析工具 → 模型", 12, True, OK, first=True, space_before=0)
+    tf = textbox(s, 1.12, 4.06, 10.85, 0.94)
+    para(tf, "执行事实回灌：覆盖率增量、崩溃样本、符号执行的可行路径与不可行分支、"
+             "污点查询结果，作为下一轮假设的证据与剪枝依据", 11, False, DIM,
+         first=True, space_before=0, line=1.36)
+
+    bullet(s, 0.85, 5.26, 11.4, [
+        ("为什么必须双向", "单向调用下模型只能凭代码文本猜测；回灌后每一轮都在缩小搜索空间"),
+        ("与纯 fuzz 的差别", "纯 fuzz 靠变异碰运气，这里由假设指定变异方向，种子与约束都带着目标"),
+        ("可观测性", "每一轮的覆盖率增量与剪枝记录都进运行轨迹，可复盘为何没找到"),
+    ], size=11.5, gap=0.54)
+    notes(s, "35 秒。这一页回答「和大模型直接读代码有什么区别」："
+             "模型不只是读，它把假设变成可执行的定向分析任务；工具的结果再回灌给模型。"
+             "这样每一轮都在缩小搜索空间，而不是重复猜。")
+    footer(s, 9, total, "对应参赛方案书创新点三；执行侧由 tools.py 的白名单工具承载")
+
+    # ── 10 创新四：差分验证 ─────────────────────────────────
+    s = blank(prs)
+    head(s, "四、技术创新（四）", "沙箱差分验证为准绳，判定不由模型给出",
+         "同一组用例分别跑缺陷版与修复版，两侧对照裁决；执行失败一律不下结论")
+    chips = ["SQL 注入", "命令注入", "路径穿越", "反序列化",
+             "弱哈希", "代码注入", "SSRF", "XSS"]
+    tf = textbox(s, 0.85, 1.80, 4.0, 0.30)
+    para(tf, "八类 PoC 模板", 10.5, True, ACCENT_T, first=True, space_before=0)
+    for i, name in enumerate(chips):
+        x = 0.85 + i * 1.40
+        card(s, x, 2.12, 1.32, 0.54, SURF2, edge=EDGE)
+        tf2 = textbox(s, x + 0.06, 2.26, 1.20, 0.28)
+        para(tf2, name, 9.5, False, TEXT, first=True, space_before=0,
+             align=PP_ALIGN.CENTER)
+
+    rows = [("缺陷版复现成功，修复版未复现", "verified　已验证漏洞", OK),
+            ("缺陷版执行正常但未复现", "refuted", DIM),
+            ("两版都复现（疑似环境相关）", "inconclusive", WARN),
+            ("缺基线，或修复版执行失败", "inconclusive", WARN),
+            ("执行失败 / 超时 / 用例异常", "inconclusive　严禁判误报", DANGER),
+            ("无法构造可执行用例", "confirmed_static　仅静态确认", CYAN)]
+    for i, (cond, verdict, c) in enumerate(rows):
+        y = 2.84 + i * 0.56
+        card(s, 0.85, y, 11.35, 0.48, SURF1 if i % 2 == 0 else SURF2)
+        tf = textbox(s, 1.10, y + 0.12, 6.4, 0.28)
+        para(tf, cond, 10.5, False, TEXT, first=True, space_before=0)
+        tf2 = textbox(s, 7.70, y + 0.12, 4.3, 0.28)
+        para(tf2, verdict, 10.5, True, c, first=True, space_before=0)
+
+    tf = textbox(s, 0.85, 6.32, 11.4, 0.5)
+    para(tf, "口径只有一句：不确定不等于不存在。误报控制的实质不是调高阈值，"
+             "而是让每条结论都带一组可复现的对照实验", 11.5, True, TEXT,
+         first=True, space_before=0, line=1.3)
+    notes(s, "40 秒。这是质量主张的核心。表格下半部分全部是 inconclusive，"
+             "特别强调执行失败严禁判误报——这是同类工具最常见的失分点。")
+    footer(s, 10, total, "沙箱参数：--network none --memory 512m --cpus 1 --pids-limit 128 --read-only no-new-privileges")
+
+    # ── 11 创新五：幻觉抑制三道闸 ───────────────────────────
+    s = blank(prs)
+    head(s, "四、技术创新（五）", "幻觉抑制三道闸，结论必须过三道才允许输出",
+         "证据绑定、模型交叉、可执行验证，三者取交集而不是任一通过")
+    gates = [
+        ("第一道　证据绑定", "每条结论必须挂到具体文件、行号与调用边；缺少证据的结论在生成阶段即被剔除", ACCENT),
+        ("第二道　双模型交叉", "假设与判定分角色、分模型执行，判定用低温度；两个角色对同一结论不一致时降级为待确认", CYAN),
+        ("第三道　可执行验证", "能用沙箱复现的必须复现；不能复现的只能标静态确认，不得升级为已验证", AMBER),
+    ]
+    for i, (t, b, c) in enumerate(gates):
+        y = 1.86 + i * 1.24
+        card(s, 0.85, y, 11.35, 1.10, SURF1, edge=EDGE)
+        bar(s, 0.85, y, 0.06, 1.10, c)
+        tf = textbox(s, 1.12, y + 0.16, 4.0, 0.34)
+        para(tf, t, 12.5, True, TEXT, first=True, space_before=0)
+        tf2 = textbox(s, 1.12, y + 0.54, 10.7, 0.50)
+        para(tf2, b, 10.5, False, DIM, first=True, space_before=0, line=1.30)
+
+    card(s, 0.85, 5.58, 11.35, 1.02, SURF2, edge=ACCENT)
+    tf = textbox(s, 1.12, 5.72, 10.9, 0.80)
+    para(tf, "设计取舍：宁可输出待人工确认，也不输出未经验证的肯定结论", 12.5, True,
+         ACCENT_T, first=True, space_before=0)
+    para(tf, "对参赛与对交付是同一个道理——一次把不确定说成确定，后面所有结论都要重新核", 10.5,
+         False, DIM, space_before=5)
+    notes(s, "30 秒。三道闸取交集，不是任意通过。第一道管有没有证据，"
+             "第二道管角色有没有串通，第三道管能不能复现。")
+    footer(s, 11, total, "对抗风险覆盖：提示词注入、模型编造证据、基准污染、沙箱逃逸、成本失控、模型供应链")
+
+    # ── 12 创新六：经验记忆库 ───────────────────────────────
+    s = blank(prs)
+    head(s, "四、技术创新（六）", "经验记忆库与跨项目迁移",
+         "把一次扫描的结论沉淀为可检索的经验，换一个项目还能用得上")
+    tabs = [("runs", "扫描运行记录", ACCENT), ("hypotheses", "假设与证据", CYAN),
+            ("verdicts", "判定与差分结果", OK), ("patterns", "缺陷模式", VIOLET)]
+    for i, (name, note, c) in enumerate(tabs):
+        x = 0.85 + i * 2.86
+        card(s, x, 1.86, 2.72, 1.04, SURF1)
+        bar(s, x, 2.02, 0.06, 0.72, c)
+        tf = textbox(s, x + 0.24, 2.00, 2.34, 0.80)
+        para(tf, name, 12, True, c, first=True, space_before=0)
+        para(tf, note, 9.5, False, DIM, space_before=3)
+
+    bullet(s, 0.85, 3.14, 11.4, [
+        ("两段式检索", "先按 CWE 收敛候选，再用标识符词集的 Jaccard 相似度排序；"
+                  "已验证过的模式额外加权，避免同类缺陷每次从零推导"),
+        ("容量与保留", "evidence 字段 JSON 上限 4000 字符，避免单条记录撑爆库；"
+                  "一般保留 12 个月，按需归档"),
+        ("跨项目迁移", "经验以缺陷模式而非项目路径为键，因此换代码库仍可复用；"
+                  "模式命中只作为先验，仍须本地验证"),
+    ], size=12, gap=0.78)
+
+    card(s, 0.85, 5.66, 11.35, 0.96, SURF2, edge=ACCENT)
+    tf = textbox(s, 1.12, 5.78, 10.9, 0.76)
+    para(tf, "这一项解决的是「经验留不住」：人员流动带走的是人，不是结论", 12.5, True,
+         ACCENT_T, first=True, space_before=0)
+    para(tf, "同时它也是成本下降的第二条来源——重复模式不再重复消耗推理预算", 10.5,
+         False, DIM, space_before=5)
+    notes(s, "25 秒。四张表、两段式检索、十二个月保留期。"
+             "要点是经验以缺陷模式为键，所以能跨项目用。")
+    footer(s, 12, total, "实现：vulnagent/memory.py（sqlite3 四表，按 cwe 与 hyp_id 建索引）")
+
+    # ── 13 创新七：合规内生与私有化 ─────────────────────────
+    s = blank(prs)
+    head(s, "四、技术创新（七）", "合规内生的私有化架构",
+         "合规要素不是报告里的附加章节，而是从数据流向与执行形态上就成立")
+    forms = [
+        ("单机原型", "subprocess 沙箱；heuristic 模式可完全离线\n适合验证与演示", ACCENT),
+        ("内网平台", "推理服务器 + 容器集群；按等保三级部署\n适合常态化运营", CYAN),
+        ("流水线嵌入", "只处理增量，接 CI 门禁\n适合研发流程内前置", VIOLET),
+    ]
+    for i, (t, b, c) in enumerate(forms):
+        x = 0.85 + i * 3.86
+        card(s, x, 1.86, 3.60, 1.50, SURF1, edge=c)
+        tf = textbox(s, x + 0.24, 2.02, 3.14, 1.22)
+        para(tf, t, 12.5, True, c, first=True, space_before=0)
+        for j, ln in enumerate(b.split("\n")):
+            para(tf, ln, 9.5, False, DIM, space_before=6 if j == 0 else 2, line=1.3)
+
+    tf = textbox(s, 0.85, 3.56, 5.9, 0.32)
+    para(tf, "三条合规红线", 11.5, True, ACCENT_T, first=True, space_before=0)
+    lines = ["云端模型通道默认关闭，启用须显式配置",
+             "危害国家安全或公共利益的情形 24 小时内报告",
+             "漏洞信息 2 日内在工信部平台报送，须责任部门复核"]
+    for i, ln in enumerate(lines):
+        bar(s, 0.85, 3.94 + i * 0.42 + 0.09, 0.07, 0.07, AMBER)
+        tf2 = textbox(s, 1.06, 3.94 + i * 0.42, 5.7, 0.38)
+        para(tf2, ln, 10.5, False, DIM, first=True, space_before=0)
+
+    card(s, 6.98, 3.54, 5.22, 1.94, SURF2)
+    tf = textbox(s, 7.20, 3.66, 4.8, 0.30)
+    para(tf, "沙箱执行加固（命令固化）", 10.5, True, OK, first=True, space_before=0)
+    cmd = ("docker run --rm --network none \\\n"
+           "  --memory 512m --cpus 1 --pids-limit 128 \\\n"
+           "  --security-opt no-new-privileges --read-only \\\n"
+           "  --tmpfs /tmp:rw,size=64m,noexec \\\n"
+           "  -v <workdir>:/w:rw -w /w python:3.12-slim \\\n"
+           "  python -I /w/poc_case.py /w/target")
+    for j, ln in enumerate(cmd.split("\n")):
+        tf2 = textbox(s, 7.20, 4.02 + j * 0.22, 4.8, 0.22)
+        para(tf2, ln, 8.5, False, BLUEL, first=True, space_before=0, line=1.1)
+
+    tf = textbox(s, 0.85, 5.66, 11.4, 0.9)
+    para(tf, "接入侧：PBKDF2-HMAC-SHA256 26 万次迭代加随机盐，会话令牌只存摘要，"
+             "不发默认口令；工具按四档权限过滤，执行前再判一次，分级缺失即拒绝启动",
+         11, False, DIM, first=True, space_before=0, line=1.34)
+    notes(s, "35 秒。合规内生有三层意思：部署形态可选、数据不出内网、"
+             "报送与复核有固定动作。沙箱那六行参数是固化在代码里的，不是建议。")
+    footer(s, 13, total, "对应参赛方案书创新点七与设计说明书第十二章（执行隔离、授权边界、审计追溯）")
+
+    # ── 14 实测 ─────────────────────────────────────────────
+    s = blank(prs)
+    head(s, "五、验证情况", "三个样例目标端到端跑通，数字可复算",
+         "自建样例注入已知缺陷，逐一核对是否检出、是否验证、修复后是否归零")
+    stat(s, 0.85, 1.82, 2.72, "11 条", "三个目标合计检出漏洞", OK, h=1.10, vs=20)
+    stat(s, 3.72, 1.82, 2.72, "4.1 s", "三个目标端到端总耗时", ACCENT, h=1.10, vs=20)
+    stat(s, 6.59, 1.82, 2.72, "0 条", "修复版重新扫描的交付项", VIOLET, h=1.10, vs=20)
+    stat(s, 9.46, 1.82, 3.02, "31 项", "分层自动化测试全部通过", CYAN, h=1.10, vs=20)
+
+    heads = ["样例目标", "规模", "调用点 / 解析率", "检出结果"]
+    colx = [0.85, 3.30, 5.40, 8.40]
+    tf = textbox(s, 1.10, 3.10, 10.9, 0.26)
+    para(tf, "　　　　　　　".join([]), 1, False, MUTED, first=True, space_before=0)
+    for i, name in enumerate(heads):
+        tfh = textbox(s, colx[i] + 0.24, 3.08, 3.0, 0.26)
+        para(tfh, name, 9.5, True, MUTED, first=True, space_before=0)
+    rows = [("vulnapp", "1 文件 92 行", "31 / 19%", "6 条：CWE-502 严重，78、798、89、22 高危，327 中危", OK),
+            ("webapp", "3 文件 97 行", "20 / 50%", "1 条：CWE-89 dao.py:24（三层调用链可达）", CYAN),
+            ("websvc", "1 文件 59 行", "16 / 25%", "4 条：CWE-95、918 高危，79、327 中危，全 verified", VIOLET)]
+    for i, (a, b, c, d, col) in enumerate(rows):
+        y = 3.38 + i * 0.56
+        card(s, 0.85, y, 11.35, 0.48, SURF1 if i % 2 == 0 else SURF2)
+        bar(s, 0.85, y, 0.05, 0.48, col)
+        for j, val in enumerate((a, b, c)):
+            tfx = textbox(s, colx[j] + 0.24, y + 0.12, 2.4, 0.28)
+            para(tfx, val, 9.5, j == 0, TEXT if j == 0 else DIM, first=True,
+                 space_before=0)
+        tfd = textbox(s, colx[3] + 0.24, y + 0.12, 4.1, 0.28)
+        para(tfd, d, 9, False, DIM, first=True, space_before=0)
+
+    tf = textbox(s, 0.85, 5.12, 5.5, 0.28)
+    para(tf, "增量扫描实测（同一目标连续三次）", 10.5, True, ACCENT_T, first=True,
+         space_before=0)
+    inc = [("① 首次建基线", "变更 3 文件 → 审计 0 切片 → 0 条", MUTED),
+           ("② 重新引入缺陷", "变更 1 文件 → 审计 1 切片 → 1 条 CWE-89", OK),
+           ("③ 无变更重跑", "跳过，直接给出已有结论", CYAN)]
+    for i, (a, b, c) in enumerate(inc):
+        tf2 = textbox(s, 0.85, 5.46 + i * 0.36, 6.0, 0.30)
+        rich(tf2, [(a + "　", True, c), (b, False, DIM)], size=9.5, first=True,
+             space_before=0)
+
+    card(s, 7.10, 5.10, 5.10, 1.34, SURF2, edge=ACCENT)
+    tf = textbox(s, 7.32, 5.24, 4.7, 1.10)
+    para(tf, "缺陷注入与修复闭环", 10.5, True, ACCENT_T, first=True, space_before=0)
+    para(tf, "三个样例目标注入六类典型缺陷全部检出；对修复版重新扫描为 0 条交付项，"
+             "说明结论不是常驻噪声", 9.5, False, DIM, space_before=5, line=1.30)
+    notes(s, "40 秒。三个样例目标、十一个漏洞、四点一秒。最值得讲的是最后一句："
+             "把缺陷修掉再扫，交付项归零——这证明结论跟着代码走，不是常驻噪声。"
+             "下面是增量三行，第三行无变更直接跳过。")
+    footer(s, 14, total, "复算方式：python -X utf8 -m unittest discover -s tests -t .（31 项分层用例）")
+
+    # ── 15 效益与推广 ───────────────────────────────────────
+    s = blank(prs)
+    head(s, "六、效益与推广", "五类场景的工时对比，实测与估算分开标注",
+         "效率与质量已被实测证明；成本维度给出设计锚点与验证方法")
+    heads = ["场景", "传统方式", "本系统", "变化"]
+    colx = [0.85, 3.60, 7.20, 9.60]
+    for i, name in enumerate(heads):
+        tfh = textbox(s, colx[i] + 0.24, 1.86, 3.2, 0.26)
+        para(tfh, name, 9.5, True, MUTED, first=True, space_before=0)
+    rows = [("单系统全量审计（50 万行）", "4 人 × 15 天", "2 人 × 3 天", "人力降约 80%", OK),
+            ("应急影响面确认", "3 人 × 2 天", "4 小时", "降约 90%", OK),
+            ("2000 行增量审计", "1 人 × 1 天", "30 分钟 + 复核", "降约 90%", OK),
+            ("渗透前期信息收集", "5 天", "1 + 1 天", "降约 60%", CYAN),
+            ("补丁与版本差分", "2 天", "2 小时", "降约 90%", CYAN)]
+    for i, (a, b, c, d, col) in enumerate(rows):
+        y = 2.16 + i * 0.56
+        card(s, 0.85, y, 11.35, 0.48, SURF1 if i % 2 == 0 else SURF2)
+        bar(s, 0.85, y, 0.05, 0.48, col)
+        tfa = textbox(s, colx[0] + 0.24, y + 0.12, 2.9, 0.28)
+        para(tfa, a, 9.5, False, TEXT, first=True, space_before=0)
+        for j, val in enumerate((b, c)):
+            tfx = textbox(s, colx[j + 1] + 0.24, y + 0.12, 3.2, 0.28)
+            para(tfx, val, 9.5, False, DIM, first=True, space_before=0)
+        tfd = textbox(s, colx[3] + 0.24, y + 0.12, 2.6, 0.28)
+        para(tfd, d, 9.5, True, col, first=True, space_before=0)
+
+    tf = textbox(s, 0.85, 5.08, 6.0, 0.28)
+    para(tf, "推广路径", 10.5, True, ACCENT_T, first=True, space_before=0)
+    phases = [("1–6 月", "试点：单团队、单系统，跑通闭环"),
+              ("7–18 月", "规模复制：接 CI、多节点、多项目"),
+              ("19–36 月", "生态：模式库共享、行业适配")]
+    for i, (t, b) in enumerate(phases):
+        tf2 = textbox(s, 0.85, 5.40 + i * 0.34, 6.0, 0.30)
+        rich(tf2, [(t + "　", True, ACCENT_T), (b, False, DIM)], size=9.5,
              first=True, space_before=0)
 
-    tf = textbox(s, 1.0, 6.28, 10.8, 0.5)
-    para(tf, "值不值得投入，最终取决于是否认可：把「找漏洞」从一门手艺，变成一项工程",
-         13, False, MUTED, first=True, space_before=0)
-    notes(s, "40 秒。收尾就三句，不要再展开。最后一句留白，把时间交给提问。")
-    footer(s, 12, total, "")
+    card(s, 7.30, 5.06, 4.90, 1.28, SURF2, edge=WARN)
+    tf = textbox(s, 7.52, 5.18, 4.5, 1.06)
+    para(tf, "待规模化验证（报告中单列）", 10.5, True, WARN, first=True,
+         space_before=0)
+    para(tf, "真实大项目的每千行成本对比；多节点并发下的队列吞吐与基线并发覆盖",
+         9.5, False, DIM, space_before=5, line=1.30)
+    notes(s, "30 秒。五组数字来自方案书效益测算：全量审计降八成、应急确认降到四小时。"
+             "成本那格是设计锚点，报告里单独标注了待规模化验证两项，不混在实测里。")
+    footer(s, 15, total, "年度人力测算：400 人天 → 120 人天（按上述五类场景加权）")
+
+    # ── 16 小结 ────────────────────────────────────────────
+    s = blank(prs)
+    bar(s, 1.0, 1.06, 0.12, 0.72, ACCENT)
+    tf = textbox(s, 1.30, 1.00, 10.8, 1.4)
+    para(tf, "七、小结", 12, True, ACCENT_T, first=True, space_before=0)
+    para(tf, "把漏洞发掘从经验判断转为证据工程", 29, True, TEXT, space_before=8)
+
+    pts = [
+        ("路径成立", "四阶段智能体、七阶段闭环、五层架构已在原型上跑通，不是设计图"),
+        ("结论可信", "判定由缺陷版与修复版差分给出；执行失败一律不下结论"),
+        ("成本可控", "预算硬上限叠加增量与经验复用，成本随变更量而非代码总量增长"),
+        ("落地可行", "三种部署形态，全离线私有化；合规要素内生于流程而非附加章节"),
+    ]
+    for i, (t, b) in enumerate(pts):
+        y = 2.72 + i * 0.84
+        card(s, 1.0, y, 10.6, 0.70, SURF1)
+        tf2 = textbox(s, 1.28, y + 0.13, 10.1, 0.54)
+        rich(tf2, [(t, True, ACCENT_T), ("　" + b, False, DIM)], size=11.5,
+             first=True, space_before=0)
+
+    tf = textbox(s, 1.0, 6.34, 10.8, 0.45)
+    para(tf, "汇报完毕，请各位批评指正", 12, False, MUTED, first=True,
+         space_before=0)
+    notes(s, "20 秒。四句收尾：路径成立、结论可信、成本可控、落地可行。不展开，留提问时间。")
+    footer(s, 16, total, "")
 
     prs.save(path)
     return path
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="build the 8-minute release deck")
+    parser = argparse.ArgumentParser(description="build the 8-minute report deck")
     parser.add_argument("--out", default="成果发布-8分钟.pptx")
     args = parser.parse_args(argv)
     out = os.path.abspath(args.out)
