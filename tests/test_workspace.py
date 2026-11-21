@@ -177,15 +177,32 @@ class EngineMemoryTestCase(unittest.TestCase):
     """
 
     def test_run_scan_defaults_the_memory_into_the_workspace_cache(self):
-        import inspect
+        """判据读字节码，不读 `inspect.getsource`。
+
+        这里要钉的是三件事：先判 `if not memory_path`、缺省值经 `workspace.cache()`
+        算出、文件名是 `engine-cases.db`。`getsource` 按函数对象的行号回磁盘重读
+        源文件并依赖 `linecache`，全量套件同一进程里被别的用例污染后读到的是别人的
+        正文（`tests/test_toolkit_arguments.py` 的 `build_command` 断言就这样翻过），
+        所以改成看 `co_code` 的跳转、`co_names` 的全局名和 `co_consts` 里的文件名；
+        这三样在 import 时刻就固定了。
+        """
+        import dis
         from pentestd import engine, workspace
 
-        source = inspect.getsource(engine.run_scan)
-        self.assertIn("if not memory_path", source,
-                      "run_scan 没有接管缺省的记忆库路径")
-        self.assertIn("workspace.cache()", source,
+        code = engine.run_scan.__code__
+        instructions = list(dis.get_instructions(engine.run_scan))
+        # 缺省值只在 memory_path 为假时才接管：`LOAD_FAST memory_path` 紧跟着一个
+        # POP_JUMP_IF_TRUE，为真就跳过后面那段赋值。PEP 659 的 RESUME 在不在前面
+        # 不该影响这条判据，所以先找到那次取值再往后看一步。
+        load = next(index for index, item in enumerate(instructions)
+                    if item.opname == "LOAD_FAST" and item.argval == "memory_path")
+        self.assertEqual(instructions[load + 1].opname, "POP_JUMP_IF_TRUE",
+                         "run_scan 没有接管缺省的记忆库路径")
+        self.assertIn("cache", code.co_names,
                       "缺省记忆库必须落在工作区缓存里")
-        self.assertIn("engine-cases.db", source)
+        self.assertIn("workspace", code.co_names,
+                      "缺省记忆库必须落在工作区缓存里")
+        self.assertIn("engine-cases.db", code.co_consts)
 
         cache = os.path.join(workspace.root(), "cache")
         self.assertTrue(os.path.normcase(cache).endswith(

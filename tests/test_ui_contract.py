@@ -2611,6 +2611,72 @@ class CssLayoutGuardTestCase(unittest.TestCase):
             self.assertIn("overscroll-behavior: contain", block,
                           "%s 滚到头会把余量甩给记录区" % selector)
 
+    def test_the_page_head_starts_on_the_same_line_as_the_rail(self):
+        """页面上沿与下沿都要和左导航栏对齐：同一条起点线，同一条终点线。
+
+        用户两次指出来，说的是同一件事的两端。第一次是「红线这块平齐」——他在控制台
+        截图上横着画了一条线，那条线同时压过 `.rail` 的上沿与右侧第一张卡
+        `header.page-head` 的上沿；第二次是「主页布局高度和左侧边栏保持一样的高度」
+        ——左栏一路排到底，右边却在自己的最后一张卡下方空出一条 12px 的带子。
+
+        形状本来就是对的：外壳 `.console-shell` 自己留了一圈 12px，`.rail` 与
+        `.workspace` 都从这条线往下开始，左右方向也已经对齐（`rail.right + gap`
+        正好等于 `head.left`）。多出来的那 12px 只在上下两端：`.panel` 又给了一圈
+        内边距，而每页的第一个元素就是页头、最后一张卡贴着底排，于是页头比左栏低一格、
+        卡片下沿又比左栏高一格。
+
+        实测（Edge headless，1440×900 / 1280×780 / 1920×1080 三档，逐页切换 15 个
+        页签）：顶部改前 `rail.top=12 / head.top=24`，改后同为 12；底部改前
+        `rail.bottom=888 / 卡片下沿=876`，改后同为 888。两项偏差全为 0。
+
+        左右那道 12px **要留着**：它是卡片与整页滚动条之间唯一的呼吸位。所以这条用例
+        查的是「三值写法里上下都是 0、左右不为 0」，而不是「四边都归零」。
+
+        这一条守两件事，缺一不可：`.panel` 的上下内边距为 0，**且**每个页签的第一个
+        元素确实是页头。只守前者，某页把页头换成一排行内元素之后页头又会被推下去；
+        只守后者，`padding: var(--sp-3)` 那种整体内边距回来时谁都看不出来。
+        """
+        css = re.sub(r"/\*.*?\*/", "", self._css, flags=re.S)
+        panel = re.search(r"(?:^|\n)\.panel\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(panel, "样式表里找不到 `.panel` 的规则块")
+        padding = re.search(r"(?:^|;)\s*padding:\s*([^;]+)", panel.group(1))
+        self.assertIsNotNone(padding, ".panel 没有 padding：页内的块会贴到外壳边上")
+        parts = padding.group(1).split()
+        self.assertEqual(len(parts), 3,
+                         "`.panel` 的 padding 要写成「上 左右 下」三个值，收到的"
+                         "是 %r——两值写法改不动顶部，四值写法会与这条用例的口径脱钩"
+                         % padding.group(1).strip())
+        self.assertEqual(parts[0], "0",
+                         "`.panel` 的顶部内边距回来了：外壳已经留了一圈 12px，页内"
+                         "再叠一层，页头就比左导航栏低 12px（截图里那条线会断成两截）")
+        self.assertEqual(parts[2], "0",
+                         "`.panel` 的底部内边距回来了：外壳那圈 12px 已经是页与窗口"
+                         "之间的留白，页内再垫一层，最后一张卡的下沿就停在 rail.bottom-12"
+                         "上——整页看起来比左导航栏矮一截（原话「主页布局高度和左侧边栏"
+                         "保持一样的高度」）")
+        self.assertNotEqual(parts[1], "0",
+                            "左右那道 12px 画布缝没了：卡片会直接贴到工作区的边线上，"
+                            "整页的滚动条也会压住卡片的圆角")
+
+        html = re.sub(r"<!--.*?-->", "", _read("index.html"), flags=re.S)
+        sections = re.findall(
+            r'<section\s+id="(panel-[a-z-]+)"\s+class="([^"]*)"\s*>(.*?)'
+            r'(?=<section\s+id="panel-|\Z)', html, flags=re.S)
+        self.assertTrue(sections, "一个 `section.panel` 都没抓到，多半是读错了文件")
+        self.assertEqual(len(sections), 15,
+                         "页签数量变了（现在是 %d 个）：新增的页也要用页头当第一张卡"
+                         % len(sections))
+        wrong = []
+        for pid, cls, body in sections:
+            self.assertIn("panel", cls.split(), "%s 的 class 里没有 panel" % pid)
+            first = re.match(r"\s*<(\w+)([^>]*)>", body)
+            if not first or first.group(1) != "header" \
+                    or 'class="page-head"' not in first.group(2):
+                wrong.append(pid)
+        self.assertEqual(wrong, [],
+                         "这些页签的第一个元素不是 `header.page-head`：%s"
+                         % wrong)
+
 
 class FixtureScriptCoverageTestCase(unittest.TestCase):
     """离线渲染夹具必须知道 web/ 下的**每一个**脚本。
@@ -8010,9 +8076,9 @@ class GuideGroupOrdinalTestCase(unittest.TestCase):
         return found
 
     def test_every_ordinal_matches_the_real_position_in_the_nav(self):
-        numerals = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一"]
+        numerals = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二"]
         labels = self._nav_labels()
-        self.assertEqual(11, len(labels), "导航不是十一组了：%s" % labels)
+        self.assertEqual(12, len(labels), "导航不是十二组了：%s" % labels)
         problems = []
         for ordinal, name in self._guide_groups():
             if ordinal not in numerals:

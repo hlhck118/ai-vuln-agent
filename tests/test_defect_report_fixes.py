@@ -522,11 +522,17 @@ class DelegateSchemaTestCase(unittest.TestCase):
         self.assertEqual(subagent.NOTE_CHARS, self.props["note"]["maxLength"])
 
     def test_the_schema_and_the_parser_share_one_source(self):
-        """两处各写一个数字，改一处就会分叉，而分叉的症状是"照着文档写却被拒"。"""
-        import inspect
-        source = inspect.getsource(subagent.parse_specs)
+        """两处各写一个数字，改一处就会分叉，而分叉的症状是"照着文档写却被拒"。
+
+        判据读 `parse_specs.__code__.co_names`（字节码里的全局名），不是
+        `inspect.getsource`：后者按函数对象的行号回磁盘重读源文件，走全量套件时
+        同一进程里前面某个用例写过源文件、或让 `linecache` 记住旧内容，读回来的
+        就是别人的正文，于是变成"单跑必过、全套必挂"（`tests/test_toolkit_arguments.py`
+        里那条 `build_command` 断言就是这么翻的）。
+        """
+        names = subagent.parse_specs.__code__.co_names
         for constant in ("OBJECTIVE_CHARS", "ROLE_CHARS", "NOTE_CHARS"):
-            self.assertIn(constant, source,
+            self.assertIn(constant, names,
                           "parse_specs 没有用 %s，那它就从别处拿了另一个数" % constant)
 
     def test_the_tools_field_documents_the_naming_rule(self):

@@ -23,7 +23,6 @@
 路径的文件"——这一条写在 `authz.CLASSES` 的 `requires` 里，让放行 `toolkit` 的人知道
 自己在放行什么，而不是假装它不存在。
 """
-import inspect
 import os
 import sys
 import tempfile
@@ -56,6 +55,25 @@ class ExecOptionGuardTestCase(unittest.TestCase):
         for written in ("ProxyCommand=/x", "PROXYCOMMAND=/x", "Proxycommand=/x"):
             with self.assertRaises(toolkit.ToolkitError, msg=written):
                 toolkit.validate_option(written)
+
+    def test_a_quoted_or_punctuated_key_cannot_slip_past_the_table(self):
+        """键归一化成"只留字母数字"——这条是**放行 `"` 之后必须补的**。
+
+        原先 `"` 被字符集挡在门外，`-o '"ProxyCommand=calc.exe"'` 根本走不到键比对；
+        现在它走得到，而 `"proxycommand"` 不在 `EXEC_OPTION_KEYS` 里——那就是一条
+        随放行 `"` 一起长出来的新口子。带分隔符的写法 ssh 自己也不认（会报
+        bad configuration option），所以归一并不会误伤任何合法选项。
+        """
+        for written in ('"ProxyCommand=calc.exe"', "proxy_command=calc.exe",
+                        "Proxy-Command=calc.exe", "Proxy Command=calc.exe",
+                        "  ProxyCommand =calc.exe"):
+            with self.assertRaises(toolkit.ToolkitError, msg=written):
+                toolkit.validate_option(written)
+
+    def test_a_quoted_legit_value_is_still_accepted(self):
+        """归一只放宽**比对**，不改变放行的值本身。"""
+        self.assertEqual(toolkit.validate_option('StrictHostKeyChecking="no"'),
+                         'StrictHostKeyChecking="no"')
 
     def test_only_the_key_is_judged(self):
         """按**键**判定，不按值。
@@ -134,8 +152,15 @@ class ExecOptionEndToEndTestCase(unittest.TestCase):
 
         绕过它自己拼 argv 的实现，会让上面那一整组用例变成摆设——它们在测一个
         产品里没人走的函数。
+
+        判据读的是**字节码里的全局名**，不是 `inspect.getsource`：后者按函数对象
+        的行号回磁盘上重读文件，全量套件里前面任何一个用例改过源文件、或让
+        `linecache` 记住了旧内容，这里读到的就是**别人的正文**——`Ran 3171
+        tests` 那一次 `FAILED (failures=1)` 正是这么来的（单跑必过、全套必挂，
+        而报错里贴出来的正文是 `toolkit.py` 里毫不相干的一段）。字节码在 import
+        时刻就固定了，不随磁盘变化，也不会被同一进程里的其他用例改掉。
         """
-        self.assertIn("build_command(", inspect.getsource(toolkit.run),
+        self.assertIn("build_command", toolkit.run.__code__.co_names,
                       "run() 自己拼 argv 就等于绕过了参数层")
 
     @unittest.skipUnless(toolkit.installed("ssh"), "本机没有 ssh 客户端")
@@ -168,9 +193,20 @@ class DataArgumentCharsetTestCase(unittest.TestCase):
 
     ## 这一组钉的是什么
 
-    放宽的部分（`% { } ,` 空格 `;` `?`）与没放宽的部分（`& | ^ < > " \u0060 $`、
+    放宽的部分（`% { } ,` 空格 `;` `?` `"`）与没放宽的部分（`& | ^ < > \u0060 $`、
     控制符）各钉一遍。**只钉放宽的那一半不够**：下一次"顺手把禁表也改小一点"
     不会有任何症状——直到它不再是症状。
+
+    ## 引号是第二轮的同一类错
+
+    第一轮把 `% { } ,` 放开，是因为平台自己的 skill 教的命令被自己的闸拒了。
+    第二轮是 `"`：Vaultwarden 注册那条 `{"email":"…"}` 被拒，报文里给出的
+    "改用 `-d @payload.json`" 又落不了地——`run_tool` 的 cwd 是任务目录，调用方
+    拿不到它。所以这一轮的口径是**按"有没有第二层解析器"分**，不是按字符分：
+    直达 `.exe` 的 argv 放行 `"`（Windows 上 `subprocess` 的转义与子进程的
+    `CommandLineToArgvW` 往返无损，有用例实测），`.cmd`/`.bat` 包装上整档回落、
+    引号照样拒。顺带补的是 `validate_option` 的键归一化——`"` 一旦能进值，
+    `-o '"ProxyCommand=…"'` 就会绕过键比对，这条口子是放行 `"` 带出来的。
     """
 
     def setUp(self):
@@ -214,24 +250,47 @@ class DataArgumentCharsetTestCase(unittest.TestCase):
                       toolkit.build_command("curl", ["-H", "Cookie: a=1; b=2"]))
 
     def test_injection_characters_survive_in_no_tier(self):
-        """`& | ^ < > "` `` ` `` `$` 在任何档都不放行，逐个钉。"""
-        for ch in '&|^<>"`$':
+        """`& | ^ < >` `` ` `` `$` 在任何档都不放行，逐个钉。
+
+        **`"` 不在这张表里**，而这一条是改过的：它在非包装的 `.exe` 上往返无损
+        （见下面的往返用例），而真正危险的那条路（`.cmd` 包装）由 `wrapper` 整档
+        回落挡住。原先把它和 `&` 列在一起，代价是"内联 JSON 请求体传不了"，
+        而报文里给出的等价写法（`-d @payload.json`）在 `run_tool` 上落不了地
+        ——它的 cwd 是任务目录，调用方拿不到。
+        """
+        for ch in '&|^<>`$':
             with self.assertRaises(toolkit.ToolkitError, msg="%r 被放过了" % ch):
                 toolkit.build_command("curl", ["-H", "X: a%sb" % ch])
 
-    def test_quotes_are_refused_with_a_pointer_to_the_file_form(self):
-        """带引号的内联请求体传不了——但错误信息要指出文件写法。
+    def test_an_inline_json_body_is_accepted(self):
+        """带引号的**内联**请求体是过的：这是 Vaultwarden 注册那条的形状。
 
-        这个限制是刻意的：`"` 是引号层的转义字符，而工具自己可能把参数再递给别的
-        解析器（不受我们控制）。既然 `& | ^ < >` 用的是同一条理由，只给 `"` 开口子
-        就不一致了。代价是"内联 JSON 传不了"，等价写法是 `-d @payload.json`——
-        **所以消息里必须给出它**，否则使用者会以为 curl 用不了。
+        `-d` 声明在 `dataFlags` 里，而 `"` 现在是数据档放行的字符之一。
         """
-        with self.assertRaises(toolkit.ToolkitError) as caught:
-            toolkit.build_command("curl", ["-d", '{"a":1}'])
-        self.assertIn("@payload.json", str(caught.exception))
+        body = '{"email":"vwtest20266@example.com"}'
+        built = toolkit.build_command("curl", ["-H", "Content-Type: application/json",
+                                               "-d", body])
+        self.assertIn(body, built)
+
+    def test_the_file_form_still_passes(self):
+        """文件写法没有因为放行引号而失效。"""
         self.assertIn("@payload.json",
                       toolkit.build_command("curl", ["-d", "@payload.json"]))
+
+    def test_a_wrapper_binary_still_refuses_the_quoted_body(self):
+        """`.cmd` 包装上引号照样拒，且消息要说清是包装造成的。
+
+        **这是"放行 `"`"这笔交易的价码**：放宽只落在"参数走 argv 直达 .exe"这一条
+        路上；一旦解析结果是 `.cmd`/`.bat`，整档回落到严格档。不钉住它，放行 `"`
+        就等于在 cmd.exe 重新解析的那条路上也开了一道口子。
+        """
+        self._fake("curl", "C:/fake/curl.cmd", True)
+        with self.assertRaises(toolkit.ToolkitError) as caught:
+            toolkit.build_command("curl", ["-d", '{"a":1}'])
+        self.assertIn("cmd.exe", str(caught.exception),
+                      "回落时要说清是因为包装脚本")
+        self.assertIn("@payload.json", str(caught.exception),
+                      "被拒时仍要给出文件写法")
 
     def test_real_newline_is_refused_and_the_error_teaches_the_escape(self):
         """真换行仍然拒，但错误信息必须给出等价写法。
@@ -295,6 +354,135 @@ class DataArgumentCharsetTestCase(unittest.TestCase):
             self.assertFalse(declared - listed,
                              "%s 声明了 %s 却没在 arguments 里列出"
                              % (entry["id"], sorted(declared - listed)))
+
+
+class QuotedBodyRoundTripTestCase(unittest.TestCase):
+    """`"` 放行的**依据**：真跑一次，看正文有没有原样到达。
+
+    这一条不是"字符集里少了一个字符"的断言。放行 `"` 的全部理由，是"非包装的
+    `.exe` 上引号由 Windows 自己转义、由子进程自己还原，往返无损"。那是关于
+    `subprocess` + `CommandLineToArgvW` 的一个事实，只能实测——而它恰恰是最容易
+    被下一次"安全清理"改回去的那一条。
+
+    跑的是 `build_command` 的产物交给 `Popen`，与 `_stream_child` 的调用形状一致；
+    中间隔着一个真实进程与一个真实 HTTP 请求，所以它验的是整条 argv 链，
+    不是"某个字符串里有没有那个字符"。
+    """
+
+    BODY = '{"email":"vwtest20266@example.com","name":"a b"}'
+
+    def setUp(self):
+        self._saved = dict(toolkit._DETECTED)
+        self._fake("curl", "C:/fake/bin/curl.exe", False)
+
+    def tearDown(self):
+        toolkit._DETECTED.clear()
+        toolkit._DETECTED.update(self._saved)
+
+    def _fake(self, adapter_id, path, wrapper):
+        entry = dict(toolkit.ADAPTER_INDEX[adapter_id])
+        entry.update({"path": path, "command": [path],
+                      "execPath": path, "execCommand": [path],
+                      "installed": True, "wrapper": wrapper})
+        toolkit._DETECTED[adapter_id] = entry
+
+    def test_the_body_arrives_byte_for_byte(self):
+        """`Popen` 起真进程，服务端收到的正文与拼进去的那个字符串逐字节相同。"""
+        import subprocess
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        received = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                size = int(self.headers.get("content-length") or 0)
+                received["body"] = self.rfile.read(size)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+
+            def log_message(self, *_args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            url = ("http://127.0.0.1:%d/api/accounts/register"
+                   % server.server_address[1])
+            argv = toolkit.build_command(
+                "curl", ["-s", "-o", "NUL", "-H",
+                         "Content-Type: application/json",
+                         "-d", self.BODY, url])
+            # argv[0] 来自假条目里的 `command`（`_locate` 那边对应 `execCommand`）；
+            # 这一条只复核参数层，真跑起来用本机的 curl。
+            replaced = list(argv)
+            replaced[0] = self._real_curl()
+            proc = subprocess.Popen(replaced, shell=False,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT)
+            proc.communicate(timeout=60)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(received.get("body", b"").decode("utf-8"), self.BODY,
+                         "引号在 argv 里往返一次，正文必须逐字节相同")
+
+    @staticmethod
+    def _real_curl():
+        """本机真 curl 的绝对路径；没有就跳过这一条。"""
+        import shutil
+        found = shutil.which("curl")
+        if not found:
+            raise unittest.SkipTest("本机没有 curl")
+        return found
+
+
+class QuotedBodyDocumentationTestCase(unittest.TestCase):
+    """放行 `"` 之后，**说不放行的地方必须全改掉**。
+
+    这条守的是这一轮真正的风险：代码放宽了，而提示词、工具描述、技能手册、界面说明书
+    还在教「引号在任何档都不放行，改用 `-d @payload.json`」。症状是模型读到手写的那三句
+    改写规则，把一条本来能过的命令改成一条**落不了地**的（`run_tool` 的 cwd 是任务目录），
+    然后放弃——与放行之前一样，只是多绕一步。
+
+    它是**文档一致性**用例，不是行为用例：行为在 `QuotedBodyRoundTripTestCase` 里。两份
+    都要有，因为文档与代码分叉时两边都不报错——读文档的人与跑代码的人看到的是两套规则。
+    """
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def read(self, *parts):
+        with open(os.path.join(self.ROOT, *parts), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_reject_message_says_quotes_pass(self):
+        """拒绝消息本身是第一现场：被拒的人只看得到它。"""
+        with self.assertRaises(toolkit.ToolkitError) as caught:
+            toolkit.validate_argument('{"a":"b&c"}', "参数值", data=True)
+        message = str(caught.exception)
+        self.assertIn("引号是放行的", message)
+        self.assertIn("内联 JSON", message)
+
+    def test_the_system_prompt_no_longer_forbids_quotes(self):
+        """系统提示里那三条改写规则的第一条，已经从「改用文件」变成「直接传」。"""
+        text = self.read("pentestd", "chat.py")
+        self.assertIn("引号是放行的", text)
+        self.assertNotIn('`& | ^ < > "` 在任何档都不放行', text)
+
+    def test_the_skills_agree_with_the_code(self):
+        """技能手册在同一件事上不能说反话——它们是模型跑任务时真去读的那一份。"""
+        for name in ("web-surface.md", "service-fingerprint.md"):
+            body = self.read("data", "skills", name)
+            self.assertNotIn('`& | ^ < > "` 在任何档都不放行', body,
+                             "%s 还在说引号不放行" % name)
+
+    def test_the_data_flag_documentation_mentions_the_body(self):
+        """`dataFlags` 那一行是给人改 `tools.json` 时看的，得说清它收哪些值。"""
+        text = self.read("pentestd", "toolconfig.py")
+        self.assertIn("内联 JSON 请求体", text)
 
 
 if __name__ == "__main__":

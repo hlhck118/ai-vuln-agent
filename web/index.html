@@ -7,11 +7,13 @@
 <!-- 外观：**必须在这里、在样式表之前，而且必须是内联的**。
      挪到 DOMContentLoaded 等于等首屏画完再改色——深色主题的使用者每次刷新都会先看到
      一帧午夜外观、再闪成玻璃色。换成外部 js 同样不成立：多一次网络往返，那一帧照样在。
-     这里落三个属性（主题 / 重点色 / 磨砂）。**磨砂也在这**：它虽然是材质不是配色，
-     但晚一帧生效同样看得见——22px 的模糊在首帧是 0，界面的层次会跳一下。
-     下面那组字面量与 web/theme.js 的六个常量必须一致，契约测试逐字比对；
+     这里落四个属性（主题 / 重点色 / 磨砂 / 透明度）。**磨砂也在这**：它虽然是材质不是配色，
+     但晚一帧生效同样看得见——22px 的模糊在首帧是 0，界面的层次会跳一下。**透明度也在这**，
+     而且它比另外三条多做一步：属性只写百分比，真正改界面的是五个面令牌的内联值，
+     所以下面那段还要按百分比把面令牌的当前值乘一遍。
+     下面那组字面量与 web/theme.js 的对应常量必须一致，契约测试逐字比对；
      对不上时的症状是"上次选的那项没记住"，而两处代码各自看都没问题。
-     三份 id 列表（主题 / 重点色 / 磨砂）同样在那里核对。 -->
+     三份 id 列表（主题 / 重点色 / 磨砂）与透明度的令牌清单同样在那里核对。 -->
 <script>
 (function () {
   var apply = function (attr, ids, key, fallback) {
@@ -1076,6 +1078,7 @@
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="review">工具审批</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="plugins">插件市场</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="mcp">MCP 服务</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="notify">消息通知</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="skills">Skills</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="users">用户管理</button>
     </nav>
@@ -1113,13 +1116,31 @@
           <!-- 透明度：**滑块**，不是档位。这一项的量是连续的（"再淡一点"是它唯一
                有意义的用法），切成五档会让人在"轻"和"中"之间反复横跳却总差一点。
                它调的是面令牌（卡片、侧栏、坞这些底）的不透明度，不动文字色，
-               也不动窗口底——见 web/theme.js 的 ALPHA_TOKENS 与 paintAlpha。 -->
+               也不动窗口底——见 web/theme.js 的 ALPHA_TOKENS 与 paintAlpha。
+
+               两条"看着多余、其实各堵一个洞"的东西：
+
+               · **恢复默认那颗按钮**。这一项是唯一一轴**拖过一次就永久记住**的：
+                 主题、重点色、磨砂都是点一下就换，想让它们回默认，点默认那一档即可；
+                 而滑块没有"默认档"可点——想回到 100% 只能精确地把拇指拖到最右端，
+                 在窄屏上很难落到整数 100。没有这颗按钮时唯一可靠的回退是清浏览器
+                 数据，而那条路会把账号登录状态一起清掉。它调的是同一个入口
+                 `applyAlpha(100)`，所以存储、属性、令牌三处同步，不新增任何状态。
+
+               · **autocomplete="off"**。Chromium 会在刷新、前进后退、以及从会话恢复
+                 页面时**自己还原 form 控件的值**（range 也在内）。正常情况下
+                 settings.js 的 renderAlpha() 随后会把它覆盖回真实值，但那依赖
+                 settings.js 成功启动；一旦它先抛错（比如某个接口挂了），滑块就会停在
+                 **浏览器记住的那个数**上，而它和 localStorage 里的值没有关系——
+                 于是界面显示一个没人选过的透明度。关掉这条独立来源之后，滑块的值
+                 就只有一个出处。 -->
           <div class="settings-subhead">透明度
             <span class="muted" id="alpha-value">100%</span>
           </div>
           <div class="alpha-row" id="alpha-row">
             <input type="range" id="alpha-range" class="alpha-range" min="0" max="100" step="1"
-                   value="100" aria-label="界面的不透明度（百分比）">
+                   value="100" autocomplete="off" aria-label="界面的不透明度（百分比）">
+            <button type="button" id="alpha-reset" class="btn sm ghost">恢复默认</button>
           </div>
           <p class="muted" id="alpha-note"></p>
         </div>
@@ -1586,6 +1607,104 @@
            它原先是「演练台」的一部分。那道授权门已经撤了：技能是"读一份 markdown"，
            不下发任务、不碰目标、也不改变权限档——真正挡住它的是资产与部署两页，
            而那两页本来就有自己的入口。这里只回答三件事：有哪些手册、从哪来、删一份。 -->
+      <!-- 消息通知：把「新发现 / 任务收尾 / 待审批」推到外部渠道。
+           三条取舍写在界面上：只有 test 与 retry 是同步发送（人正等着结果），
+           其余先落库再后台发；密文只写不读（地址与 token 一律遮蔽成 hasSecret）；
+           改配置、测试、重试要求管理员——那几件事会把内容发到外部。 -->
+      <section class="setup-card wide" data-settings-group="notify">
+        <div class="panel-head">消息通知
+          <span class="panel-head-hint">Webhook / 钉钉 / 飞书 / 企微 / Telegram / 邮件</span>
+          <span class="spacer"></span>
+          <span class="muted" id="notify-meta">尚未加载</span>
+          <button id="notify-refresh" class="btn sm" type="button">刷新</button>
+        </div>
+        <div class="panel-body">
+          <p class="muted" id="notify-note">通知由<strong>控制面</strong>发出：发现入库、任务收尾各触发一次。
+            投递是一条一条的记录（待投递 / 已送达 / 失败 / 已跳过），失败可以单独重试；
+            重试<strong>不重新过滤</strong>——点重试就是在说这一条要它出去。</p>
+          <div id="notify-message"></div>
+
+          <div class="settings-subhead">总开关与过滤</div>
+          <form id="notify-settings-form" class="settings-form" autocomplete="off">
+            <div class="form-row">
+              <label class="field-label" for="notify-enabled">总开关</label>
+              <select id="notify-enabled" class="select sm-select">
+                <option value="1">开启</option>
+                <option value="0">关闭（只落库不发送）</option>
+              </select>
+              <label class="field-label" for="notify-mode">投递模式</label>
+              <select id="notify-mode" class="select sm-select">
+                <option value="realtime">实时逐条</option>
+                <option value="digest">定时汇总</option>
+              </select>
+              <label class="field-label" for="notify-interval">汇总间隔（秒）</label>
+              <input id="notify-interval" class="input num-input" type="number" min="30" max="86400" value="300">
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="notify-rate">每分钟上限</label>
+              <input id="notify-rate" class="input num-input" type="number" min="0" max="600" value="20">
+              <label class="field-label" for="notify-min-severity">最低级别</label>
+              <select id="notify-min-severity" class="select sm-select"></select>
+              <span class="muted">低于这一级的发现不推送（0 = 不限条数）</span>
+            </div>
+            <div class="form-row">
+              <label class="field-label">订阅事件</label>
+              <div id="notify-events" class="notify-events"></div>
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="notify-include">包含词</label>
+              <input id="notify-include" class="input text-input" type="text" placeholder="逗号或空格分隔；留空表示不筛">
+              <label class="field-label" for="notify-exclude">排除词</label>
+              <input id="notify-exclude" class="input text-input" type="text" placeholder="命中的一条都不发">
+            </div>
+            <div class="form-actions">
+              <button id="notify-save" class="btn primary" type="submit">保存设置</button>
+              <button id="notify-digest" class="btn" type="button">立即汇总</button>
+              <span class="muted" id="notify-settings-message"></span>
+            </div>
+          </form>
+
+          <div class="settings-subhead">渠道</div>
+          <div id="notify-channels" class="notify-channels"></div>
+
+          <div class="settings-subhead" id="notify-form-title">添加渠道</div>
+          <form id="notify-channel-form" class="settings-form" autocomplete="off">
+            <div class="form-row">
+              <label class="field-label" for="notify-kind">类型</label>
+              <select id="notify-kind" class="select sm-select"></select>
+              <label class="field-label" for="notify-label">名称</label>
+              <input id="notify-label" class="input text-input" type="text" placeholder="安全群">
+              <label class="field-label" for="notify-channel-severity">最低级别</label>
+              <select id="notify-channel-severity" class="select sm-select"></select>
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="notify-url">地址</label>
+              <input id="notify-url" class="input text-input" type="text" spellcheck="false"
+                     placeholder="https://oapi.dingtalk.com/robot/send?access_token=...">
+              <span class="muted">群机器人地址整条都算密文，回显时只留主机名</span>
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="notify-secret">凭据</label>
+              <input id="notify-secret" class="input text-input" type="password" spellcheck="false"
+                     placeholder="Telegram bot token / SMTP 口令；群机器人留空">
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="notify-extra">附加配置（JSON）</label>
+              <textarea id="notify-extra" class="input" rows="3" spellcheck="false"
+                        placeholder="{&quot;chatId&quot;:&quot;123456&quot;}"></textarea>
+              <span class="muted" id="notify-extra-hint">telegram 需要 chatId；email 需要 smtpHost / smtpPort / from / to / tls</span>
+            </div>
+            <div class="form-actions">
+              <button id="notify-submit" class="btn primary" type="submit">保存渠道</button>
+              <button id="notify-cancel" class="btn" type="button">取消编辑</button>
+              <span class="muted" id="notify-form-message"></span>
+            </div>
+          </form>
+
+          <div class="settings-subhead">投递记录</div>
+          <div id="notify-deliveries" class="notify-deliveries"></div>
+        </div>
+      </section>
       <section class="setup-card wide" data-settings-group="skills">
         <div class="panel-head">Skills
           <span class="panel-head-hint" id="skills-status">尚未加载</span>

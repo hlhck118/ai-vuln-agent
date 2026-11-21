@@ -57,6 +57,9 @@
     // 外部 MCP 服务。`mcp` 是 GET /mcp 的原样返回（卡片、档位下拉、工具名都从
     // 那一份读，不在前端另算一遍——两边各算一次就会对不上）。
     mcp: null, mcpError: null, mcpBusy: null, mcpEditingId: null,
+    // 消息通知：`GET /notify` 的原样返回（设置、渠道、投递记录、下拉选项都在
+    // 那一份里，前端不自己再列一遍种类——两边各列一次就会对不上）。
+    notify: null, notifyError: null, notifyBusy: null, notifyEditingId: null,
   };
 
   let dom = {};
@@ -101,7 +104,7 @@
       accentRow: byId('accent-row'), accentNote: byId('accent-note'),
       frostRow: byId('frost-row'), frostNote: byId('frost-note'),
       alphaRange: byId('alpha-range'), alphaValue: byId('alpha-value'),
-      alphaNote: byId('alpha-note'),
+      alphaNote: byId('alpha-note'), alphaReset: byId('alpha-reset'),
       policyList: byId('policy-list'), policyCurrent: byId('policy-current'),
       policyNote: byId('policy-note'), policyMessage: byId('policy-message'),
       hubMeta: byId('hub-meta'), hubQuery: byId('hub-query'),
@@ -150,6 +153,21 @@
       mcpEnv: byId('mcp-env'), mcpNoteField: byId('mcp-note-field'),
       mcpSubmit: byId('mcp-submit'), mcpCancel: byId('mcp-cancel'),
       mcpFormMessage: byId('mcp-form-message'),
+    notifyMeta: byId('notify-meta'), notifyRefresh: byId('notify-refresh'),
+    notifyMessage: byId('notify-message'), notifySettingsForm: byId('notify-settings-form'),
+    notifyEnabled: byId('notify-enabled'), notifyMode: byId('notify-mode'),
+    notifyInterval: byId('notify-interval'), notifyRate: byId('notify-rate'),
+    notifyMinSeverity: byId('notify-min-severity'), notifyEvents: byId('notify-events'),
+    notifyInclude: byId('notify-include'), notifyExclude: byId('notify-exclude'),
+    notifySave: byId('notify-save'), notifyDigest: byId('notify-digest'),
+    notifySettingsMessage: byId('notify-settings-message'),
+    notifyChannels: byId('notify-channels'), notifyFormTitle: byId('notify-form-title'),
+    notifyForm: byId('notify-channel-form'), notifyKind: byId('notify-kind'),
+    notifyLabel: byId('notify-label'), notifyChannelSeverity: byId('notify-channel-severity'),
+    notifyUrl: byId('notify-url'), notifySecret: byId('notify-secret'),
+    notifyExtra: byId('notify-extra'), notifySubmit: byId('notify-submit'),
+    notifyCancel: byId('notify-cancel'), notifyFormMessage: byId('notify-form-message'),
+    notifyDeliveries: byId('notify-deliveries'),
     };
   }
 
@@ -1323,6 +1341,8 @@
       // MCP 那一组要**现拉一次**：它的状态（连没连上）是会变的，而设置页整体
       // 加载可能发生在很久之前。只在还没拉过时拉，避免每次切回来都打一次接口。
       if (view.group === 'mcp' && !view.mcp) loadMcp();
+      // 通知同理：渠道的「最近一次投递成功没有」会变，第一次切进来现拉一次。
+      if (view.group === 'notify' && !view.notify) loadNotify();
       // DSH 运行时的状态也是会变的（另一台管理员刚打开、DSH 刚被装上），
       // 而设置页的整体加载可能发生在很久之前 —— 第一次切进来时现拉一次。
       // 「扫描执行」与它在同一个响应里，所以两组共用这一次拉取。
@@ -1481,11 +1501,26 @@
     dom.alphaRange.value = String(value);
     dom.alphaRange.setAttribute('aria-valuetext', value + '%');
     if (dom.alphaValue) dom.alphaValue.textContent = value + '%';
+    syncAlphaReset(value);
     if (dom.alphaNote) {
       dom.alphaNote.textContent = '只调卡片、侧栏、坞这些底的透明程度，不动文字色，'
         + '也不动窗口底——调到 0 时内容仍然读得出来，只是背后的壁纸透不进来。'
         + '和主题一样只存在这台机器的浏览器里。';
     }
+  }
+
+  /** 「恢复默认」那颗按钮的可用态：已经在默认值上时它是死键。
+   *
+   *  理由不是「点一下看不出来」，是语义：一颗永远可点、点了却什么都不变的按钮，
+   *  会让人以为它坏了。这一轴没有「档位」可指（滑块是连续的），所以「你已经在默认
+   *  上」这句话只能由按钮自己说——禁用它就是那句话。文案**不跟着值变**：写成
+   *  「已经是默认」会和左边那个「100%」重复两遍。
+   *
+   *  默认值从 `PentestTheme.DEFAULT_ALPHA` 取，不在这里再写一个 100：这一轴已经有
+   *  两处硬编码（首屏内联脚本、theme.js），第三处只会是下一次漂移的起点。 */
+  function syncAlphaReset(value) {
+    if (!dom.alphaReset || !window.PentestTheme) return;
+    dom.alphaReset.disabled = value >= window.PentestTheme.DEFAULT_ALPHA;
   }
 
   function bindAppearanceEvents() {
@@ -1497,6 +1532,19 @@
         // 拖动当场中断（Firefox 上尤其明显）。
         if (dom.alphaValue) dom.alphaValue.textContent = value + '%';
         dom.alphaRange.setAttribute('aria-valuetext', value + '%');
+        syncAlphaReset(value);
+      });
+    }
+    if (dom.alphaReset) {
+      dom.alphaReset.addEventListener('click', () => {
+        if (!window.PentestTheme) return;
+        window.PentestTheme.applyAlpha(window.PentestTheme.DEFAULT_ALPHA);
+        // 整行重画一次：值、数字、aria、按钮可用态四处都要跟上。这条路径不在拖拽
+        // 过程中（按钮在滑块旁边，不是它本身），重画不会把谁从手底下换掉。
+        renderAlpha();
+        // 重画之后按钮自己变灰（disabled），焦点会掉到 body——键盘用户连点两下就
+        // 迷路了。把焦点交给滑块：它的位置正好是「刚刚改成的那个值」。
+        if (dom.alphaRange && dom.alphaReset.disabled) dom.alphaRange.focus();
       });
     }
     if (dom.accentRow) {
@@ -2373,6 +2421,436 @@
     }
   }
 
+  /* --------------------------------------------------------------- 通知 ---- */
+
+  /** 把「逗号/空格分隔的一行字」拆成词表。给的是**人能直接写下来的形状**：
+   *  安全, 内网  和  安全 内网  都算两个词——判词表不该要求使用者记分隔符。 */
+  function splitWords(text) {
+    const raw = String(text || '');
+    return raw.split(/[\s,，、;；]+/).map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+
+  function notifySettingsFromForm() {
+    const events = [];
+    if (dom.notifyEvents) {
+      Array.prototype.forEach.call(
+        dom.notifyEvents.querySelectorAll('input[type=checkbox]'),
+        (box) => { if (box.checked) events.push(box.value); });
+    }
+    return {
+      enabled: dom.notifyEnabled ? dom.notifyEnabled.value === '1' : true,
+      mode: dom.notifyMode ? dom.notifyMode.value : 'realtime',
+      digestIntervalS: Number(dom.notifyInterval && dom.notifyInterval.value) || 300,
+      rateLimit: Number(dom.notifyRate && dom.notifyRate.value) || 0,
+      minSeverity: dom.notifyMinSeverity ? dom.notifyMinSeverity.value : 'low',
+      events: events,
+      includeWords: splitWords(dom.notifyInclude && dom.notifyInclude.value),
+      excludeWords: splitWords(dom.notifyExclude && dom.notifyExclude.value),
+    };
+  }
+
+  function notifyEntries(table) {
+    if (!table) return [];
+    if (Array.isArray(table)) return table;
+    return Object.keys(table).map((key) => ({ id: key, label: table[key] }));
+  }
+
+  function fillNotifySelect(node, table, withBlank) {
+    if (!node) return;
+    const entries = notifyEntries(table);
+    if (node.options.length === entries.length + (withBlank ? 1 : 0)) return;
+    const previous = node.value;
+    clear(node);
+    if (withBlank) {
+      const blank = el('option', '', '不限（用全局值）');
+      blank.value = '';
+      node.append(blank);
+    }
+    entries.forEach((item) => {
+      const option = el('option', '', item.label);
+      option.value = item.id;
+      node.append(option);
+    });
+    if (previous) node.value = previous;
+  }
+
+  function fillNotifyOptions() {
+    const data = view.notify || {};
+    fillNotifySelect(dom.notifyKind, data.kinds, false);
+    fillNotifySelect(dom.notifyMinSeverity, data.severities, false);
+    fillNotifySelect(dom.notifyChannelSeverity, data.severities, true);
+    if (dom.notifyEvents && !dom.notifyEvents.childElementCount) {
+      notifyEntries(data.events).forEach((item) => {
+        const wrap = el('label', 'check-row');
+        const box = el('input', '');
+        box.type = 'checkbox';
+        box.value = item.id;
+        wrap.append(box);
+        wrap.append(el('span', '', item.label));
+        dom.notifyEvents.append(wrap);
+      });
+    }
+  }
+
+  function renderNotifySettings() {
+    const settings = (view.notify || {}).settings || {};
+    if (dom.notifyEnabled) dom.notifyEnabled.value = settings.enabled === false ? '0' : '1';
+    if (dom.notifyMode) dom.notifyMode.value = settings.mode || 'realtime';
+    if (dom.notifyInterval) dom.notifyInterval.value = String(settings.digestIntervalS || 300);
+    if (dom.notifyRate) dom.notifyRate.value = String(settings.rateLimit === 0 ? 0 : (settings.rateLimit || 20));
+    if (dom.notifyMinSeverity) dom.notifyMinSeverity.value = settings.minSeverity || 'low';
+    if (dom.notifyInclude) dom.notifyInclude.value = (settings.includeWords || []).join(', ');
+    if (dom.notifyExclude) dom.notifyExclude.value = (settings.excludeWords || []).join(', ');
+    if (dom.notifyEvents) {
+      const on = settings.events || [];
+      Array.prototype.forEach.call(
+        dom.notifyEvents.querySelectorAll('input[type=checkbox]'),
+        (box) => { box.checked = on.indexOf(box.value) >= 0; });
+    }
+    // 总开关关着的时候，其它字段照常可编辑——**但要说清**现在的行为是只落库。
+    if (dom.notifyMeta && settings.enabled === false) {
+      dom.notifyMeta.textContent = (dom.notifyMeta.textContent || '') + ' · 总开关已关闭';
+    }
+  }
+
+  function notifyChannelCard(channel) {
+    const card = el('div', 'notify-card' + (channel.enabled ? '' : ' off'));
+    card.dataset.notifyChannel = channel.id;
+    const head = el('div', 'notify-card-head');
+    head.append(el('span', 'mode-title', channel.label || channel.id));
+    head.append(el('span', 'check-badge', channel.kindLabel || channel.kind));
+    head.append(el('span', 'check-badge' + (channel.enabled ? ' check-ok' : ''),
+      channel.enabled ? '已启用' : '已停用'));
+    if (channel.minSeverity) {
+      head.append(el('span', 'mode-note', '最低 ' + channel.minSeverity));
+    }
+    if (!channel.hasSecret) head.append(el('span', 'mode-note', '未配凭据'));
+    card.append(head);
+    const facts = [];
+    if (channel.url) facts.push('地址：' + channel.url);
+    const extra = channel.extra || {};
+    if (extra.chatId) facts.push('chatId：' + extra.chatId);
+    if (extra.smtpHost) facts.push('SMTP：' + extra.smtpHost
+      + (extra.smtpPort ? ':' + extra.smtpPort : ''));
+    if (extra.to && extra.to.length) facts.push('收件人：' + extra.to.join(', '));
+    if (extra.events && extra.events.length) facts.push('只收：' + extra.events.join(', '));
+    if (channel.note) facts.push('备注：' + channel.note);
+    if (facts.length) card.append(el('p', 'mode-note', facts.join(' · ')));
+    const foot = el('div', 'notify-card-foot');
+    const test = el('button', 'btn sm', '发测试');
+    test.type = 'button';
+    test.dataset.notifyAction = 'test';
+    test.dataset.notifyId = channel.id;
+    foot.append(test);
+    const toggle = el('button', 'btn sm', channel.enabled ? '停用' : '启用');
+    toggle.type = 'button';
+    toggle.dataset.notifyAction = 'toggle';
+    toggle.dataset.notifyId = channel.id;
+    foot.append(toggle);
+    const edit = el('button', 'btn sm', '编辑');
+    edit.type = 'button';
+    edit.dataset.notifyAction = 'edit';
+    edit.dataset.notifyId = channel.id;
+    foot.append(edit);
+    const remove = el('button', 'btn sm danger', '删除');
+    remove.type = 'button';
+    remove.dataset.notifyAction = 'delete';
+    remove.dataset.notifyId = channel.id;
+    foot.append(remove);
+    card.append(foot);
+    return card;
+  }
+
+  function renderNotifyChannels() {
+    if (!dom.notifyChannels) return;
+    clear(dom.notifyChannels);
+    const channels = (view.notify || {}).channels || [];
+    if (!channels.length) {
+      dom.notifyChannels.append(ui().emptyBlock(
+        '还没有渠道。至少配一条，通知才有去处；群机器人只要一个地址。'));
+      return;
+    }
+    channels.forEach((channel) => dom.notifyChannels.append(notifyChannelCard(channel)));
+  }
+
+  function notifyTime(value) {
+    if (!value) return '';
+    const date = new Date(Number(value) * 1000);
+    if (isNaN(date.getTime())) return '';
+    return date.toLocaleString();
+  }
+
+  function renderNotifyDeliveries() {
+    if (!dom.notifyDeliveries) return;
+    clear(dom.notifyDeliveries);
+    const deliveries = (view.notify || {}).deliveries || [];
+    if (!deliveries.length) {
+      dom.notifyDeliveries.append(ui().emptyBlock(
+        '还没有投递记录。发现入库、任务收尾之后会在这里留一行。'));
+      return;
+    }
+    const list = el('div', 'notify-delivery-list');
+    deliveries.forEach((item) => {
+      const row = el('div', 'notify-delivery');
+      const head = el('div', 'notify-delivery-head');
+      head.append(el('span', 'check-badge' + (item.status === 'sent' ? ' check-ok' : ''),
+        item.statusLabel || item.status));
+      head.append(el('span', 'mode-note', item.eventLabel || item.event));
+      if (item.severity) head.append(el('span', 'mode-note', item.severity));
+      if (item.channelLabel) head.append(el('span', 'mode-note', item.channelLabel));
+      head.append(el('span', 'spacer'));
+      head.append(el('span', 'mode-note', notifyTime(item.createdAt)));
+      row.append(head);
+      if (item.title) row.append(el('p', 'notify-delivery-title', item.title));
+      if (item.error) row.append(el('p', 'notice error', item.error));
+      if (item.status === 'failed') {
+        const retry = el('button', 'btn sm', '重试');
+        retry.type = 'button';
+        retry.dataset.notifyAction = 'retry';
+        retry.dataset.notifyId = item.id;
+        row.append(retry);
+      }
+      list.append(row);
+    });
+    dom.notifyDeliveries.append(list);
+  }
+
+  function renderNotify() {
+    fillNotifyOptions();
+    renderNotifySettings();
+    renderNotifyChannels();
+    renderNotifyDeliveries();
+    const data = view.notify || {};
+    const counts = data.counts || {};
+    if (dom.notifyMeta) {
+      if (view.notifyError) {
+        dom.notifyMeta.textContent = '不可用：' + view.notifyError;
+      } else if (!view.notify) {
+        dom.notifyMeta.textContent = '登录后加载通知配置。';
+      } else {
+        dom.notifyMeta.textContent = channelsLine(counts) + (data.admin ? '' : ' · 只读（需要管理员）');
+      }
+    }
+    const admin = !!data.admin;
+    if (dom.notifySave) dom.notifySave.disabled = !admin;
+    if (dom.notifyDigest) dom.notifyDigest.disabled = !admin;
+    if (dom.notifySubmit) dom.notifySubmit.disabled = !admin;
+  }
+
+  function channelsLine(counts) {
+    const parts = [];
+    parts.push((counts.channels || 0) + ' 个渠道');
+    parts.push((counts.deliveries || 0) + ' 条投递');
+    if (counts.failed) parts.push(counts.failed + ' 条失败');
+    if (counts.pending) parts.push(counts.pending + ' 条待发');
+    return parts.join(' · ');
+  }
+
+  async function loadNotify(force) {
+    if (view.notifyBusy && !force) return;
+    view.notifyBusy = true;
+    setButtonBusy(dom.notifyRefresh, true, '刷新中');
+    try {
+      const data = await ui().apiGet('/notify');
+      view.notify = data;
+      view.notifyError = null;
+    } catch (error) {
+      view.notifyError = error.message;
+    }
+    view.notifyBusy = null;
+    setButtonBusy(dom.notifyRefresh, false, '刷新');
+    renderNotify();
+  }
+
+  function resetNotifyForm() {
+    view.notifyEditingId = null;
+    if (dom.notifyFormTitle) dom.notifyFormTitle.textContent = '添加渠道';
+    ['notifyLabel', 'notifyUrl', 'notifySecret', 'notifyExtra']
+      .forEach((key) => { if (dom[key]) dom[key].value = ''; });
+    if (dom.notifyKind) dom.notifyKind.value = 'webhook';
+    if (dom.notifyChannelSeverity) dom.notifyChannelSeverity.value = '';
+    if (dom.notifySubmit) dom.notifySubmit.textContent = '保存渠道';
+    showNotice(dom.notifyFormMessage, '');
+  }
+
+  function openNotifyForm(channel) {
+    view.notifyEditingId = channel.id;
+    if (dom.notifyFormTitle) dom.notifyFormTitle.textContent = '编辑渠道：' + channel.id;
+    if (dom.notifyKind) dom.notifyKind.value = channel.kind || 'webhook';
+    if (dom.notifyLabel) dom.notifyLabel.value = channel.label || '';
+    if (dom.notifyChannelSeverity) dom.notifyChannelSeverity.value = channel.minSeverity || '';
+    // 地址回来时是遮蔽过的（主机名 + 星号）。**原样放进输入框**是安全的，
+    // 因为服务端认得结尾的星号并会换回真地址（见 notify.merge_secret）；
+    // 前端再自己清空，就等于逼人重填一遍 token。
+    if (dom.notifyUrl) dom.notifyUrl.value = channel.url || '';
+    if (dom.notifySecret) dom.notifySecret.value = channel.hasSecret ? '***' : '';
+    if (dom.notifyExtra) {
+      const extra = channel.extra || {};
+      dom.notifyExtra.value = Object.keys(extra).length
+        ? JSON.stringify(extra, null, 2) : '';
+    }
+    if (dom.notifySubmit) dom.notifySubmit.textContent = '保存修改';
+    showNotice(dom.notifyFormMessage, '');
+    if (dom.notifyForm && dom.notifyForm.scrollIntoView) {
+      dom.notifyForm.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  async function saveNotifySettings() {
+    showNotice(dom.notifySettingsMessage, '');
+    setButtonBusy(dom.notifySave, true, '保存中');
+    try {
+      const data = await ui().apiPost('/notify/settings',
+        { settings: notifySettingsFromForm() });
+      if (data && data.settings) {
+        if (!view.notify) view.notify = {};
+        view.notify.settings = data.settings;
+      }
+      renderNotifySettings();
+      showNotice(dom.notifySettingsMessage, '已保存', 'ok');
+      loadNotify(true);
+    } catch (error) {
+      showNotice(dom.notifySettingsMessage, error.message, 'error');
+    }
+    setButtonBusy(dom.notifySave, false, '保存设置');
+  }
+
+  async function submitNotifyChannel(event) {
+    if (event) event.preventDefault();
+    const kind = dom.notifyKind ? dom.notifyKind.value : 'webhook';
+    const label = (dom.notifyLabel && dom.notifyLabel.value || '').trim();
+    let extra = {};
+    const rawExtra = (dom.notifyExtra && dom.notifyExtra.value || '').trim();
+    if (rawExtra) {
+      try {
+        extra = JSON.parse(rawExtra);
+      } catch (error) {
+        showNotice(dom.notifyFormMessage, '附加配置不是合法 JSON', 'error');
+        return;
+      }
+      if (!extra || typeof extra !== 'object' || Array.isArray(extra)) {
+        showNotice(dom.notifyFormMessage, '附加配置必须是一个对象', 'error');
+        return;
+      }
+    }
+    const payload = {
+      kind: kind,
+      label: label,
+      url: (dom.notifyUrl && dom.notifyUrl.value || '').trim(),
+      secret: (dom.notifySecret && dom.notifySecret.value || '').trim(),
+      extra: extra,
+      minSeverity: dom.notifyChannelSeverity ? dom.notifyChannelSeverity.value : '',
+    };
+    if (view.notifyEditingId) payload.id = view.notifyEditingId;
+    showNotice(dom.notifyFormMessage, '');
+    setButtonBusy(dom.notifySubmit, true, '保存中');
+    try {
+      await ui().apiPost('/notify/channels', payload);
+      showNotice(dom.notifyFormMessage, '已保存', 'ok');
+      resetNotifyForm();
+      loadNotify(true);
+    } catch (error) {
+      showNotice(dom.notifyFormMessage, error.message, 'error');
+    }
+    setButtonBusy(dom.notifySubmit, false,
+      view.notifyEditingId ? '保存修改' : '保存渠道');
+  }
+
+  async function notifyAction(action, id, button) {
+    if (!action || !id) return;
+    const channels = (view.notify || {}).channels || [];
+    const found = channels.filter((item) => item.id === id)[0];
+    if (action === 'edit') {
+      if (found) openNotifyForm(found);
+      return;
+    }
+    if (action === 'delete'
+        && !window.confirm('删除这条渠道？投递记录会保留。')) return;
+    // 地址写在调用点上（字面量起头），契约检查才看得见这几条路由；
+    // 拼进一个变量之后，界面会 404 而静态检查依然全绿。
+    const encoded = encodeURIComponent(id);
+    let payload = {};
+    if (action === 'toggle') {
+      if (!found) return;
+      payload = { id: found.id, kind: found.kind, label: found.label,
+                  enabled: !found.enabled, minSeverity: found.minSeverity,
+                  note: found.note, extra: found.extra || {} };
+    }
+    setButtonBusy(button, true, '处理中');
+    try {
+      let data = null;
+      if (action === 'retry') {
+        data = await ui().apiPost('/notify/deliveries/' + encoded + '/retry', {});
+      } else if (action === 'test') {
+        data = await ui().apiPost('/notify/channels/' + encoded + '/test', {});
+      } else if (action === 'delete') {
+        data = await ui().apiPost('/notify/channels/' + encoded + '/delete', {});
+      } else if (action === 'toggle') {
+        data = await ui().apiPost('/notify/channels', payload);
+      } else {
+        return;
+      }
+      if (action === 'retry') {
+        showNotice(dom.notifyMessage,
+          data && data.error ? '重试失败：' + data.error : '已重新投递',
+          data && data.error ? 'error' : 'ok');
+      } else if (action === 'test') {
+        showNotice(dom.notifyMessage,
+          data && data.error ? '测试发送失败：' + data.error : '测试消息已发送',
+          data && data.error ? 'error' : 'ok');
+      } else {
+        showNotice(dom.notifyMessage, '已处理', 'ok');
+      }
+      if (action === 'delete' || action === 'toggle') loadNotify(true);
+    } catch (error) {
+      showNotice(dom.notifyMessage, error.message, 'error');
+    }
+    setButtonBusy(button, false, '处理中');
+  }
+
+  function bindNotifyEvents() {
+    if (dom.notifyRefresh) {
+      dom.notifyRefresh.addEventListener('click', () => loadNotify(true));
+    }
+    if (dom.notifySettingsForm) {
+      dom.notifySettingsForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        saveNotifySettings();
+      });
+    }
+    if (dom.notifyForm) dom.notifyForm.addEventListener('submit', submitNotifyChannel);
+    if (dom.notifyCancel) dom.notifyCancel.addEventListener('click', () => resetNotifyForm());
+    if (dom.notifyDigest) {
+      dom.notifyDigest.addEventListener('click', async () => {
+        setButtonBusy(dom.notifyDigest, true, '发送中');
+        try {
+          const data = await ui().apiPost('/notify/digest', {});
+          showNotice(dom.notifySettingsMessage,
+            (data && data.sent ? '已汇总发送 ' + data.sent + ' 条' : '没有待发的内容'), 'ok');
+          loadNotify(true);
+        } catch (error) {
+          showNotice(dom.notifySettingsMessage, error.message, 'error');
+        }
+        setButtonBusy(dom.notifyDigest, false, '立即汇总');
+      });
+    }
+    if (dom.notifyChannels) {
+      dom.notifyChannels.addEventListener('click', (event) => {
+        const button = event.target.closest ? event.target.closest('[data-notify-action]') : null;
+        if (!button || button.disabled) return;
+        notifyAction(button.dataset.notifyAction, button.dataset.notifyId, button);
+      });
+    }
+    if (dom.notifyDeliveries) {
+      dom.notifyDeliveries.addEventListener('click', (event) => {
+        const button = event.target.closest ? event.target.closest('[data-notify-action]') : null;
+        if (!button || button.disabled) return;
+        notifyAction(button.dataset.notifyAction, button.dataset.notifyId, button);
+      });
+    }
+  }
+
   /* ---------------------------------------------------------- 插件市场 ---- */
 
   function hubRow(item) {
@@ -3091,6 +3569,18 @@
     showNotice(dom.mcpMessage, '');
     showNotice(dom.mcpFormMessage, '');
     resetMcpForm();
+    // 通知里带着上一个用户配的渠道地址与投递正文 —— 退出登录必须清掉，
+    // 否则下一个用户会看到不属于自己的出口配置。
+    view.notify = null; view.notifyError = null; view.notifyBusy = null;
+    if (dom.notifyChannels) {
+      clear(dom.notifyChannels);
+      dom.notifyChannels.append(ui().emptyBlock('登录后加载通知渠道。'));
+    }
+    if (dom.notifyDeliveries) clear(dom.notifyDeliveries);
+    if (dom.notifyMeta) dom.notifyMeta.textContent = '尚未加载';
+    showNotice(dom.notifyMessage, '');
+    showNotice(dom.notifySettingsMessage, '');
+    resetNotifyForm();
     if (dom.usersList) clear(dom.usersList);
     if (dom.usersCard) dom.usersCard.classList.add('hidden');
     if (dom.meta) dom.meta.textContent = '尚未加载';
@@ -3118,6 +3608,7 @@
     bindPolicyEvents();
     bindHubEvents();
     bindNavEvents();
+  bindNotifyEvents();
     bindThemeEvents();
     bindAppearanceEvents();
     bindAgentFormEvents();

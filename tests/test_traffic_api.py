@@ -448,3 +448,48 @@ class ChatHttpRequestToolTestCase(unittest.TestCase):
         result = self.call(url=self.inside())
         self.assertTrue(result["data"]["trafficId"])
         self.assertEqual(len(self.store.list_traffic()), 1)
+
+class HttpRoutingPromptTestCase(unittest.TestCase):
+    """提示词要把「打 HTTP」这件事引到会留痕的那条路上。
+
+    这条守的是一类**沉默失效**：工具在、权限对、流量页也能刷，但模型不知道
+    该用它——于是它照旧 run_tool 跑 curl（或者 run_command 拼脚本），
+    请求真的发出去了、结论也真的出来了，而「流量」页永远是空的。使用者看到
+    的现象是「流量中还是没有数据」，而代码里没有一处是错的。
+
+    所以判据必须落在**提示词**上，而不是只落在工具存在性上：上面那条
+    test_the_catalog_advertises_it_as_a_probe_tool 已经证明工具能被找到，
+    但「能被找到」与「被选中」是两件事。三条都要钉：
+
+      * 系统提示里点名 http_request 是打 HTTP 的默认路径，并说清另两条不留痕；
+      * run_tool 的结果提示里指一次路（模型最常在这一刻决定下一步）；
+      * http_request 自己的描述第一句就说「默认用这一条」。
+    """
+
+    def prompt(self):
+        return chat.build_system_prompt(["0.0.0.0/0"], None, "full", "admin", True,
+                                       None, "", None)
+
+    def test_the_system_prompt_routes_http_to_the_recorded_path(self):
+        text = self.prompt()
+        self.assertIn("http_request", text, "系统提示没提 http_request")
+        self.assertIn("流量", text)
+        # 分流必须是「要看响应 → http_request」，而不是「随便哪条都行」。
+        self.assertIn("打 HTTP 目标一律先想", text)
+        # 说清另外两条不留痕——不说的话模型会以为 curl 也算「打过」。
+        self.assertIn("一行都不进那张表", text)
+
+    def test_the_tool_result_hint_points_at_the_recorded_path(self):
+        """run_tool 返回的那一刻是模型决定「要不要再补一条」的时刻。"""
+        with open(os.path.join(ROOT, "pentestd", "chat.py"), encoding="utf-8") as handle:
+            source = handle.read()
+        block = source.split("def _tool_run_tool(")[1].split("\n# ----")[0]
+        self.assertIn("不进「流量」页", block)
+        self.assertIn("http_request", block)
+
+    def test_the_tool_description_leads_with_itself(self):
+        catalog = {item["name"]: item for item in chat.tool_catalog()}
+        description = catalog["http_request"]["description"]
+        self.assertTrue(description.startswith("**打 HTTP 目标默认用这一条。**"),
+                        description[:80])
+

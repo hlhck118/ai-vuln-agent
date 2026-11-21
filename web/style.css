@@ -942,7 +942,7 @@
   .setup-card, .finding-card, .model-card, .mode-option, .theme-card,
   .guide-status-card, .notice, .stat, .empty,
   .plan-item, .job-log, .rpt-row, .dock-chip, .chat-quick, .chat-msg,
-  .chat-review-card, .mcp-card, .dash-card) {
+  .chat-review-card, .mcp-card, .notify-card, .dash-card) {
   -webkit-backdrop-filter: blur(var(--glass-card-blur)) saturate(var(--glass-sat));
   backdrop-filter: blur(var(--glass-card-blur)) saturate(var(--glass-sat));
   background-image: linear-gradient(180deg, var(--glass-edge) 0, transparent 1px);
@@ -1530,8 +1530,19 @@ option:hover { background-color: var(--accent); color: var(--on-accent); }
   display: none; flex: 1 1 auto; min-height: 0; min-width: 0; flex-direction: column;
   /* 这一页的块间距与内边距。内容容器（.card-list / .setup-body / .settings-body）
    * 把自己的 padding 让出来，两边相加仍是原来的 12px，而块与块之间多出 12px 的
-   * 画布——那 12px 就是"这是两张卡"的全部区别。 */
-  padding: var(--sp-3); gap: var(--sp-3);
+   * 画布——那 12px 就是"这是两张卡"的全部区别。
+   *
+   * 顶部**不留**内边距：每页的第一个元素都是页头（.page-head），而外壳
+   * （.console-shell）已经在自己身上留了一圈 12px。页内再叠一层，页头的上沿就比
+   * 左导航栏的上沿低 12px——两者本该是同一条水平线（用户原话「红线这块平齐」）。
+   * 实测（1440/1280/1920 三档一致）：改前 rail.top=12 / head.top=24，改后同为 12。
+   *
+   * 底部同样归零，理由与顶部对称：外壳那圈 12px 已经是页与窗口之间的留白，页内
+   * 再垫一层，最后一张卡的下沿就停在 rail.bottom-12 上——高度看起来比左栏矮一截
+   * （用户原话「主页布局高度和左侧边栏保持一样的高度」）。实测 1440×900：改前
+   * rail=[12,888] / 卡片下沿 876；归零后两者同为 888。左右那道 12px 画布缝保留，
+   * 那是卡片与滚动条之间唯一的呼吸位。 */
+  padding: 0 var(--sp-3) 0; gap: var(--sp-3);
 }
 .panel.active { display: flex; }
 
@@ -5336,8 +5347,15 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
  * 纸感下那个蓝色配白底还行、终端主题下就成了一条突兀的亮杠），必须整条接管。
  *
  * 轨道用 --panel-3 而不是 --border：这一行本身就长在卡片（--panel-2）上，
- * 用描边色只画得出一条发丝，拇指小到读不出"我现在能拖它"。 */
-.alpha-row { display: flex; align-items: center; gap: var(--sp-2); }
+ * 用描边色只画得出一条发丝，拇指小到读不出"我现在能拖它"。
+ *
+ * 行尾那颗「恢复默认」是 `btn sm ghost`：静默级、不描边，和滑块并排时不会把
+ * 这一行读成"一个控件 + 一个主要操作"。滑块 `flex: 1 1 auto` 吃掉剩下的宽度，
+ * 按钮 `flex: 0 0 auto` 保持自己的内宽——两者都不许换行，否则窄屏上按钮会掉到
+ * 滑块下面，看上去像多出来的一行设置项。 */
+.alpha-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: nowrap; }
+.alpha-row > .alpha-range { flex: 1 1 auto; }
+.alpha-row > .btn { flex: 0 0 auto; white-space: nowrap; }
 .alpha-range {
   flex: 1 1 auto; min-width: 0; width: 100%; height: 22px; margin: 0;
   background: transparent; cursor: pointer;
@@ -5480,6 +5498,38 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .mcp-tool-name { font-size: var(--fs-small); color: var(--text); font-weight: 600; }
 .mcp-tool-exposed { font-family: var(--mono); font-size: var(--fs-caption); color: var(--text-dim); overflow-wrap: anywhere; }
 .mcp-tool-note { color: var(--muted); font-size: var(--fs-caption); overflow-wrap: anywhere; min-width: 0; flex: 1 1 220px; }
+
+/* ---- 消息通知（设置页的「通知」分组） -------------------------------------
+
+   与 MCP 那一族同形：列表 + 卡片 + 卡片底部的动作条。事件勾选用 .check-row，
+   它在左侧有固定宽度的方块，勾选之后整行不跳。 */
+.notify-events { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); }
+.check-row {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-small); color: var(--text); cursor: pointer;
+}
+.check-row input { margin: 0; }
+.notify-channels { display: flex; flex-direction: column; gap: var(--sp-3); }
+.notify-card {
+  border: 1px solid var(--border); border-radius: var(--r-2); background: var(--panel-2);
+  padding: var(--sp-3); display: flex; flex-direction: column; gap: 6px;
+}
+.notify-card.off { opacity: 0.62; }
+.notify-card-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.notify-card-foot { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: 4px; }
+.notify-deliveries { display: flex; flex-direction: column; gap: var(--sp-2); }
+.notify-delivery-list { display: flex; flex-direction: column; gap: 1px; }
+.notify-delivery {
+  display: flex; flex-direction: column; gap: 4px; padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border);
+}
+.notify-delivery:first-child { border-top: 0; }
+.notify-delivery-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* 投递标题是**通知里那句话的抬头**，可能与正文不同（正文被截过），
+   所以它单独一行、按正文样式排，不与元信息挤在同一行。 */
+.notify-delivery-title {
+  font-size: var(--fs-small); color: var(--text); overflow-wrap: anywhere; margin: 0;
+}
 
 /* ---- 901–1180px：详情栏折成底部一块，三栏并排在这一档不成立 ----
 

@@ -406,7 +406,9 @@ class ThemeContractTestCase(unittest.TestCase):
         白闪），所以这里必然有两份定义。对不上的症状是"上次选的那项没记住"，
         而两处代码各自看都没问题——只能靠逐字比对。
 
-        三条轴（主题 / 重点色 / 磨砂）各核四件事：属性名、id 清单、存储键、默认值。
+        三条轴（主题 / 重点色 / 磨砂）各核四件事：属性名、id 清单、存储键、默认值；
+        第四条轴（透明度）在下面 `test_the_alpha_axis_is_wired_the_same_way_in_both_places`
+        里另核一份令牌清单——它改的是内联值，不是属性。
         磨砂也在首屏脚本里：它虽然是材质不是配色，但晚一帧生效同样看得见——
         22px 的模糊在首帧是 0，界面的层次会跳一下。
         """
@@ -802,12 +804,69 @@ class ThemeContractTestCase(unittest.TestCase):
         不像 bug。
         """
         for hook in ("accent-row", "accent-note", "frost-row", "frost-note",
-                     "alpha-range", "alpha-value", "alpha-note"):
+                     "alpha-range", "alpha-value", "alpha-note", "alpha-reset"):
             self.assertIn('id="%s"' % hook, self._html, "index.html 缺少 #%s" % hook)
             self.assertIn("byId('%s')" % hook, self._settings, "设置页没有取到 #%s" % hook)
         for fn in ("renderAccents", "renderFrosts", "renderAlpha"):
             self.assertIn("function %s(" % fn, self._settings, "设置页缺少 %s" % fn)
             self.assertIn("%s," % fn, self._settings, "%s 没有被导出" % fn)
+
+    def _settings_function(self, name: str) -> str:
+        """settings.js 里某个函数的函数体（按缩进两格的收尾花括号切）。"""
+        start = self._settings.index("function %s(" % name)
+        return self._settings[start:self._settings.index("\n  }", start)]
+
+    def test_the_alpha_slider_has_exactly_one_source_of_truth(self):
+        """滑块的值只能有一个出处，不许有第二个。
+
+        Chromium 会在刷新、前进后退、以及从会话恢复页面时自己还原 form 控件的值
+        （range 也在内）。正常情况下 renderAlpha() 随后把它覆盖回真实值，所以这条
+        独立来源平时看不见；一旦 settings.js 先抛错（某个接口挂了），滑块就停在
+        **浏览器记住的那个数**上，而它和 localStorage 里存的值毫无关系——界面上于是
+        显示一个没人选过的透明度，刷新之后还在。
+
+        拦它的唯一写法是在那个 input 上写 autocomplete="off"：它没有 name 属性、
+        也不在任何 form 里，靠这两点拦不住浏览器。
+        """
+        tag = re.search(r'<input[^>]*id="alpha-range"[^>]*>', self._html)
+        self.assertIsNotNone(tag, "index.html 里找不到 #alpha-range 的 input 标签")
+        self.assertIn('autocomplete="off"', tag.group(0),
+                      '#alpha-range 必须写 autocomplete="off"，否则浏览器会自己还原它的值')
+
+    def test_the_alpha_reset_button_goes_through_the_same_entry(self):
+        """「恢复默认」必须是 applyAlpha(默认值) 的**另一个调用方**，不是一条新路径。
+
+        透明度是唯一一轴拖过一次就永久记住的：主题、重点色、磨砂都有"默认那一档"
+        可点，滑块没有——回 100 只能精确地把拇指拖到最右端，窄屏上落不到整数。
+        没有这颗按钮时唯一可靠的回退是清浏览器数据，那条路会把登录状态一起清掉。
+
+        三条断言各堵一个具体的坏法：
+          * 只写 applyAlpha 而不重画 → 数字、aria、按钮可用态三处停在旧值上；
+          * 把默认值写成字面量 100 → theme.js 改默认值时这里悄悄错开；
+          * 不做 disabled 同步 → 已经 100% 时按钮仍可点，点了什么也不变，被读成坏了。
+        """
+        self.assertIn('id="alpha-reset"', self._html, "index.html 缺少「恢复默认」按钮")
+        self.assertIn("byId('alpha-reset')", self._settings,
+                      "设置页没有取到 #alpha-reset")
+
+        click = self._settings.index("dom.alphaReset.addEventListener(")
+        click_body = self._settings[click:self._settings.index("\n      });", click)]
+        self.assertIn("applyAlpha(window.PentestTheme.DEFAULT_ALPHA)", click_body,
+                      "「恢复默认」必须走 applyAlpha(DEFAULT_ALPHA)，不许另开一条路径")
+        self.assertIn("renderAlpha()", click_body,
+                      "点了之后要重画整行：数字、aria、按钮可用态都得跟上")
+
+        sync = self._settings_function("syncAlphaReset")
+        self.assertIn("DEFAULT_ALPHA", sync, "按钮的可用态要按 theme.js 的默认值算")
+        self.assertNotIn("100", sync,
+                         "这里不许再写一个 100 字面量：默认值只有一个出处 theme.js")
+        self.assertIn("syncAlphaReset(value)", self._settings_function("renderAlpha"),
+                      "renderAlpha() 要同步按钮可用态")
+        input_start = self._settings.index("dom.alphaRange.addEventListener(")
+        input_body = self._settings[input_start:self._settings.index("\n      });", input_start)]
+        self.assertIn("syncAlphaReset(value)", input_body,
+                      "拖到 100% 时要当场把按钮置灰，不能等下次开设置页")
+
 
     def test_graph_node_highlight_is_a_token_not_a_fixed_brightness(self):
         """节点高亮的滤镜必须是令牌。
