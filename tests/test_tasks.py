@@ -205,3 +205,23 @@ class TasksTests(unittest.TestCase):
         status, payload = client.post("/api/v1/tasks/archive",
                                       {"taskIds": [eid]})
         self.assertEqual(403, status, payload)
+
+    def test_detail_carries_its_conversation(self):
+        """详情要能回答「这行是谁说出来的」：目标、说明、授权依据、来源对话。"""
+        from pentestd import tasks
+        session = self.store.create_chat_session("第一次对话", "admin", "")
+        text = "帮我渗透 http://10.10.10.110:8080/login 拿下后台"
+        self.store.append_chat_message(session["id"], "user", {"text": text})
+        eid = tasks.bootstrap(self.store, session["id"], text, "admin")
+        status, payload = self.client.get("/api/v1/tasks/%s" % eid)
+        self.assertEqual(200, status, payload)
+        self.assertIn("goal", payload)
+        self.assertEqual(payload["objective"], payload["description"])
+        self.assertEqual(1, len(payload["sessions"]))
+        self.assertEqual(session["id"], payload["sessions"][0]["id"])
+        self.assertGreaterEqual(payload["sessionCount"], 1)
+        # 列表行也要带条数：不然「哪几个任务真的有人说过话」只能逐行点开看。
+        status, listing = self.client.get("/api/v1/tasks")
+        self.assertEqual(200, status, listing)
+        self.assertGreaterEqual(listing["tasks"][0]["sessionCount"], 1)
+

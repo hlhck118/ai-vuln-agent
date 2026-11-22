@@ -5,13 +5,13 @@
  * 设计要点：
  *   * 本文件位于 app.js 之前，第一件事是置 window.PentestConsoleGate，
  *     app.js 读到后不再自行启动；启动权交给 boot.js（先查登录态再决定渲染什么）。
- *   * 未登录时控制台外壳始终 hidden，不请求任何业务接口，避免"先渲染再遮罩"。
+ *   * 未登录时工作台外壳始终 hidden，不请求任何业务接口，避免"先渲染再遮罩"。
  *   * CSRF 令牌只放内存（auth.csrfToken），apiPost 通过 csrfHeaders() 自动带上。
  *   * 任何带 CSRF 的业务接口返回 401 → handleUnauthorized() 立刻切回登录门。
  * 安全：接口文本一律 textContent 落 DOM，不拼 HTML 字符串。
  * ==========================================================================*/
 
-/* 标记控制台由 boot.js 接管启动（必须在 app.js 解析前生效）。 */
+/* 标记工作台由 boot.js 接管启动（必须在 app.js 解析前生效）。 */
 window.PentestConsoleGate = true;
 
 (function () {
@@ -28,9 +28,9 @@ window.PentestConsoleGate = true;
     needsSetup: false,      // 后端还没有任何用户
     passwordPolicy: '',     // 后端下发的口令策略说明
     throttle: '',           // 后端下发的登录节流说明
-    active: false,          // 控制台是否已进入
+    active: false,          // 工作台是否已进入
   };
-  const listeners = [];     // (user|null) => void，boot.js 据此启动/收起控制台
+  const listeners = [];     // (user|null) => void，boot.js 据此启动/收起工作台
   let bound = false;
   let submitting = false;
 
@@ -127,7 +127,7 @@ window.PentestConsoleGate = true;
       dom.setupHint.textContent = '首次使用需要创建管理员。' + (auth.passwordPolicy ? '口令要求：' + auth.passwordPolicy : `密码至少 ${MIN_PASSWORD_LENGTH} 位。`);
     }
     if (dom.loginHint) {
-      dom.loginHint.textContent = '控制台需要登录后才能访问。' + (auth.throttle ? auth.throttle + '。' : '');
+      dom.loginHint.textContent = '工作台需要登录后才能访问。' + (auth.throttle ? auth.throttle + '。' : '');
     }
   }
 
@@ -142,7 +142,7 @@ window.PentestConsoleGate = true;
     return '';
   }
 
-  /** 进入控制台：收起登录门，通知 boot.js 启动六个页签。 */
+  /** 进入工作台：收起登录门，通知 boot.js 启动全部页签。 */
   function enterConsole() {
     auth.active = true;
     dom.gate.classList.add('hidden');
@@ -151,7 +151,7 @@ window.PentestConsoleGate = true;
     listeners.forEach((fn) => { try { fn(auth.user); } catch (error) { window.PentestUI.showError('界面初始化失败：' + error.message); } });
   }
 
-  /** 回到登录门：清空令牌与用户，控制台整体隐藏（不保留上一个用户的数据视图）。 */
+  /** 回到登录门：清空令牌与用户，工作台整体隐藏（不保留上一个用户的数据视图）。 */
   function leaveConsole(message) {
     const wasActive = auth.active;
     auth.active = false;
@@ -193,9 +193,9 @@ window.PentestConsoleGate = true;
       if (data && data.needsSetup) { showView('setup'); return; }
       if (!data || !data.authenticated || !auth.user) { showView('login'); return; }
       // --no-auth：state 已回"已认证 + 本地调试用户"，且本来就没有会话/CSRF 体系。
-      // 再补一次 /auth/me 只会吃到 401 把控制台弹回登录门（实测：state 200 /
+      // 再补一次 /auth/me 只会吃到 401 把工作台弹回登录门（实测：state 200 /
       // me 401，界面显示"登录状态已失效"）。服务端两个端点已同答一份视图（后端
-      // _no_auth_state），这里的前置挡道保证旧服务端也不会把控制台卡死。
+      // _no_auth_state），这里的前置挡道保证旧服务端也不会把工作台卡死。
       if (data.authRequired === false) { enterConsole(); return; }
       if (!auth.csrfToken) {
         const ok = await refreshSession();

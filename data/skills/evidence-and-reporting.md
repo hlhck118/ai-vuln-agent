@@ -39,7 +39,7 @@ get_chain_nodes nodeId=fact-70          # 只要那一条
 get_findings severity=high limit=100
 get_assets limit=100
 get_report                              # 整篇报告
-get_report jobId=job-xxxxxxxx           # 那一次任务的任务报告
+get_report jobId=job-xxxxxxxx           # 那一次任务的作业报告
 get_job jobId=job-xxxxxxxx              # 任务的原始结果（含外部工具输出）
 list_jobs status=done limit=20
 ```
@@ -70,7 +70,7 @@ list_jobs status=done limit=20
 所以**不要拿界面看到的当报告**：界面上少的那部分是有意省掉的，不是不存在。反过来，
 `get_report` 返回几千到上万字符，要按字符翻页读到底。
 
-**`jobId` 不是过滤器，是换一篇文档。** 任务报告有它自己的执行信息、自己的失败原因、自己的
+**`jobId` 不是过滤器，是换一篇文档。** 作业报告有它自己的执行信息、自己的失败原因、自己的
 "本次没有向链路写入任何节点"。做成"汇总报告过滤一下"会得到一篇没有主语的文章：读者分不出
 这是"这次什么都没发现"，还是"上次发现的东西这次被过滤掉了"——而这两种情况要采取的行动完全
 相反。报告里的时间**一律是绝对时间**（`YYYY-MM-DD HH:MM:SS`），不写"3 分钟前"：报告要归档、

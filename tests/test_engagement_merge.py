@@ -33,6 +33,7 @@ from pentestd import chat                        # noqa: E402
 from pentestd import models                      # noqa: E402
 from pentestd import subagent                    # noqa: E402
 from pentestd.server import ControlPlane         # noqa: E402
+from pentestd.store import DEFAULT_SESSION_LABEL   # noqa: E402
 from pentestd.store import Store                 # noqa: E402
 
 WEB_DIR = os.path.join(ROOT, "web")
@@ -531,11 +532,16 @@ class NewConversationKeepsNoBindingTestCase(unittest.TestCase):
 
     前端已经改成发空串，但静态文件在浏览器里可能还是旧的那一份（刷新前就开着的
     标签页），而多一条"归属从哪来"的入口，就多一种"这条对话为什么挂在别人目标下"
-    的解释。所以服务端这一侧也断：归属只由第一条产出型任务的目标决定。
+    的解释。所以服务端这一侧也断：归属只由这句话自己认出来的目标决定。
 
     这条同时守着一个更容易踩的坑——不传 `engagementId` 时**不许**兜底到"最近创建的
     目标"（`_resolve_engagement` 的读路径就是这么退的）。会话归属要是也这么退，
     两条不同机器的对话还是会挤进同一行。
+
+    **"拒不接受"不等于"留空"。** 任务在第一条消息上就成立（`tasks.bootstrap`），
+    所以这里断言的是"绑到的那一个不是请求体给的那一个、也不是库里现成的别的目标"，
+    而不是"没有归属"——后者是这条约定落地**之前**的形态，现在留空反而说明建任务
+    那一步没走通。
     """
 
     def setUp(self):
@@ -561,14 +567,20 @@ class NewConversationKeepsNoBindingTestCase(unittest.TestCase):
         eid = self.store.create_engagement(TARGET_A, "先把这一台放着")["id"]
         setup = self._setup(engagementId=eid)
         meta = self.store.get_chat_session(setup["sessionId"])
-        self.assertEqual("", meta["engagementId"],
-                         "新对话被请求体里的 engagementId 绑上了旧目标")
+        self.assertTrue(meta["engagementId"], "第一句话没把任务建起来")
+        self.assertNotEqual(eid, meta["engagementId"],
+                            "新对话被请求体里的 engagementId 绑上了旧目标")
 
-    def test_no_binding_falls_back_to_nothing(self):
+    def test_no_binding_never_adopts_an_unrelated_target(self):
         """连"最近创建的目标"也不许当兜底——那正是两台机器挤一行的那条路。"""
-        self.store.create_engagement(TARGET_A, "")
+        other = self.store.create_engagement(TARGET_A, "")["id"]
         meta = self.store.get_chat_session(self._setup()["sessionId"])
-        self.assertEqual("", meta["engagementId"])
+        self.assertTrue(meta["engagementId"], "第一句话没把任务建起来")
+        self.assertNotEqual(other, meta["engagementId"],
+                            "新对话兜底到了库里现成的别的目标")
+        # 这句话里没有地址，建出来的任务只能是垫名，不能凭空指到 TARGET_A 上。
+        self.assertEqual(DEFAULT_SESSION_LABEL,
+                         self.store.get_engagement_meta(meta["engagementId"])["target"])
 
 
 if __name__ == "__main__":

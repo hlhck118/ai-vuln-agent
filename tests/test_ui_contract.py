@@ -392,21 +392,25 @@ class UiContractTestCase(unittest.TestCase):
         之后，这个清单还停在八个中文标签 / 七个 `data-tab` 上，新页整页无人看守。
         所以这里把 `rail-nav` 的三个段落（工作 / 产出 / 系统）按实际顺序列全。
 
-        **页签名以这里为准**：「DSH 控制台」已改名「控制台」、「入口」徽章撕掉（第一页
-        本身就是入口）。改名要同步这一处，否则守卫会逼着旧名字留在页签上。
+        **页签名以这里为准**。改名史：先「DSH 控制台」→「控制台」，再「控制台」
+        →「会话」（这一页装的是平台里那个完整的 DSH 网页应用，按页里实际的东西命名，
+        `data-tab` 仍是 `dsh`）；「入口」徽章已撕掉（第一页本身就是入口）。
+        「渗透任务」→「任务」、「任务」（一次执行的记录）→「作业」：两页同名找不到
+        对应关系，所以按内容分开命名——**任务是一个目标，作业是一次执行**。
+        改名要同步这一处，否则守卫会逼着旧名字留在页签上。
         """
         #
         # 2026-11 的第二轮改版把导航从三段合并成两段（功能 / 系统），并按 artex
         # 补了六页：仪表盘、流量、请求重发、工作空间、审批记录、日志。清单跟着
         # 从九项变十五项——**这里刻意不写"新增的六项"这种例外**，仍然逐条列全：
         # 例外条款等于给下一轮开一个豁免口。
-        for label in ("控制台", "仪表盘", "探索链路", "漏洞", "资产", "流量",
-                      "请求重发", "报告", "任务", "部署", "工作空间",
-                      "审批记录", "日志", "设置", "使用说明"):
+        for label in ("会话", "仪表盘", "任务", "计划任务", "探索链路", "漏洞",
+                      "资产", "流量", "请求重发", "报告", "作业", "部署",
+                      "工作空间", "审批记录", "日志", "设置", "使用说明"):
             self.assertIn(label, self.html, "缺少视图：%s" % label)
-        for tab in ("dsh", "dashboard", "graph", "findings", "assets", "traffic",
-                    "repeater", "report", "jobs", "setup", "workspace",
-                    "approvals", "logs", "settings", "guide"):
+        for tab in ("dsh", "dashboard", "tasks", "schedules", "graph", "findings",
+                    "assets", "traffic", "repeater", "report", "jobs", "setup",
+                    "workspace", "approvals", "logs", "settings", "guide"):
             self.assertIn('data-tab="%s"' % tab, self.html,
                           "缺少页签按钮：%s" % tab)
             self.assertIn('id="panel-%s"' % tab, self.html,
@@ -5271,7 +5275,7 @@ class SplitPaneResizeTestCase(unittest.TestCase):
 
 
 class ReportSidebarTestCase(unittest.TestCase):
-    """报告页左侧的**任务报告目录**：一次执行一篇报告，点一条读那一篇。
+    """报告页左侧的**作业报告目录**：一次执行一篇报告，点一条读那一篇。
 
     这一块有三件"看起来对、其实错"的事，都不会让任何功能测试变红：
 
@@ -5465,7 +5469,7 @@ class ReportSidebarTestCase(unittest.TestCase):
         """左侧「产出 → 报告」进来必须是**本目标汇总**，不是上次读到的那一篇。
 
         目录里点一行是"我要读这一篇"，导航点一次是"看这个目标的报告"——后者是这
-        一页的入口，而这一页交付的就是汇总那一篇。实测过的缺陷：点开一篇任务报告
+        一页的入口，而这一页交付的就是汇总那一篇。实测过的缺陷：点开一篇作业报告
         → 切去任务页 → 从导航回报告，屏幕上还是那一篇，页头写着它的任务号，左栏
         高亮也还压在那条任务上。判据因此落在"进这一页时 `reportJob` 被清掉"，
         而不是"卡头写了一句话"——`/report` 不带 `?job=` 才是汇总。
@@ -5485,7 +5489,7 @@ class ReportSidebarTestCase(unittest.TestCase):
         """换一篇文档必须重取，不能复用上一篇的缓存。
 
         `loadResource` 的缓存只记 `loaded[key]` 一个布尔，它不知道取的是**哪一篇**。
-        于是"从任务报告回汇总"这条路上，`apply` 一次都不会跑：正文停在任务报告
+        于是"从作业报告回汇总"这条路上，`apply` 一次都不会跑：正文停在作业报告
         的 markdown 上，而卡头读的是刚刚清过的 `reportDoc`。这一页没有报错、没有
         空态，只是纸上写着另一篇——读完就交出去的那种错。
         """
@@ -5516,7 +5520,7 @@ class ReportSidebarTestCase(unittest.TestCase):
         """
         side = _fn_body(self.js, "renderReportSide")
         self.assertIn("reportSideRow(null)", side,
-                      "目录里没有「本目标汇总」那一行：读了一篇任务报告就回不去了")
+                      "目录里没有「本目标汇总」那一行：读了一篇作业报告就回不去了")
 
 class InitTimeSelectorTestCase(unittest.TestCase):
     """初始化那一刻**不许**去找一个还没渲染出来的节点。
@@ -5589,9 +5593,16 @@ class BootChainTestCase(unittest.TestCase):
       * `/health`、`/graph`、`/engagements`、**`/pulse`** 四个请求都发生了——前三个
         不取，界面上就是"顶栏、漏洞、资产全空"；而 `/pulse` 不取，侧边栏那两个读数块
         **永远不会自己变新**（它此前在真实启动链上一条入口都没接上，所以这一条是补的）；
-      * 探针那两场"**没人动过的页面**"（目标与对话是启动之后才出现的 / 启动那份列表
-        是旧的）里，侧边栏自己跟上了：目标行与对话行都出现了。
+      * 探针那两场"**进了会话页之后没人再动过它**"（目标与对话是启动之后才出现的 /
+        启动那份列表是旧的）里，侧边栏自己跟上了：目标行与对话行都出现了。
         那两场是**可以红的**——把三处修复各自改回旧语义，红的正是对应的那一场。
+        "进过会话页"这一下是场景的一部分，不是替被测代码铺路：默认页签是「仪表盘」，
+        其余面板都是 `display:none`，而这两场读的 `#chat-goals` / `#chat-sessions`
+        与会话页那张审查卡浮层都住在会话页里（浮层的判据是 `getClientRects()`，
+        面板不显示时这个数**必然**是 0，与"浮层收起了"长得一模一样）。点这一下走的
+        就是使用者的真实入口（`.tab[data-tab="dsh"]` → `switchTab` → `loadTabData`），
+        之后探针不再碰页面。反过来说，把默认页签改回会话让它变绿是不行的——那等于把
+        "进了这一页心跳有没有起"这条覆盖一起改回旧形态。
       * **第四场：一颗按钮两种身份**（发送 / 停止）。空闲时它叫发送且能点，跑起来之后
         它叫停止、**仍然能点**，而第二下点击真的把请求中止掉了。这一改动的三处风险
         （忙碌时被一起禁用 / 点击没分派 / 名字没跟着状态走）没有一处会让别的用例变红，
@@ -5632,7 +5643,7 @@ class BootChainTestCase(unittest.TestCase):
             problems.append("这几个接口一次都没取过：%s（前三个不取，界面上就是"
                             "顶栏 / 漏洞 / 资产全空；`/pulse` 不取，侧边栏那两个读数块"
                             "不会自己变新）" % report["missing_core"])
-        for key, label in (("late_goal", "目标与对话**启动之后才出现**（页面没人动过）"),
+        for key, label in (("late_goal", "目标与对话**启动之后才出现**（进过会话页之后没人再动它）"),
                            ("stale_list", "启动那份列表是旧的、而第一次探询服务端已有目标"),
                            ("button", "一颗按钮两种身份（发送 / 停止）"),
                            ("review", "审查卡的去留（那一格只摆「要人动手」的东西）")):
@@ -6734,7 +6745,8 @@ class RailTabIconTestCase(unittest.TestCase):
 
     # 导航条目数。**改这个数就是改导航**：两个 9 被钉在这里，是为了让"加了一页
     # 却忘了给它画图标"和"删了一页却留着图标"都变成红灯。2026-11 按 artex 补六页
-    # 之后是 15（功能 11 + 系统 4）；再加「渗透任务」「计划任务」两页是 17。
+    # 之后是 15（功能 11 + 系统 4），`test_all_views_present` 也列全了这 15 项；
+    # 再加上「任务」「计划任务」两页（最初是「渗透任务」）就是现在 rail 上的 17 枚。
     TAB_COUNT = 17
 
     def test_every_rail_tab_carries_exactly_one_inline_icon(self):

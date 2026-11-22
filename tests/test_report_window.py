@@ -135,9 +135,9 @@ class ReportWindowTestCase(unittest.TestCase):
         self.assertIn("其中没有意图节点", md)
 
     def test_a_task_report_keeps_its_findings_outside_the_window(self):
-        """任务报告：本次写的漏洞，不能被**别的任务**写下的事实挤出窗口。
+        """作业报告：本次写的漏洞，不能被**别的任务**写下的事实挤出窗口。
 
-        窗口曾经是全局的：别的任务补了 200 条事实，这一篇任务报告就只剩空链路段，
+        窗口曾经是全局的：别的任务补了 200 条事实，这一篇作业报告就只剩空链路段，
         漏洞清单一并消失。
         """
         job = self.store.create_job("scan", HOST, self.eid, "", {})
@@ -155,7 +155,7 @@ class ReportWindowTestCase(unittest.TestCase):
 
         md = self.store.report_markdown(self.eid, WINDOW, job["id"])
         self.assertIn("任务内发现的漏洞", md,
-                      "任务报告漏掉了本次自己写下的漏洞")
+                      "作业报告漏掉了本次自己写下的漏洞")
         self.assertNotIn("未记录到漏洞。", md)
 
 

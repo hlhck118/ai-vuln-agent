@@ -3,7 +3,7 @@
  * AI 智能体渗透测试工作台 —— 前端主逻辑
  * 纯原生 JavaScript + SVG：无框架、无构建、无 CDN、无 npm 依赖。
  * 分区：常量 / 工具 / API / 状态 / 顶栏 / 链路图 / 节点详情 / 数据加载 /
- *       漏洞 / 资产 / Markdown / 部署控制台 / 事件 / 启动。
+ *       漏洞 / 资产 / Markdown / 部署面板 / 作业 / 事件 / 启动。
  * 安全：接口数据一律经 textContent、createTextNode 落 DOM，绝不拼 HTML 字符串。
  * ==========================================================================*/
 
@@ -286,7 +286,7 @@ const state = {
   severityFilter: new Set(SEVERITY_ORDER),
   keyword: '', selectedNodeId: null, selectedAssetId: null,
   loaded: { findings: false, assets: false, report: false }, inflight: {},
-  setup: null, executors: [], jobs: [],                      // 部署控制台数据
+  setup: null, executors: [], jobs: [],                      // 部署面板数据
   setupLoaded: false, executorsLoaded: false, jobsLoaded: false,
   authz: null, authzLoaded: false,                           // 第三道闸：GET /authz
   // 「外部工具」卡：清单（GET /tools）+ 操作队列的轮询状态。
@@ -1043,11 +1043,11 @@ function loadAssets(force) {
 }
 function loadReport(force) {
   const jobId = state.reportJob || '';
-  // 任务报告取**它自己所属的目标**，不是当前选中的目标（见 reportPath 的注释）。
+  // 作业报告取**它自己所属的目标**，不是当前选中的目标（见 reportPath 的注释）。
   const owner = jobId ? ((jobOf(jobId) || {}).engagementId || state.eid) : state.eid;
   const path = reportPath(jobId, owner);
   // 缓存必须按**文档**分辨：`loaded.report` 只记得"取过一篇"，它不知道取的是哪一篇。
-  // 换了一篇（换任务 / 换目标 / 从任务报告回汇总）却不重取的表现是**正文停在上一篇
+  // 换了一篇（换任务 / 换目标 / 从作业报告回汇总）却不重取的表现是**正文停在上一篇
   // markdown 上**，而卡头读的是 `reportDoc`——两处各说一份文档。这条路没有报错、
   // 也没有空态，只是内容错了，所以判据只能落在"这一篇取过没有"上。
   const switchedDoc = state.reportPath !== path;
@@ -1056,7 +1056,7 @@ function loadReport(force) {
     if (error) {
       state.markdown = '';
       state.reportDoc = null;
-      showError((jobId ? `任务报告 ${jobId} 加载失败：` : '报告加载失败：') + error.message);
+      showError((jobId ? `作业报告 ${jobId} 加载失败：` : '报告加载失败：') + error.message);
       setPanelMessage('#report-body', errorBlock('报告加载失败：' + error.message));
       $('#report-meta').textContent = '';
       renderReportDocHead();
@@ -1405,7 +1405,7 @@ async function selectEngagement(eid) {
 /** 按页签按需加载数据；部署与任务页签都与 engagement 无关。
  *
  *  任务读数的自动刷新跟着**三个**页签走：任务页签（完整列表）、对话页签（上下文
- *  栏里那一块）、报告页签（左侧的任务报告目录）。后两处都不是任务页签，不接进去
+ *  栏里那一块）、报告页签（左侧的作业报告目录）。后两处都不是任务页签，不接进去
  *  就会停在进入那一刻的内容——而目录里那几行状态正是"这个任务跑完了没有"的唯一
  *  读数。其余页签一律停：多留在后台跑一轮就是一次没人看的请求。
  *
@@ -1443,7 +1443,7 @@ function loadTabData(tab) {
     watchJobs();
     return;
   }
-  // 新增的八页（仪表盘 / 渗透任务 / 计划任务 / 流量 / 请求重发 / 工作空间 /
+  // 新增的八页（仪表盘 / 任务 / 计划任务 / 流量 / 请求重发 / 工作空间 /
   // 审批记录 / 日志）由 `panels.js` 自己渲染，**同样排在 `!state.eid` 早退之前**：
   // 它们回答的是"整个平台上发生了什么"，与有没有选中某个目标无关。
   //
@@ -1483,7 +1483,7 @@ function loadTabData(tab) {
     return;
   }
   if (!state.eid) return;
-  // 漏洞 / 资产每次切进来都**强制重拉**。心跳只重拉"当前页签"，而人常常是在「控制台」
+  // 漏洞 / 资产每次切进来都**强制重拉**。心跳只重拉"当前页签"，而人常常是在「会话」
   // 里等一次扫描跑完再切过来：那期间的变化已经被心跳记进指纹（`state.pulse`），正文却还是
   // 上一次退出时留下的缓存，于是"切回来看到旧的、按 F5 才对"。缓存只在同一页签内复用
   // （心跳与分页），跨页签进入不再相信它。
@@ -1777,7 +1777,7 @@ function renderFindingsTargets() {
   host.append(targetRow('', null));
   (state.engagementList || []).forEach((meta) => host.append(targetRow(meta.id, meta)));
   if (!(state.engagementList || []).length) {
-    host.append(el('p', 'empty', '还没有目标。下发一次任务会自动建一个。'));
+    host.append(el('p', 'empty', '还没有目标。下发一次作业会自动建一个。'));
   }
 }
 /** 点左栏：换范围。具体目标走 `selectEngagement`（它同时决定漏洞/资产/报告的范围）；
@@ -2090,7 +2090,7 @@ function renderReportDocHead() {
   const job = doc.job || {};
   // 目标是完整路径时这一行有 60 多个字符，窄屏下会把卡头撑成两三行。省略号 +
   // `title` 里的完整值：这一段要的是"我读的是哪一份"，不是"把路径念完"。
-  name.textContent = `任务报告 · ${doc.jobId} · ${job.target || targetOf(doc.eid) || doc.eid}`;
+  name.textContent = `作业报告 · ${doc.jobId} · ${job.target || targetOf(doc.eid) || doc.eid}`;
   name.title = name.textContent;
 }
 /** 复制：优先 Clipboard API，降级 textarea + execCommand。 */
@@ -2129,7 +2129,7 @@ function downloadReport() {
   URL.revokeObjectURL(link.href);
 }
 
-/* ----------------------------------------------- 11b. 任务报告目录 ---- */
+/* ----------------------------------------------- 11b. 作业报告目录 ---- */
 /*
  * 每个任务一篇报告：左栏列出**全部任务**（不只当前目标名下那些），点一条读那一次
  * 执行自己的报告。它与「任务」页读的是同一批数据（`state.jobs` 由本模块持有），
@@ -2152,9 +2152,9 @@ function downloadReport() {
  * 同一批数据、两个用途，用同一个排序反而两边都不对。
  */
 
-/** 报告文档路径：`jobId` 为空是**本目标汇总**，否则是那一次执行的任务报告。
+/** 报告文档路径：`jobId` 为空是**本目标汇总**，否则是那一次执行的作业报告。
  *
- *  任务报告挂在**它自己所属的目标**下面（`eid` 由调用方给），而不是当前选中的目标：
+ *  作业报告挂在**它自己所属的目标**下面（`eid` 由调用方给），而不是当前选中的目标：
  *  目录可以跨目标浏览，用一个别的目标的 id 去取这份文档，后端会（正确地）拒绝。
  *  这也是"点一次任务不会顺手切换你的目标"能成立的前提。
  */
@@ -2237,7 +2237,7 @@ function kindLine(job) {
   return `${JOB_STATUS_LABEL[status]} · ${jobKindLabel(job)} · 证据 ${writtenTotal(job)} 个节点`;
 }
 
-/** 画任务报告目录。`error` 由 `renderJobs` 传下来——**加载失败不能静默**：
+/** 画作业报告目录。`error` 由 `renderJobs` 传下来——**加载失败不能静默**：
  *  目录会安静地留在上一批任务上，而下面正文刚说过"加载失败"，同一件事在两处
  *  给出相反的答案。 */
 function renderReportSide(error) {
@@ -2250,12 +2250,12 @@ function renderReportSide(error) {
   const hint = $('#report-side-hint');
   if (error) {
     if (hint) hint.textContent = '加载失败';
-    wrap.append(errorBlock('任务列表加载失败：' + error.message));
+    wrap.append(errorBlock('作业列表加载失败：' + error.message));
     return;
   }
   if (!state.jobsLoaded) {
     if (hint) hint.textContent = '正在加载…';
-    wrap.append(emptyBlock('正在加载任务列表…'));
+    wrap.append(emptyBlock('正在加载作业列表…'));
     return;
   }
   // 选中的那条任务不在了（被删掉），回到汇总。不这么做的表现是：正文还显示着
@@ -2264,18 +2264,18 @@ function renderReportSide(error) {
     state.reportJob = '';
     loadReport(true);
   }
-  if (hint) hint.textContent = state.jobs.length ? `${state.jobs.length} 次执行` : '暂无任务';
+  if (hint) hint.textContent = state.jobs.length ? `${state.jobs.length} 次执行` : '暂无作业';
   wrap.append(el('div', 'rpt-group', '本目标'));
   wrap.append(reportSideRow(null));
   if (!state.jobs.length) {
-    wrap.append(el('div', 'rpt-group', '全部任务'));
-    wrap.append(emptyBlock('还没有任务：在「任务」页下发第一个'));
+    wrap.append(el('div', 'rpt-group', '全部作业'));
+    wrap.append(emptyBlock('还没有作业：在「会话」里让模型下发第一个'));
     wrap.scrollTop = scrolled;
     return;
   }
   // 按时间倒序（新 → 旧）。与任务页按状态分组不同，理由见本节文件头注释。
   const ordered = state.jobs.slice().sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
-  wrap.append(el('div', 'rpt-group', `全部任务（${ordered.length}）`));
+  wrap.append(el('div', 'rpt-group', `全部作业（${ordered.length}）`));
   ordered.forEach((job) => wrap.append(reportSideRow(job)));
   wrap.scrollTop = scrolled;
 }
@@ -2297,7 +2297,7 @@ function showReport(jobId) {
   loadReport(true);
 }
 
-/* --------------------------------------------------- 12. 部署控制台 ---- */
+/* ------------------------------------------------------ 12. 部署面板 ---- */
 /* 第五个页签：看部署自检、生成节点接入命令、管理节点、下发任务、看基线与任务。
  * 接口契约：GET /setup、GET /executors、POST /executors/enroll、
  *          POST /executors/{id}/revoke、GET/POST /jobs、GET /baselines。 */
@@ -2333,7 +2333,7 @@ const executorStatusWord = (row) => {
 };
 
 /**
- * 任务类型的中文名。**键集必须与服务端 `server.JOB_KIND_LABELS` 完全一致**，
+ * 作业类型的中文名。**键集必须与服务端 `server.JOB_KIND_LABELS` 完全一致**，
  * 这件事由测试跨文件钉住（`test_ui_contract` 会读服务端的 JOB_KINDS 与这里的
  * 键逐个比）。措辞可以不同——这里是列表里的一枚小标签，比服务端那套全称短，
  * 但**不能少键**：漏一个键的症状是那一类任务显示成裸 id。
@@ -2352,7 +2352,7 @@ const JOB_KIND_LABEL = {
   shell: '载荷投递', pivot: '出口路由', toolkit: '外部工具',
 };
 
-/** 任务类型标签。优先用服务端给的 `kindLabel`，它没给才用本地表。 */
+/** 作业类型标签。优先用服务端给的 `kindLabel`，它没给才用本地表。 */
 const jobKindLabel = (job) => ((job && (job.kindLabel || JOB_KIND_LABEL[job.kind]))
   || (job && job.kind) || '');
 const JOB_STATUS_ORDER = ['running', 'pending', 'failed', 'done'];
@@ -2536,7 +2536,7 @@ function countsText(counts) {
   const info = counts || {};
   return ['engagement ' + formatCount(info.engagements), '链路节点 ' + formatCount(info.nodes),
     '执行节点 ' + formatCount(info.executorsOnline) + '/' + formatCount(info.executors),
-    '任务 ' + formatCount(info.jobs) + '（待执行 ' + formatCount(info.pendingJobs) + '）',
+    '作业 ' + formatCount(info.jobs) + '（待执行 ' + formatCount(info.pendingJobs) + '）',
     '基线 ' + formatCount(info.baselines)].join(' · ');
 }
 /** 部署信息卡：地址 / 监听 / 数据库 / 引擎 / 鉴权 / 计数。 */
@@ -2664,7 +2664,7 @@ function renderAuthz(data) {
       + '启动参数——探测范围与权限档仍然生效，三者取交集，不是替代。'));
   } else if (!canEdit) {
     panel.append(el('p', 'authz-readonly',
-      '只有管理员能改第三道闸。当前账号可以查看、可以在「控制台」里问，'
+      '只有管理员能改第三道闸。当前账号可以查看、可以在「会话」里问，'
       + '但改授权需要管理员身份。'));
   }
   const list = el('ul', 'authz-list');
@@ -2680,7 +2680,7 @@ function renderAuthz(data) {
                         item.enabled ? '关闭' : '开启');
       button.type = 'button';
       button.title = item.enabled
-        ? '收回这一类：立刻不能再发起；已经下发的任务不受影响'
+        ? '收回这一类：立刻不能再发起；已经下发的作业不受影响'
         : '放行这一类。它' + plainEmphasis(item.requires || '会改变目标状态') + '。';
       button.addEventListener('click', () => toggleAuthzClass(item));
       head.append(el('span', 'spacer'), button);
@@ -2820,7 +2820,7 @@ async function toggleAuthzClass(item) {
   const targets = asArray(info.targets);
   if (item.enabled) {
     if (!window.confirm('关闭「' + (item.label || item.id) + '」？\n\n'
-      + '关闭后这一类立刻不能再发起；已经下发的任务不受影响。')) return;
+      + '关闭后这一类立刻不能再发起；已经下发的作业不受影响。')) return;
     await submitAuthz(enabled.filter((id) => id !== item.id), targets);
     return;
   }
@@ -2972,7 +2972,7 @@ function renderSetupExecutors(error) {
 async function revokeExecutor(button) {
   const id = button.dataset.executorId, name = button.dataset.executorName || id;
   if (!id) { showError('该节点缺少 id，无法吊销'); return; }
-  if (!window.confirm(`确定吊销节点「${name}」？令牌会立即失效，它正在执行的任务会被标记为失败。`)) return;
+  if (!window.confirm(`确定吊销节点「${name}」？令牌会立即失效，它正在执行的作业会被标记为失败。`)) return;
   const message = $('#executor-message');
   button.disabled = true;
   message.textContent = '正在吊销…';
@@ -3037,14 +3037,14 @@ function renderJobs(error) {
   // 与"一条任务都没有"这两条路径都不会走到它，于是侧栏会继续显示上一批任务
   // ——而面板刚刚说过加载失败，同一件事在两处给出相反的答案。
   renderJobList(error);
-  // 报告页左侧的任务报告目录读的是同一批数据，同样要跟着走、同样要在早退之前。
+  // 报告页左侧的作业报告目录读的是同一批数据，同样要跟着走、同样要在早退之前。
   renderReportSide(error);
   const wrap = $('#job-list');
   clear(wrap);
   // 清空按钮的可用范围先算出来。加载失败时按"不可用"处理，而不是沿用上一次已知的
   // 条数——用一个过期的数字去描述"将清空几条"，比直接禁用更误导。
   updateJobsClearButton(error);
-  // 导航徽章：**未结束的任务数**挂在左侧导航上。它是从别的页签看得见"还有活在跑"
+  // 导航徽章：**未结束的作业数**挂在左侧导航上。它是从别的页签看得见"还有活在跑"
   // 的唯一入口——任务页签不打开时，任务列表根本不渲染。
   // 加载失败时按 0 处理（隐藏徽章），而不是沿用上一次的条数：拿一个过期的数字
   // 去说"还有 3 个任务在跑"，比不说更误导。
@@ -3053,8 +3053,8 @@ function renderJobs(error) {
     const open = error ? 0 : state.jobs.filter((job) => !JOB_FINISHED.has(jobStatusOf(job))).length;
     badge.textContent = open > 0 ? String(open) : '';
   }
-  if (error) { wrap.append(errorBlock('任务列表加载失败：' + error.message)); return; }
-  if (!state.jobs.length) { wrap.append(emptyBlock('暂无任务：填好目标后下发第一个任务')); return; }
+  if (error) { wrap.append(errorBlock('作业列表加载失败：' + error.message)); return; }
+  if (!state.jobs.length) { wrap.append(emptyBlock('暂无作业：在「会话」里让模型下发第一个作业')); return; }
   // 按**目标**分组（m14866「任务列表按照目标分组」）。这张表此前是一根长条，按状态
   // 排：同一个目标的四次执行被别的目标的任务隔开，读的人得自己在脑子里把它们挑出来。
   // 分组之后"这个目标跑过几次、各是什么结果"一眼可见；组内仍按 `compareJobs`（执行中
@@ -3118,7 +3118,7 @@ function jobGroupBlock(group) {
     const status = jobStatusOf(job), item = el('li', 'row'), head = el('div', 'row-head');
     const isFollowed = Boolean(state.jobLog && state.jobLog.jobId === job.id);
     head.append(el('span', `status-badge status-${status}`, JOB_STATUS_LABEL[status]));
-    // 任务类型必须显示：同一个列表里既有代码审计、又有网络探测、又有利用验证，
+    // 作业类型必须显示：同一个列表里既有代码审计、又有网络探测、又有利用验证，
     // 不标出来"耗时 3 秒就完成"看起来像异常，实际是探测或工具调用的正常速度。
     head.append(el('span', 'tag', jobKindLabel(job)));
     // 扫描任务要标出「这一轮由谁跑」。两条路的证据强度不同：发掘引擎能做
@@ -3158,7 +3158,7 @@ function jobGroupBlock(group) {
     const logButton = el('button', 'btn sm', isFollowed ? '日志中' : '实时日志');
     logButton.type = 'button';
     logButton.dataset.jobLog = job.id || '';
-    logButton.title = '跟随这条任务的执行过程（服务端推送，不用刷新）';
+    logButton.title = '跟随这条作业的执行过程（服务端推送，不用刷新）';
     head.append(logButton);
     const meta = el('div', 'row-meta');
     const created = el('span', 'muted', '创建 ' + formatRelative(job.createdAt));
@@ -3219,17 +3219,17 @@ function updateJobsClearButton(failed) {
   const finished = state.jobs.filter((job) => JOB_FINISHED.has(jobStatusOf(job))).length;
   const kept = state.jobs.length - finished;
   button.disabled = Boolean(failed) || finished === 0;
-  if (failed) button.title = '任务列表未加载成功，无法判断可清空的范围';
-  else if (!finished) button.title = '没有已结束的任务可清空（待执行与执行中的任务不会被清空）';
-  else button.title = `清空 ${finished} 条已结束的任务；保留 ${kept} 条待执行/执行中`;
+  if (failed) button.title = '作业列表未加载成功，无法判断可清空的范围';
+  else if (!finished) button.title = '没有已结束的作业可清空（待执行与执行中的作业不会被清空）';
+  else button.title = `清空 ${finished} 条已结束的作业；保留 ${kept} 条待执行/执行中`;
 }
 /** 删除单条任务：二次确认；执行中的那条要说明结果会被丢弃。 */
 async function deleteJob(button) {
   const id = button.dataset.jobId, status = button.dataset.jobStatus || '';
-  if (!id) { showError('该任务缺少 id，无法删除'); return; }
+  if (!id) { showError('该作业缺少 id，无法删除'); return; }
   const prompt = status === 'running'
-    ? `任务 ${id} 正在执行。删除后它仍会跑完，但本次结果会被丢弃。确定删除？`
-    : `确定删除任务 ${id}？\n只删这条调度记录，已写入的链路证据不受影响。`;
+    ? `作业 ${id} 正在执行。删除后它仍会跑完，但本次结果会被丢弃。确定删除？`
+    : `确定删除作业 ${id}？\n只删这条调度记录，已写入的链路证据不受影响。`;
   if (!window.confirm(prompt)) return;
   button.disabled = true;
   const message = $('#jobs-message');
@@ -3239,13 +3239,13 @@ async function deleteJob(button) {
     await loadJobs(true, false);
     if (message) {
       message.textContent = data && data.discarded
-        ? `已删除任务 ${id}：它正在执行，那次结果会被丢弃`
-        : `已删除任务 ${id}`;
+        ? `已删除作业 ${id}：它正在执行，那次结果会被丢弃`
+        : `已删除作业 ${id}`;
     }
   } catch (error) {
     button.disabled = false;
     if (message) message.textContent = '';
-    showError('删除任务失败：' + error.message);
+    showError('删除作业失败：' + error.message);
   }
 }
 /**
@@ -3290,7 +3290,7 @@ function jobLogPanel(current) {
   current.drawn = current.lines.length;
   if (!current.lines.length && !current.ended) {
     body.append(el('div', 'job-log-line job-log-idle',
-                   '等待第一行输出…（这条任务还没写出任何过程记录）'));
+                   '等待第一行输出…（这条作业还没写出任何过程记录）'));
   }
   if (current.sticky) body.scrollTop = body.scrollHeight;
   // 贴底与否由**用户的滚动**决定，不在这里猜。24px 的容差是给平滑滚动与
@@ -3335,7 +3335,7 @@ function openJobLog(jobId) {
     // 浏览器不支持长连接。任务照常执行，只是这一屏看不到过程——说清楚，
     // 而不是给一个转不完的"等待第一行"。
     state.jobLog.ended = '这个浏览器不支持 EventSource，无法实时跟随。'
-      + '任务本身照常执行，稍后刷新可看到它的结果。';
+      + '作业本身照常执行，稍后刷新可看到它的结果。';
     renderJobLog();
     return;
   }
@@ -3372,8 +3372,8 @@ function openJobLog(jobId) {
       if (!state.jobLog || state.jobLog.jobId !== jobId) return;
       state.jobLog.ended = name === 'timeout'
         ? '单次跟随时长已达上限。点一次「实时日志」可重新跟随。'
-        : (name === 'gone' ? '这条任务已被删除。'
-                           : '这条任务的执行过程已结束。');
+        : (name === 'gone' ? '这条作业已被删除。'
+                           : '这条作业的执行过程已结束。');
       // 必须显式关：EventSource 在服务端关闭连接之后**会自动重连**，而我们的
       // 服务端恰恰是靠"关连接"表示"日志讲完了"。不关就是不停重连、每次把整份
       // 日志重放一遍——日志看起来在持续变长，而任务早就结束了。
@@ -3491,7 +3491,7 @@ function renderJobLog() {
   if (idle && current.lines.length) body.removeChild(idle);
   if (!current.lines.length && !current.ended && !idle) {
     body.append(el('div', 'job-log-line job-log-idle',
-                   '等待第一行输出…（这条任务还没写出任何过程记录）'));
+                   '等待第一行输出…（这条作业还没写出任何过程记录）'));
   }
 
   // 提示块随状态变，所以每次都替换掉重建——它只有一行，代价可以忽略。
@@ -3503,14 +3503,14 @@ function renderJobLog() {
   if (current.sticky) body.scrollTop = body.scrollHeight;
 }
 
-/** 清空已结束的任务：只删调度记录，不动已写入链路的证据。 */
+/** 清空已结束的作业：只删调度记录，不动已写入链路的证据。 */
 async function clearJobs() {
   const button = $('#jobs-clear'), message = $('#jobs-message');
   const finished = state.jobs.filter((job) => JOB_FINISHED.has(jobStatusOf(job))).length;
   if (!finished) return;
   const kept = state.jobs.length - finished;
-  if (!window.confirm(`确定清空 ${finished} 条已结束的任务？`
-    + (kept ? `\n队列中还有 ${kept} 条待执行/执行中的任务，会保留。` : '')
+  if (!window.confirm(`确定清空 ${finished} 条已结束的作业？`
+    + (kept ? `\n队列中还有 ${kept} 条待执行/执行中的作业，会保留。` : '')
     + '\n只删调度记录，已写入的链路证据不受影响。')) return;
   await runJobClear(button, message, {}, finished);
 }
@@ -3524,8 +3524,8 @@ async function clearJobs() {
 async function clearAllJobs() {
   const button = $('#jobs-clear-all'), message = $('#jobs-message');
   if (!state.jobs.length) return;
-  if (!window.confirm(`确定清空全部 ${state.jobs.length} 条任务记录？\n`
-    + '待执行与执行中的记录也会一并删除（执行中的任务会失去调度面）。\n'
+  if (!window.confirm(`确定清空全部 ${state.jobs.length} 条作业记录？\n`
+    + '待执行与执行中的记录也会一并删除（执行中的作业会失去调度面）。\n'
     + '已写入的链路证据不受影响。')) return;
   await runJobClear(button, message, { all: true }, state.jobs.length);
 }
@@ -3543,7 +3543,7 @@ async function runJobClear(button, message, body, expected) {
   } catch (error) {
     if (button) button.disabled = false;
     if (message) message.textContent = '';
-    showError('清空任务失败（约 ' + formatCount(expected) + ' 条）：' + error.message);
+    showError('清空作业失败（约 ' + formatCount(expected) + ' 条）：' + error.message);
   }
 }
 /** 部署自检 + 信息 + 示例；已加载过就不重复请求。 */
@@ -4000,7 +4000,7 @@ function loadJobs(force, quiet) {
     .catch((error) => {
       state.jobsLoaded = false;
       renderJobs(error);
-      if (!quiet) showError('任务列表加载失败：' + error.message);
+      if (!quiet) showError('作业列表加载失败：' + error.message);
     })
     .finally(() => { state.jobsInflight = null; });
   return state.jobsInflight;
@@ -4047,9 +4047,9 @@ function renderSetupLoading() {
 }
 /** 任务页的加载态：只有任务列表一块。 */
 function renderJobsLoading() {
-  if (!state.jobsLoaded) setPanelMessage('#job-list', emptyBlock('正在加载任务列表…'));
+  if (!state.jobsLoaded) setPanelMessage('#job-list', emptyBlock('正在加载作业列表…'));
 }
-/** 把目标列表交给「控制台」侧边栏渲染。
+/** 把目标列表交给「会话」侧边栏渲染。
  *
  *  数据（`/engagements`）由本模块持有、渲染由对话模块负责，是为了不出现第二份
  *  请求——两份请求会各自持有自己的快照，然后在新目标出现时显示得不一样，而
@@ -4059,7 +4059,7 @@ function renderGoalList() {
   const chat = window.PentestChat;
   if (chat && typeof chat.renderGoals === 'function') chat.renderGoals(state.engagementList);
 }
-/** 把任务列表交给「控制台」上下文栏渲染——数据（`/jobs`）由本模块持有。
+/** 把作业列表交给「会话」上下文栏渲染——数据（`/jobs`）由本模块持有。
  *
  *  与 `renderGoalList` 同一分工、同一理由：两处各拉一次 `/jobs` 会各自持有快照。
  *  这次多一个约束——**`error` 必须传下去**：侧栏那一块要能显示"加载失败"，
@@ -4194,7 +4194,7 @@ async function pumpPulse() {
      两者在启动那几秒里会分叉：`init()` 拉列表与第一次探询是**并发**的，探询先回、
      或者列表那一次请求失败，服务端这一轮的值就已经比页面手上的新——再拿它当基线，
      "目标出现了"这件事永远不会被判定成变化，侧边栏就一直停在「还没有目标。
-     下发一次任务会自动建一个。」（实测：删掉旧目标后再提问，服务端建出了新目标，
+     下发一次作业会自动建一个。」（实测：删掉旧目标后再提问，服务端建出了新目标，
      而页面上那句话从此没变过）。
      `listStamps === null` = 手上这份的来路不清楚（启动刚拉过、或上一次拉失败了）
      → 补拉一次并把指纹记上，于是"启动时拉到的"与"探询基线"只有一个来路。 */
@@ -4291,11 +4291,11 @@ function switchTab(name) {
   if (state.tab === 'setup' && name !== 'setup') stopToolsWatch();
   // 左侧导航的「产出 → 报告」是这一页的**入口**，语义是"看这个目标的报告"，
   // 不是"回到我上次读到的那一篇"。实测（夹具里点一次任务行 → 切任务页 → 从导航
-  // 回报告）：屏幕上还是那一篇任务报告，页头写着它的任务号，而使用者把这一页当
+  // 回报告）：屏幕上还是那一篇作业报告，页头写着它的任务号，而使用者把这一页当
   // 交付物——他要的是汇总那一篇，于是只能自己再去左栏点一次「本目标汇总」。
   // 目录里点一行仍然只换文档（`showReport`），不经过这里，两者语义不同。
   // 刻意**不清** `reportDoc`：此刻正文还是旧那一篇，卡头也跟着它；等新文档落地时
-  // 两处一起换。提前清掉会让卡头先写「本目标汇总」而正文还是任务报告。
+  // 两处一起换。提前清掉会让卡头先写「本目标汇总」而正文还是作业报告。
   const enteringReport = name === 'report' && state.tab !== 'report';
   if (enteringReport) {
     state.reportJob = '';
@@ -4306,7 +4306,7 @@ function switchTab(name) {
   state.tab = name;
   $$('.tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === name));
   $$('.panel').forEach((panel) => panel.classList.toggle('active', panel.id === 'panel-' + name));
-  // 换页签会换掉整块面板：输入卡片可能跟着出现/消失（控制台之外没有它），
+  // 换页签会换掉整块面板：输入卡片可能跟着出现/消失（会话之外没有它），
   // 通知栈要立刻跟到新位置，不能等到下一次尺寸变化。
   syncNoticeAnchor();
   syncChatTail();
@@ -4488,7 +4488,7 @@ function bindEvents() {
     const button = event.target.closest ? event.target.closest('.child-btn') : null;
     if (button) selectAsset(button.dataset.assetId);
   });
-  // 顶栏那个 `#engagement-select` 已经撤掉：选择搬进了「控制台」的侧边栏，
+  // 顶栏那个 `#engagement-select` 已经撤掉：选择搬进了「会话」的侧边栏，
   // 由 chat.js 经 `PentestUI.selectEngagement` 驱动。这里不再监听它。
   // 栏脚那颗全局「刷新」（`#refresh-btn`）同样撤掉了——它刷的是"你当前碰巧在的那
   // 一页 **加上** 状态 / 目标 / 整张链路"，而真正需要它把关的只有链路与报告两页，
@@ -4580,7 +4580,7 @@ async function refreshAll() {
 /* ---------------------------------------------------------- 14. 启动 ---- */
 /** 拉取目标列表，定位到**列表第一条**——目标不再由 URL 决定。
  *
- *  选择器已经搬进「控制台」的侧边栏，这里只负责**定位**，列表本身交给
+ *  选择器已经搬进「会话」的侧边栏，这里只负责**定位**，列表本身交给
  *  `renderGoalList()` 渲染。定位规则收敛成一条（第一条），所以启动地址永远是那个
  *  **裸根路径**（协议 + 主机 + 端口，后面不带任何查询串）——`selectEngagement()`
  *  已经不再回写 URL。
@@ -4655,12 +4655,12 @@ function renderNoEngagement(reason) {
  *  它们停在启动那一刻的内容上再也不动。
  *
  *  读 DOM 而不是另写一个字面量：页签的可见性只有 HTML 那一处权威，`switchTab` 也是
- *  按同一批类名切换的。取不到（HTML 被改坏 / 脚本单独跑）时退回 `'dsh'`：那是 HTML
- *  的默认可见页签，而不是某个随便的取值。
+ *  按同一批类名切换的。取不到（HTML 被改坏 / 脚本单独跑）时退回 `'dashboard'`：那是
+ *  HTML 的默认可见页签（导航第一位、标着 `active`），而不是某个随便的取值。
  */
 function activeTabFromDom() {
   const node = document.querySelector('.tab.active');
-  return (node && node.dataset && node.dataset.tab) || 'dsh';
+  return (node && node.dataset && node.dataset.tab) || 'dashboard';
 }
 function init() {
   bindEvents();
@@ -4678,7 +4678,7 @@ function init() {
      → 本函数，而上面那句 `loadEngagements()` 在**目标列表为空时会提前返回**：它走
      `renderNoEngagement()` 就直接 return，根本到不了 `selectEngagement`，于是心跳
      一次都没起过。而"还没有目标"正是最需要它的时候——下一次提问会在服务端建出第一个
-     目标，侧边栏却停在「还没有目标。下发一次任务会自动建一个。」再也不动。
+     目标，侧边栏却停在「还没有目标。下发一次作业会自动建一个。」再也不动。
      实测（`tools/probe_boot_chain.py` 的真实启动链，目标列表为空的那一份）：
      整个启动过程对 `/pulse` 的请求数是 **0**。 */
   loadTabData(state.tab);
@@ -4726,7 +4726,7 @@ window.PentestUI = {
   watchJobs,
   // 会话里的工具轨迹点一下要跳到右栏那一条任务（m14866）：那条路径先在快照里找，
   // 找不到就**补拉一次**——刚下发的任务、以及在别的页签里清过列表之后，快照里都
-  // 还没有它。补拉这个动作的数据源在控制台这边，所以入口要一起给出去。
+  // 还没有它。补拉这个动作的数据源在会话这边，所以入口要一起给出去。
   loadJobs,
   // 侧边栏两个读数块的新鲜度。对话页签进入时由 `loadTabData` 起，切走时停。
   // 对外暴露是为了让契约测试能直接验"探询会比对指纹、只在变了时才重拉"。
@@ -4735,5 +4735,5 @@ window.PentestUI = {
   // 被观察元素的尺寸（浮动元素脱出流内），所以画完卡片要主动叫一次。
   syncChatTail,
 };
-/** 由 boot.js 接管启动：未登录时先只渲染登录门，不渲染控制台内容。 */
+/** 由 boot.js 接管启动：未登录时先只渲染登录门，不渲染工作台内容。 */
 if (!window.PentestConsoleGate) document.addEventListener('DOMContentLoaded', init);

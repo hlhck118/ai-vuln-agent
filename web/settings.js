@@ -1820,7 +1820,7 @@
       // `warning` 是服务端在"切过去了但现在跑不起来"时给的原文；直接接在保存
       // 回执后面，别把这句埋掉：下一次扫描失败时它是最先要看的解释。
       scanEngineMessage('已保存：' + (data.label || mode)
-                        + '。下一轮扫描生效；已下发的任务不受影响。'
+                        + '。下一轮扫描生效；已下发的作业不受影响。'
                         + (data.warning ? ' ' + data.warning : ''));
     } catch (error) {
       scanEngineMessage('保存失败：' + error.message);
@@ -2002,7 +2002,7 @@
     });
     if (dom.policyNote) {
       dom.policyNote.textContent = '这里是**默认档位**；某个会话具体用哪一档，在'
-        + '「控制台」的入口条上选。权限档只收窄、不放宽：调到最高档，越界目标依旧'
+        + '「会话」的入口条上选。权限档只收窄、不放宽：调到最高档，越界目标依旧'
         + '被门禁拒绝。' + (admin ? '' : '仅管理员可改默认档。');
     }
   }
@@ -2209,7 +2209,7 @@
     const servers = view.mcp.servers || [];
     if (!servers.length) {
       dom.mcpList.append(ui().emptyBlock(
-        '还没有登记 MCP 服务。下面填一个就能把外部工具接进「控制台」。'));
+        '还没有登记 MCP 服务。下面填一个就能把外部工具接进「会话」。'));
       return;
     }
     servers.forEach((server) => dom.mcpList.append(renderMcpServer(server)));
@@ -2617,7 +2617,7 @@
     const deliveries = (view.notify || {}).deliveries || [];
     if (!deliveries.length) {
       dom.notifyDeliveries.append(ui().emptyBlock(
-        '还没有投递记录。发现入库、任务收尾之后会在这里留一行。'));
+        '还没有投递记录。发现入库、作业收尾之后会在这里留一行。'));
       return;
     }
     const list = el('div', 'notify-delivery-list');
@@ -3561,7 +3561,7 @@
   /* ------------------------------------------------- 安装队列的跟进 ----
    *
    * 安装是**入队即返回**的（见 `hub.OpRunner`）：一次 `dsh plugin add` 要跑 pnpm
-   * 与 git，几十秒到几分钟。控制台如果只显示"已入队"就不再动，用户永远看不到它
+   * 与 git，几十秒到几分钟。面板如果只显示"已入队"就不再动，用户永远看不到它
    * 装完，也就永远看不到新插件带来的 Agent ——"安装后应用到会话"这件事根本无从发生。
    *
    * 所以队列里有活就轮询，空了就停：不做无脑定时器，避免一个没人看的页面每 3 秒
@@ -3708,7 +3708,7 @@
     const agentId = button.dataset.applyAgent;
     const chat = window.PentestChat;
     if (!chat || !chat.applyAgent) {
-      showNotice(dom.hubMessage, '对话模块还没加载，先切到「控制台」页签点一下再回来。', 'error');
+      showNotice(dom.hubMessage, '对话模块还没加载，先切到「会话」页签点一下再回来。', 'error');
       return;
     }
     setButtonBusy(button, true, '应用中…');

@@ -257,7 +257,7 @@ class ReportPagingTestCase(unittest.TestCase):
         self.assertIn("不属于目标", outcome["summary"])
 
     def test_a_job_report_can_be_read_by_the_same_tool(self):
-        """`jobId` 换的是整篇文档（任务报告），不是"汇总报告过滤一下"。"""
+        """`jobId` 换的是整篇文档（作业报告），不是"汇总报告过滤一下"。"""
         job = self.store.create_job("toolkit", "10.10.10.250", self.eid)
         self.store.finish_job(job["id"], "done", {"summary": {"adapter": "nmap"}},
                               output="x")

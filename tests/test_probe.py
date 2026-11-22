@@ -82,7 +82,20 @@ class FakeHttp:
                 self.end_headers()
                 self.wfile.write(body)
 
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        # **端口不能落在 `probe.SERVICE_NAMES` 里。** 临时端口由系统分配，撞上
+        # 2049（nfs）、6379（redis）这类条目时，`probe_endpoint` 会把服务名保持成
+        # 端口表里的那个（只有 `unknown` 才让指纹覆盖），于是"非标准端口上的 HTTP
+        # 也要认出来"这条断言会随机变红——实测撞过一次 2049。丢的不是判定逻辑：
+        # 端口表只管展示用的命名，HTTP 指纹才是证据。
+        self.httpd = None
+        for _ in range(8):
+            candidate = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            if probe.service_name(candidate.server_address[1]) == "unknown":
+                self.httpd = candidate
+                break
+            candidate.server_close()
+        if self.httpd is None:
+            raise AssertionError("临时端口全部落在端口表里，夹具没法用")
         self.httpd.daemon_threads = True
         self.httpd.handle_error = lambda *args: None
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()

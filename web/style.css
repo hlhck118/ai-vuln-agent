@@ -2066,7 +2066,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
  * 原先靠 max-width 封顶，那样拖动只能把栏拖窄、拖不宽——封顶与"可调节"是
  * 彼此矛盾的，所以拆掉，上限交给 split.js 的 ratio（容器的 70%）。 */
 .tree-pane { flex: 0 0 var(--split-assets, 480px); }
-/* 任务报告目录：与资产树同形（左栏卡 + 分栏线 + 右栏卡），宽度同样交给分栏条。
+/* 作业报告目录：与资产树同形（左栏卡 + 分栏线 + 右栏卡），宽度同样交给分栏条。
  * 默认 320px 与 split.js 的 `def` 一致。 */
 .report-side { flex: 0 0 var(--split-report, 320px); }
 /* 漏洞页的目标栏：与资产树 / 报告目录同形（列表 + 分栏线 + 内容）。宽度可拖，
@@ -2144,7 +2144,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 
 /* -------------------------------------------------------------- 报告 --- */
 
-/* 任务报告目录：报告页左栏。每一行是**一次执行自己的那份报告**的入口。
+/* 作业报告目录：报告页左栏。每一行是**一次执行自己的那份报告**的入口。
  *
  * 形态刻意与资产树（`.tree-btn`）**逐条对齐**——悬停底色、圆角、选中时的
  * 「2px 左指示条 + 淡蓝底」。这两块都是"320px 宽的左栏里一列可点的行"，
@@ -2183,7 +2183,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .rpt-count { color: var(--accent); }
 .rpt-count.bad { color: var(--text-danger); }
 /* 分节标题（「本次目标」/「全部任务」）。目录里两类行的身份必须一眼可分：
-   上面那条是**这个目标的汇总**，下面那些是**每一次执行的任务报告**。 */
+   上面那条是**这个目标的汇总**，下面那些是**每一次执行的作业报告**。 */
 .rpt-group {
   margin: var(--sp-2) 0 2px; padding: 0 var(--sp-2);
   color: var(--muted); font: var(--fs-caption)/1.6 var(--sans);
@@ -5668,7 +5668,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   .card-list, .setup-body, .settings-body { padding: var(--sp-2); }
 }
 
-/* ---------------------------------------------------------- 控制台（对话页） --- */
+/* ------------------------------------------------------------ 会话（对话页） --- */
 /* 那一页整页嵌一个**同源** iframe（宿主入口 `/dsh/`，见 pentestd/dsh_proxy.py）。
    高度靠 flex 撑开，与 `.chat-body` 同一套写法（`flex: 1 1 auto; min-height: 0`）。
    刻意**不写** `calc(100vh - …)`：那一页的页头内容以后会变，写死的减法在改页头时
@@ -5921,7 +5921,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .btn.xs { padding: 1px 7px; font-size: var(--fs-caption); }
 .select.xs-select { padding: 1px 4px; font-size: var(--fs-caption); }
 
-/* ---- 渗透任务 / 计划任务两页 ----
+/* ---- 任务 / 计划任务两页 ----
    两页都是「一行一条记录 + 行内展开 + 页尾新建表单」。行的骨架照抄 `.dash-row`
    与 `.orch-row` 的做法（panel-2 底 + 1px 边框），因为它们回答的是同一类问题：
    现在有哪些东西、每一条各自什么状态。这里只补这两页独有的部件。

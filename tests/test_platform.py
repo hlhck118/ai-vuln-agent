@@ -422,7 +422,7 @@ class ControlPlaneTestCase(unittest.TestCase):
         这条路径是任何登录用户都能打的，而 `store.add_node` 又是内部写入器
         （`engine.write_chain`）共用的——那边 `job_id` 由函数自己盖章，所以共用层
         没有这道闸。没它是这样：`POST /nodes` 带上 `{"jobId": "job-别人"}` 就
-        能得到一条「某次真实执行跑出来的」节点，任务报告按 jobId 把节点归到那次
+        能得到一条「某次真实执行跑出来的」节点，作业报告按 jobId 把节点归到那次
         执行下。
         """
         _, created = self._post("/api/v1/engagements", {"target": "api-provenance"})

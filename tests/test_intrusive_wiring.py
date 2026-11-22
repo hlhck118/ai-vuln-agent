@@ -813,7 +813,7 @@ class ChainWriteFailureMustNotStrandTheJobTestCase(unittest.TestCase):
         self.assertEqual("done", after["status"],
                          "执行本身是成功的；失败的是**记录**它，两件事要分开说")
         self.assertIn("证据没能写进链路", after.get("error") or "",
-                      "任务收尾了但错误没挂出来——那等于把一次丢证据静悄悄地咽了")
+                      "作业收尾了但错误没挂出来——那等于把一次丢证据静悄悄地咽了")
 
     def test_a_writeable_result_is_not_flagged(self):
         # 反面：正常路径不该因为这条改动而带上一个假的错误。

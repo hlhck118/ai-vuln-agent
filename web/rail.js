@@ -53,7 +53,7 @@
 
   function read() {
     /* localStorage 在隐私模式、被企业策略禁用、或配额写满时**读取本身就会抛**。
-       这条路径上漏一个 try，控制台启动就会被一份"上次收到哪"的偏好带崩，而症状
+       这条路径上漏一个 try，工作台启动就会被一份"上次收到哪"的偏好带崩，而症状
        与侧栏毫无关系（整页起不来）。与 split.js / fold.js 同一写法。 */
     try { return window.localStorage.getItem(STORAGE_KEY) === MARK; }
     catch (err) { return false; }
@@ -64,7 +64,7 @@
     catch (err) { /* 存不下只影响下次打开，不该影响这一次 */ }
   }
 
-  /* 节点现场查，**不缓存**：控制台未登录时整块是 hidden 的，而 boot.js 换用户之后
+  /* 节点现场查，**不缓存**：工作台未登录时整块是 hidden 的，而 boot.js 换用户之后
      会重走一遍启动链；缓存下来的引用在这种重放里会变成游离节点。 */
   function railNode() { return document.getElementById('rail'); }
   function buttonNode() { return document.getElementById('rail-collapse'); }

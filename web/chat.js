@@ -1,6 +1,6 @@
 'use strict';
 /* ============================================================================
- * 控制台页签 —— 工作台入口：所有命令通过自然语言下达
+ * 会话页签 —— 平台里那个完整的 DSH 网页应用：所有命令通过自然语言下达
  *
  * 这里的对话框不是"提示词套壳"：每一轮都由服务端跑一个完整的工具循环
  * （模型决策 → 控制面执行工具 → 结果回灌 → 直到给出结论），模型能调用的动作
@@ -111,7 +111,7 @@
     // 使用者**在这台页面上**打开过对话（含按「新对话」清空）。用来区分"还没打开过"
     // 与"他刚清空"——后者不该被 `autoOpenFirstSession` 用第一条顶掉。
     everOpened: false,
-    // 目标列表（侧边栏第二块，常驻栏底）。**数据由控制台持有**（`PentestUI.state.engagementList`）
+    // 目标列表（侧边栏第二块，常驻栏底）。**数据由 app.js 持有**（`PentestUI.state.engagementList`）
     // ——目标同时决定漏洞/资产/报告的范围，两份快照必然会在新目标出现时显示得不一样。
     goals: [],
     // —— 四块联动（m03903）。下面的字段都只属于侧栏这一块，不进 `state`。
@@ -176,7 +176,7 @@
     // 默认 `none`（收起）：这一页唯一的操作目标是输入框，一进来就在它上面压着
     // 二十多张卡片，等于把目标推下去。点一颗按钮展开、再点同一颗收起。
     dock: 'none',
-    // 控制台心跳带回来的指纹里**属于本模块的那两块**（sessions / messages）上一次
+    // 工作台心跳带回来的指纹里**属于本模块的那两块**（sessions / messages）上一次
     // 的值。空对象 = 还没收到过，此时不做任何"变了"的判断（第一轮只建立基线）。
     stamps: {},
     // —— 详情（就地展开）。左栏的「目标」「对话记录」与右栏的「任务」「子智能体」点开
@@ -1135,7 +1135,7 @@
    *  `canSend()` 取决于**异步到达**的模型信息（`view.hasModel` / `view.options.models`），
    *  而 `ensureLoaded()` 一进门就调了一次 `setSending(false)`——那时模型还没回来，
    *  发送按钮会被判成"没模型"而禁用，之后再没有人重算它。
-   *  症状很难归因：首屏进来发送按钮是灰的，点一下「控制台」页签又活了，
+   *  症状很难归因：首屏进来发送按钮是灰的，点一下「会话」页签又活了，
    *  看起来像随机失灵。所以凡是会改变"能不能发"的加载完成后，都要回来重算一次。
    */
   function refreshComposer() {
@@ -1165,7 +1165,7 @@
 
   /* -------------------------------------------------------------- 目标 ---- */
 
-  // 目标选择的**单一真相**在控制台（PentestUI.state.eid）：它同时决定
+  // 目标选择的**单一真相**在 app.js（PentestUI.state.eid）：它同时决定
   // 「漏洞 / 资产 / 报告」的范围与顶栏那个只读指示。这里只读它、不改它，
   // 改也只经 `PentestUI.selectEngagement` —— 两处各存一份选中态，必然出现
   // "侧边栏显示的是 A、漏洞列表读的是 B"。
@@ -1173,7 +1173,7 @@
   const engagementList = () => asArray(ui().state && ui().state.engagementList);
   const engagementMeta = (eid) => engagementList().find((item) => item.id === eid) || null;
 
-  /** 目标列表（侧边栏第二块，常驻栏底）。数据由控制台持有，这里只负责画。
+  /** 目标列表（侧边栏第二块，常驻栏底）。数据由 app.js 持有，这里只负责画。
    *
    *  点一个目标做两件事，而且必须同时发生：① 把它设为「漏洞 / 资产 / 报告」的范围；
    *  ② 让它名下的对话出现在下面的「对话记录」里。只切范围不切列表，使用者会以为
@@ -1188,7 +1188,7 @@
     const scrolled = dom.goals.scrollTop;
     clear(dom.goals);
     if (!view.goals.length) {
-      dom.goals.append(el('p', 'muted', '还没有目标。下发一次任务会自动建一个。'));
+      dom.goals.append(el('p', 'muted', '还没有目标。下发一次作业会自动建一个。'));
       markDetailPicks();
       syncDetail('goal');
       return;
@@ -1303,8 +1303,8 @@
     const jobsLoading = !(ui().state && ui().state.jobsLoaded);
     const scanLine = el('span', 'chat-goal-scan');
     if (jobsLoading) scanLine.textContent = '扫描目标正在加载…';
-    else if (!jobs.length) scanLine.textContent = '还没有扫描目标（未下发过任务）';
-    else scanLine.textContent = `扫描目标 ${scans.length} 个 · 任务 ${jobs.length} 条`;
+    else if (!jobs.length) scanLine.textContent = '还没有扫描目标（未下发过作业）';
+    else scanLine.textContent = `扫描目标 ${scans.length} 个 · 作业 ${jobs.length} 条`;
     pick.append(scanLine);
 
     /* **地址清单只画在选中那一行上。这是量出来的取舍，不是省事。**
@@ -1336,7 +1336,7 @@
        只有 100px——**最后一行会被拦腰截断**，且截断处落在字中间，看起来像"这行就这么长"。
        所以只留决策要用的三个：漏洞（结果）、资产（面）、对话（与下面那一块的连接）。
        总量、意图、事实、创建/更新时间全在 `pick.title` 里，一项没丢。
-       词表取自控制台（`ui().kindLabel`，与链路图、节点详情同一张表），不在这里另写。
+       词表取自 app.js（`ui().kindLabel`，与链路图、节点详情同一张表），不在这里另写。
        对话数在**没拉到列表时不许写 0**：那是"不知道"，不是"没有"。 */
     const kindLabel = ui().kindLabel || ((kind) => kind);
     const counts = item.counts || {};
@@ -1872,10 +1872,10 @@
 
   function setHint(node, text) { if (node) node.textContent = text; }
 
-  /** 当前打开的会话 id（没开就是空串）。控制台心跳要用它去要"这个会话的消息指纹"。 */
+  /** 当前打开的会话 id（没开就是空串）。工作台心跳要用它去要"这个会话的消息指纹"。 */
   function currentSessionId() { return view.sessionId || ''; }
 
-  /** 控制台心跳 → 会话列表与当前会话的消息跟着变新。
+  /** 工作台心跳 → 会话列表与当前会话的消息跟着变新。
    *
    *  指纹是"变了没有"，不是内容：
    *    * `sessions` 抓新会话 / 改名 / 删除 / 条数变化——`store.append_chat_message`
@@ -1965,7 +1965,7 @@
     clear(dom.sideJobs);
     if (error) {
       setHint(dom.sideJobsHint, '加载失败');
-      dom.sideJobs.append(el('p', 'muted', '任务列表加载失败：' + error.message));
+      dom.sideJobs.append(el('p', 'muted', '作业列表加载失败：' + error.message));
       return;
     }
     if (!ui().state.jobsLoaded) {
@@ -1973,14 +1973,14 @@
       // **这一块的性质**——它只列这条对话派下去的，不是全部。
       setHint(dom.sideJobsHint, '正在加载…');
       dom.sideJobs.append(el('p', 'muted',
-        '这一块列这条对话派下去的任务；全部任务在「任务」页签。'));
+        '这一块列这条对话派下去的作业；全部作业在「作业」页签。'));
       return;
     }
     if (!asArray(ui().state.jobs).length) {
       // 栏头写的是「暂无」，所以正文不再说一遍「还没有任务」，只说**怎么才会有**。
       setHint(dom.sideJobsHint, '暂无');
       dom.sideJobs.append(el('p', 'muted',
-        '在「任务」页签下发，或直接对助手说一句。'));
+        '在「会话」里对助手说一句，作业就有了一条。'));
       return;
     }
     /* —— 只列**这条对话**派下去的任务（m14866）。这一块原先是三档闸门
@@ -1992,8 +1992,8 @@
     if (!rows.length) {
       setHint(dom.sideJobsHint, '这条对话暂无');
       dom.sideJobs.append(el('p', 'muted',
-        '这条对话还没有下发过任务。任务归到哪条对话，由下发它的那一轮决定；'
-        + '手工下发与命令行下发的任务不带对话归属，只在「任务」页签里。'));
+        '这条对话还没有下发过作业。作业归到哪条对话，由下发它的那一轮决定；'
+        + '手工下发与命令行下发的作业不带对话归属，只在「作业」页签里。'));
       return;
     }
     // `compare` 已经把执行中排在前面，所以往下读的第一眼就是还活着的那些。
@@ -2186,7 +2186,7 @@
      行与展开面是**兄弟**（行是 `button`，按钮里不能套块级内容）。 */
 
   /** 三种详情各自在栏头写什么。 */
-  const DETAIL_KIND = { goal: '目标', job: '任务', subagent: '子智能体' };
+  const DETAIL_KIND = { goal: '目标', job: '作业', subagent: '子智能体' };
 
   /** 执行过程最多同时留多少行。末尾永远是最新的，滚出去的行数会在头部写明。 */
   const DETAIL_LOG_KEEP = 600;
@@ -2541,7 +2541,7 @@
     if (!host) return;
     if (!job) {
       host.append(el('p', 'muted',
-        '这条任务已经不在列表里了（可能被清空，或换了目标）。'));
+        '这条作业已经不在列表里了（可能被清空，或换了目标）。'));
       view.detailSig = '';
       return;
     }
@@ -2563,7 +2563,7 @@
       : '';
     host.append(detailFacts([
       ['目标', job.target || '（无目标）'],
-      ['任务号', job.id],
+      ['作业号', job.id],
       ['下发', ui().formatTime(job.createdAt)],
       ['结束', job.finishedAt ? ui().formatTime(job.finishedAt) : ''],
       ['耗时', job.elapsedMs ? ui().formatDuration(job.elapsedMs) : ''],
@@ -2802,7 +2802,7 @@
         btn.addEventListener('click', () => openDetail('job', job.id, true, job));
         list.append(btn);
       });
-      host.append(detailSection(`任务（${jobs.length}）`, list));
+      host.append(detailSection(`作业（${jobs.length}）`, list));
     }
 
     // 这个目标带着的对话。点一行就打开它（不切目标：对话属于自己的范围）。
@@ -2871,7 +2871,7 @@
         item.append(line);
         // 这一步开了任务，就把那条任务摆出来。与目标详情里那条任务链接同一个写法
         // （`.chat-detail-link` + 状态徽标）：点它不是"去另一页"，而是这一栏换个东西看。
-        if (tool.jobId) item.append(jobLink(tool.jobId, '下发的任务'));
+        if (tool.jobId) item.append(jobLink(tool.jobId, '下发的作业'));
         if (tool.brief) item.append(el('p', 'chat-detail-text', tool.brief));
         if (tool.ok === false && !tool.brief) item.append(el('p', 'chat-detail-bad', '这一次没有成功。'));
         list.append(item);
@@ -2981,7 +2981,7 @@
         row.dataset.jobId = jobId;
         row.setAttribute('role', 'button');
         row.setAttribute('tabindex', '0');
-        row.title = '在右侧打开这条任务';
+        row.title = '在右侧打开这条作业';
         // `原始返回` 那个 <details> 自己也要能被点开：不拦的话，点开它同时把
         // 详情栏换成这条任务，两件事一起发生，看起来像"点折叠却跳走了"。
         row.addEventListener('click', (event) => {
@@ -3322,7 +3322,7 @@
     const tasks = choiceTasks(pendingOptions());
     if (!tasks.length) return;
     if (!canSend()) {
-      ui().showError('未启用模型：控制台需要模型来决策工具调用，请先到「设置」页签配置'
+      ui().showError('未启用模型：会话需要模型来决策工具调用，请先到「设置」页签配置'
         + '一条，或在对话框上方的「模型」里选一条已有的。');
       return;
     }
@@ -3805,8 +3805,8 @@
     // 人按了停止：自动继续立刻作废。否则它会把这颗“刹车”当成一次失败，
     // 三秒后再发一句“继续”——那是这条功能最坏的一种表现。
     cancelAutoContinue();
-    ui().showError('已停止。这一轮会在当前这一步之后结束——已经下发的任务不会撤回，'
-      + '可在「任务」页签查看。');
+    ui().showError('已停止。这一轮会在当前这一步之后结束——已经下发的作业不会撤回，'
+      + '可在「作业」页签查看。');
     // **还挂着的那几张审查单要按拒绝结掉。** 只 abort 不会让服务端的等待结束：
     // 等待期间它一个字节都不写，所以看不见连接断开，那一轮会一直停在审查单上
     // 直到超时——而入口闸在那一段时间里会挡住下一轮。
@@ -3856,7 +3856,7 @@
     const text = dom.input.value.trim();
     if (!text) return;
     if (!canSend()) {
-      ui().showError('未启用模型：控制台需要模型来决策工具调用，请先到「设置」页签配置'
+      ui().showError('未启用模型：会话需要模型来决策工具调用，请先到「设置」页签配置'
         + '一条，或在对话框上方的「模型」里选一条已有的。');
       return;
     }
@@ -5454,7 +5454,7 @@
         if (tool.jobId) {
           chip.classList.add('chat-live-chip-job');
           chip.type = 'button';
-          chip.title = (tool.brief ? tool.brief + '\n' : '') + '点开看这条任务';
+          chip.title = (tool.brief ? tool.brief + '\n' : '') + '点开看这条作业';
           chip.addEventListener('click', (event) => {
             // 这一块本身可能挂在 `.chat-subagent-row`（可点、且外层有 details）里，
             // 不拦住冒泡就会顺手把那一行也点开、把外层折叠块也翻一次。
@@ -5852,7 +5852,7 @@
     cacheDom();
     if (!dom.log) return;
     cacheAndBind();
-    // 目标列表由控制台拉取，它可能**早于**这里初始化就已经把数据放好了
+    // 目标列表由 app.js 拉取，它可能**早于**这里初始化就已经把数据放好了
     // （`renderGoals(list)` 在没有 DOM 时会只存不画）。不补这一句，先加载完
     // 目标的那些情况下侧边栏会一直是空的。
     renderGoals();
@@ -5872,18 +5872,18 @@
   window.PentestChat = { init, reload, ensureLoaded, onSignedOut, loadSessions,
                          loadTools, loadOptions, loadModelState, openSession, send,
                          applyAgent,
-                         // 目标列表的渲染归这里，数据归控制台（`PentestUI`）。
-                         // 控制台在目标变化时调它，两边因此共用一份 `/engagements`。
+                         // 目标列表的渲染归这里，数据归 app.js（`PentestUI`）。
+                         // app.js 在目标变化时调它，两边因此共用一份 `/engagements`。
                          renderGoals,
                          // 任务同理，共用一份 `/jobs`。**由 app.js 在每次任务列表
                          // 变化时调用**，包括加载失败那一次——它必须把 error 传进来，
                          // 否则侧栏会继续显示上一批任务，而面板刚说过加载失败。
                          renderSideJobs,
                          // 右侧栏。`renderDetail` 暴露出来是为了让“数据到了但
-                         // 没走到重画”的路径可以补一次（与控制台那几个 render* 同一
+                         // 没走到重画”的路径可以补一次（与 app.js 那几个 render* 同一
                          // 性质）；`openDetail` 留给调试与后续入口。
                          renderDetail, openDetail, closeDetail,
-                         // 侧边栏读数的新鲜度：控制台的心跳（`app.js` 的 `pumpPulse`）
+                         // 侧边栏读数的新鲜度：工作台心跳（`app.js` 的 `pumpPulse`）
                          // 每 3 秒问一次"变了没有"，变了才由这里去拉。
                          // `currentSessionId` 是心跳要那两块的指纹时必须带的参数。
                          currentSessionId, syncFromPulse,

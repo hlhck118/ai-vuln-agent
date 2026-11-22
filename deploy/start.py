@@ -320,7 +320,7 @@ def main(argv=None) -> int:
     print("  登录认证 %s" % ("已启用" if not args.no_auth else "已关闭（--no-auth）"))
     if not args.no_auth:
         print("  账号     %s" % ("%d 个" % user_count if user_count
-                                 else "尚无——首次打开控制台会要求创建管理员"))
+                                 else "尚无——首次打开工作台会要求创建管理员"))
     print("  推理模型 %s" % (("%s（%s · %s）"
                              % (active["name"], active["provider"], active["model"]))
                             if active else "未配置，使用离线启发式推理"))
@@ -363,7 +363,7 @@ def main(argv=None) -> int:
     print("    0. 首次打开 → 创建管理员账号（没有默认口令）")
     print("    1. 「设置」页签 → 选择模型预设（云端或本机）→ 测试连接 → 设为启用")
     print("    2. 「部署」页签查看自检；本机已能执行任务，要扫别的网段再加节点")
-    print("    3. 在「控制台」里用对话下发任务（源码审计 / 网络探测）→ 「任务」页看执行记录")
+    print("    3. 在「会话」里用对话下发作业（源码审计 / 网络探测）→ 「作业」页看执行记录")
     if args.host == "0.0.0.0" or args.no_auth:
         print("-" * 68)
         print("  ⚠ 已监听所有网卡或关闭认证，请只在受控内网这样用；")
@@ -386,7 +386,7 @@ def main(argv=None) -> int:
             node_thread.join(timeout=5.0)
             if node_thread.is_alive():
                 print("  ⚠ 本机节点仍在执行任务，未能在 5s 内停止；进程退出会中断它，"
-                      "该任务将停在「执行中」，需在任务列表里重新下发。")
+                      "这条作业会停在「执行中」，需重新下发一次。")
         httpd.server_close()
         store.close()
     return 0

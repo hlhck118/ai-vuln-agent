@@ -241,7 +241,7 @@ window.fetch = function (input, init) {
   var query = raw.indexOf('?') >= 0 ? raw.slice(raw.indexOf('?')) : '';
   // **带查询串的键优先。** `/engagements/{eid}/report` 与
   // `/engagements/{eid}/report?job=job-xxxx` 是**两篇不同的文档**（汇总报告 vs 某一次
-  // 执行的任务报告），而老写法一律按路径回放，于是夹具里点一次任务看起来只是把汇总
+  // 执行的作业报告），而老写法一律按路径回放，于是夹具里点一次任务看起来只是把汇总
   // 报告又渲染了一遍——正文一模一样、卡头却换了名字。那正是夹具最不该做的事：
   // 它得"漏"一块让人发现，而不是编一份看起来对的内容。
   var key0 = (query && data[path + query]) ? path + query : path;
@@ -1261,7 +1261,7 @@ def collect(intrusive=None, intrusive_targets=None,
                     data[key] = _get(base, key)
                 except Exception:                   # noqa: BLE001 —— 单个子资源拿不到不该毁掉整张夹具
                     continue
-            # **每一个任务各抓一份任务报告**（`/report?job=...`）。
+            # **每一个任务各抓一份作业报告**（`/report?job=...`）。
             # 只抓汇总那一份的话，报告页左侧的目录点下去会回放同一篇正文——而卡头
             # 换了名字。夹具于是自己造出一个"点哪条都一样"的假象，它和真实缺陷长得
             # 一模一样，排查时会一路查到后端去。假后端的职责是把真实链路铺通，
@@ -1509,7 +1509,7 @@ def main() -> int:
                         help="强制渲染成某一档磨砂；默认不传，即「跟随主题」")
     parser.add_argument("--report-job", type=int, default=0,
                         help="报告页：目录画出来之后真点第 N 条**任务**行（1 起），"
-                             "截那一篇任务报告。0 = 停在「本目标汇总」。"
+                             "截那一篇作业报告。0 = 停在「本目标汇总」。"
                              "点击结果（正文卡头那行字）写进 data-report-job，"
                              "可用 --dump-dom 断言。")
     parser.add_argument("--png", action="store_true",

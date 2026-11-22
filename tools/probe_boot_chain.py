@@ -243,11 +243,29 @@ window.fetch = function (input, init) {
 // 启动链跑完之后**从界面上**点一遍漏洞与资产：这两个页签的数据是使用者报的那句
 // "无法查看"的正主，只断言"启动没抛"还不够——它还得真的去取那份数据。
 //
-// **只在第一场里点。** 切页签会起心跳（`loadTabData` 就是它的一个入口），而另外两场
-// 恰恰要验"**没人动过的页面**上侧边栏会不会自己跟上"——点了就把要验的那条入口
-// 自己补上了，缺陷会被这一下遮住（实测：加上这两次点击之后，`state.tab` 写错、
-// 启动根本不放心跳的那个缺陷在这一场里是**绿的**）。
+// 漏洞 / 资产这两下**只在第一场里点**：它们要验的是"点了页签之后真的去取那份数据"。
+// 而侧边栏那两场要验的是另一件事——"心跳起没起"，所以它们只点一下会话页签就撒手
+// （见下面那段）。两者不能混：把这两下也带进侧边栏那两场，就等于替它们把数据要
+// 回来了，心跳有没有起都看不出来。
 document.addEventListener('DOMContentLoaded', function () {
+  /* 默认页签改成「仪表盘」之后，**别的面板是 `display:none`**，而下面有三场读的东西
+     都住在会话页里：
+       * 侧边栏的 `#chat-goals` / `#chat-sessions`（两场验「自己跟上」）；
+       * 审查卡浮层 `#chat-review-float`，它的判据是 `getClientRects().length`
+         ——面板不显示时这个数**必然**是 0，与「浮层收起了」长得一模一样。
+     所以这三场先点一下会话页签（真实入口 `switchTab` → `loadTabData`），之后
+     **不再动页面**。要验的仍然是「没人再动它，侧边栏会不会自己跟上」：心跳由
+     `loadTabData` 起（app.js 里那份名单），点这一下等于「人打开了会话页」。
+     反过来说，把「默认页签改回会话」当成让这三场变绿的手段是不行的——那等于把
+     「进了这一页心跳有没有起」这条覆盖一起改回旧形态。 */
+  /* 点这一下必须**排在 app.js 的 init 之后**：本脚本是文档里第一个 <script>，
+     所以这个 DOMContentLoaded 监听器比 boot.js / app.js 的先注册、先执行——
+     原地 click() 时页签的点击处理器还没绑上，点下去什么都不会发生（实测：
+     心跳一次都没起，两个侧边栏块停在空态）。等一拍再点。 */
+  setTimeout(function () {
+    var chatTab = document.querySelector('.tab[data-tab="dsh"]');
+    if (chatTab) chatTab.click();
+  }, 300);
   if (__MODE__ === 'default') {
     setTimeout(function () {
       __mark__('tabs');
@@ -481,7 +499,7 @@ def _unescape(text: str) -> str:
 
 _BAR = re.compile(r'id="error-text"[^>]*>([^<]*)<')
 
-# 启动链跑完就一定会被取的三样东西。它们是"控制台起来了"的最小证据，而且正好
+# 启动链跑完就一定会被取的三样东西。它们是"工作台起来了"的最小证据，而且正好
 # 覆盖使用者看到的那一面：这三个不取，顶栏的执行节点、链路、漏洞/资产就都是空的。
 # 用前缀匹配——`/api/v1/graph?nodes=200` 也算法命中。
 #
@@ -539,7 +557,7 @@ def probe(budget_ms: int = 12000, keep: str = "", mode: str = "default") -> dict
 
 
 def _sidebar_scenario(mode: str, budget_ms: int = 12000, keep: str = "") -> dict:
-    """两场"没人动过的页面"共用的判据：目标行与对话行**自己**出现了没有。
+    """两场"进了会话页之后没人再动过它"共用的判据：目标行与对话行**自己**出现了没有。
 
     判据只有这两条，都是正文里的痕迹（目标行带着它的 id、对话行带着标题），而不是
     "某个函数被调用过"——后者在真实缺陷下照样为真。
@@ -554,7 +572,7 @@ def _sidebar_scenario(mode: str, budget_ms: int = 12000, keep: str = "") -> dict
     if report["errors"]:
         problems.append("抛了异常：%s" % report["errors"])
     if not report["goal_row"]:
-        problems.append("目标行始终没出现：侧边栏那句「还没有目标。下发一次任务会自动"
+        problems.append("目标行始终没出现：侧边栏那句「还没有目标。下发一次作业会自动"
                         "建一个。」没有变成那个目标")
     if not report["session_row"]:
         problems.append("对话行始终没出现：侧边栏「对话记录」一直写着「未选择目标 · 0 条」"
@@ -565,7 +583,7 @@ def _sidebar_scenario(mode: str, budget_ms: int = 12000, keep: str = "") -> dict
 
 
 def probe_late_goal(budget_ms: int = 12000, keep: str = "") -> dict:
-    """第二场：**目标与对话都是启动之后才出现的**，而页面**没人动过**。
+    """第二场：**目标与对话都是启动之后才出现的**，而页面**没人再动过**。
 
     第一场的桩里一直有一个目标，于是 `loadEngagements()` 会走到 `selectEngagement()`
     ——那条路恰好（也仅仅）是心跳的一个入口。这一场把目标列表从空的开始：启动那句
@@ -706,7 +724,7 @@ def probe_review_band(budget_ms: int = 14000, keep: str = "") -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="用真实启动链（auth + boot + app）跑一遍控制台启动")
+    parser = argparse.ArgumentParser(description="用真实启动链（auth + boot + app）跑一遍工作台启动")
     parser.add_argument("--json", action="store_true", help="只打 JSON")
     parser.add_argument("--budget", type=int, default=12000, help="虚拟时间预算（毫秒）")
     parser.add_argument("--keep", default="", help="把生成的 HTML 与 dump 留在这个目录里")
@@ -740,7 +758,7 @@ def main() -> int:
         else:
             print("异常        无")
         print("结论        %s" % ("通过" if report["ok"] else "没通过"))
-        for label, key in (("第二场：目标与对话**启动之后才出现**，页面没人动过", "late_goal"),
+        for label, key in (("第二场：目标与对话**启动之后才出现**，进过会话页之后没人再动它", "late_goal"),
                            ("第三场：启动那份列表是旧的，而第一次探询服务端已经有目标", "stale_list")):
             one = report[key]
             print()

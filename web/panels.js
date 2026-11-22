@@ -1,4 +1,4 @@
-/* 新增八页的渲染（仪表盘 / 渗透任务 / 计划任务 / 流量 / 请求重发 / 工作空间 /
+/* 新增八页的渲染（仪表盘 / 任务 / 计划任务 / 流量 / 请求重发 / 工作空间 /
  * 审批记录 / 日志）。
  *
  * 为什么单独一个文件而不是继续塞进 app.js：那个文件已经 4300 行，而这几页共用
@@ -19,7 +19,7 @@
   if (!UI) return;
 
   const { $, el, clear, emptyBlock, errorBlock, apiGet, apiPost, formatTime,
-    formatCount, formatDuration, jobView, severityView } = UI;
+    formatCount, formatDuration, jobView, severityView, switchTab } = UI;
 
   /* ------------------------------------------------------------ 仪表盘 */
   // 一次 `/dashboard` 换整屏读数：它回答「平台上现在什么样」——引擎模式、任务
@@ -118,7 +118,7 @@
     const active = data.activeTask;
     const activeCard = dashCard('当前任务');
     if (!active) {
-      activeCard.append(emptyBlock('还没有任务：到「渗透任务」页新建一个目标，就有第一条了。'));
+      activeCard.append(emptyBlock('还没有任务：到「任务」页新建一个目标，就有第一条了。'));
     } else {
       activeCard.append(el('p', 'muted',
         (active.name || active.target || '未命名') + ' · '
@@ -226,10 +226,12 @@
     host.append(metricCard);
   }
 
-  /* ------------------------------------------------------------ 渗透任务 */
-  // 这一页与「任务」页（jobs）不是一回事：那边一行是一条**作业**（一次扫描、一次
+  /* ---------------------------------------------------------------- 任务 */
+  // 这一页与「作业」页（jobs）不是一回事：那边一行是一次**执行**（一次扫描、一次
   // 探测，跑完就结束），这边一行是一个**目标**（E-xxxx，有目标、能暂停、会攒作业
-  // 和漏洞）。两页都叫「任务」会让人找不到对应关系，所以这一页叫「渗透任务」。
+  // 和漏洞）。这一页原来叫「渗透任务」，前缀是为了跟作业那页（原来也叫「任务」）
+  // 区分；那页现在按内容改叫「作业」，这里就不必再背前缀了——**任务是一个目标，
+  // 作业是一次执行**。
   //
   // 「状态」是**派生**的（后端 `Store._task_status`）：暂停优先于进行中，因为一个
   // 被暂停的目标上可能还有一条早先派出去的作业在跑。界面上照搬后端的判定，不自己
@@ -256,6 +258,7 @@
       + (jobs.running ? '（在跑 ' + formatCount(jobs.running) + '）' : ''));
     parts.push('目标 ' + formatCount(task.goalsMet || 0) + '/'
       + formatCount(task.goalsTotal || 0));
+    if (task.sessionCount) parts.push('对话 ' + formatCount(task.sessionCount));
     if (task.runSeconds) parts.push('运行 ' + formatDuration(task.runSeconds));
     return parts.join(' · ');
   }
@@ -299,6 +302,30 @@
       chain.append(el('span', 'task-detail-chip', key + ' ' + formatCount(counts[key] || 0)));
     });
     slot.append(chain);
+    // 一个任务「为什么叫这个名字、打的是谁、谁授权、哪几条对话挂在下面」——这四行
+    // 是任务与对话之间那条链的凭据，漏掉它们，详情页就只剩一串作业。名字与说明
+    // 都来自**第一句话**，所以这里的标题用后端原样给的 goal/description，不重写。
+    const facts = el('div', 'dash-list');
+    const lines = [];
+    if (detail.goal) lines.push(['目标', detail.goal]);
+    if (detail.description) lines.push(['说明', detail.description]);
+    if (detail.authorization) lines.push(['授权依据', detail.authorization]);
+    if (detail.stopReason) lines.push(['停止原因', detail.stopReason]);
+    lines.forEach((pair) => {
+      const row = el('div', 'dash-row');
+      row.append(el('span', 'dash-row-main', pair[0]));
+      row.append(el('span', 'dash-row-meta', pair[1]));
+      facts.append(row);
+    });
+    (detail.sessions || []).forEach((item) => {
+      const row = el('div', 'dash-row');
+      row.append(el('span', 'dash-row-main', item.title || item.id));
+      row.append(el('span', 'dash-row-meta', '对话 · '
+        + formatCount(item.messageCount || 0) + ' 条消息 · '
+        + formatTime(item.updatedAt || 0)));
+      facts.append(row);
+    });
+    if (facts.childNodes.length) slot.append(facts);
     const jobs = detail.recentJobs || [];
     if (!jobs.length) {
       slot.append(emptyBlock('这个目标还没有跑过作业'));
@@ -400,56 +427,25 @@
     host.append(bar);
   }
 
-  function taskCreateForm() {
-    const form = el('form', 'task-create');
-    form.append(el('h2', 'dash-card-title', '新建渗透任务'));
-    form.append(el('p', 'task-sub', '一个任务对应一个目标：它会出现在链路、漏洞、资产和报告里。'));
-    const target = el('input', 'input');
-    target.type = 'text';
-    target.placeholder = '目标：域名、URL 或 IP';
-    target.required = true;
-    const objective = el('input', 'input');
-    objective.type = 'text';
-    objective.placeholder = '想达成什么：例如拿下后台管理员权限';
-    const auth = el('input', 'input');
-    auth.type = 'text';
-    auth.placeholder = '授权依据：例如客户授权书 2026-01';
-    form.append(target);
-    form.append(objective);
-    form.append(auth);
-    const submit = el('button', 'btn sm', '创建');
-    submit.type = 'submit';
-    form.append(submit);
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const value = target.value.trim();
-      if (!value) {
-        taskNote('目标不能为空', true);
-        renderTasks();
-        return;
-      }
-      // 目标一旦建错，它的作业、链路、漏洞都挂在下面；删除要逐表清，不是
-      // 「点错了再点一下」的事。所以这里问一句，并念出将要写入的目标。
-      if (!window.confirm('创建任务「' + value + '」？\n\n'
-        + '任务会带着自己的链路、资产与漏洞记录，建错了要单独删。')) return;
-      submit.disabled = true;
-      try {
-        await apiPost('/engagements', {
-          target: value,
-          objective: objective.value.trim(),
-          authorization: auth.value.trim(),
-        });
-        target.value = '';
-        objective.value = '';
-        auth.value = '';
-        taskNote('已创建任务，到「链路」页就能看到它的目标节点', false);
-      } catch (error) {
-        taskNote(error.message, true);
-      }
-      submit.disabled = false;
-      await loadTasks();
-    });
-    return form;
+  // **这一页不建任务。** 任务不是在这里填表填出来的：它是「一条对话的第一句话」
+  // 长出来的（`pentestd/tasks.py` → `store.ensure_session_engagement`）。两处都能建
+  // 会产生两种任务——表单建出来的没有来源对话，也就没有「谁在说这件事」，久了没人
+  // 分得清哪一行是真的被人问过、哪一行是某次调试留下的。
+  //
+  // 也不做「补一句目标说明」的入口：那句话就是任务说明本身，去对话里说，链路里
+  // 的 goal 节点才会跟着有内容。这里只负责把人送回能说那句话的地方。
+  function taskNotice() {
+    const box = el('div', 'task-create');
+    box.append(el('h2', 'dash-card-title', '任务从对话来'));
+    box.append(el('p', 'task-sub',
+      '在会话里说一句「帮我渗透 10.10.10.110 拿下后台」，任务就在那句话里成立：'
+      + '名字取你说的第一句，被测目标从话里认出来，之后这条对话派出的作业、写下的'
+      + '链路、漏洞与资产都归在它下面。同一台机器的下一次对话会并进同一个任务。'));
+    const button = el('button', 'btn sm', '去会话开一个对话');
+    button.type = 'button';
+    button.dataset.act = 'new-chat';
+    box.append(button);
+    return box;
   }
 
   function renderTasks() {
@@ -478,13 +474,13 @@
     if (!items.length) {
       host.append(emptyBlock(tasksFilter.archived
         ? '没有归档的任务'
-        : '没有符合条件的任务。新建一个，它会成为链路的起点。'));
+        : '还没有任务。到会话说一句话——任务就在那句话里成立。'));
     } else {
       const list = el('div', 'task-list');
       items.forEach((item) => list.append(taskRow(item)));
       host.append(list);
     }
-    host.append(taskCreateForm());
+    host.append(taskNotice());
   }
 
   async function loadTasks() {
@@ -516,6 +512,7 @@
       const act = button.dataset.act;
       const task = ((tasksData && tasksData.tasks) || [])
         .filter((item) => item.id === id)[0];
+      if (act === 'new-chat') { switchTab('dsh'); return; }
       if (act === 'detail') { openTask(id); return; }
       if (act === 'pause') { taskAction(`/tasks/${encodeURIComponent(id)}/pause`, {}); return; }
       if (act === 'resume') { taskAction(`/tasks/${encodeURIComponent(id)}/resume`, {}); return; }
@@ -626,7 +623,7 @@
     const box = el('div', 'sched-tasks');
     box.append(el('div', 'sched-label', '要放开的任务'));
     if (!candidates.length) {
-      box.append(el('p', 'task-sub', '还没有任务可绑；先到「渗透任务」页建一个。'));
+      box.append(el('p', 'task-sub', '还没有任务可绑；先到「任务」页建一个。'));
       form.append(box);
       return box;
     }
@@ -1592,6 +1589,9 @@
     };
     bind('dashboard-refresh', loadDashboard);
     bind('tasks-refresh', loadTasks);
+    // 头部这颗按钮与页脚提示里的按钮做同一件事：把人送回能说那句话的地方。
+    // 任务不在这里建，见 taskNotice 的注释。
+    bind('tasks-new-chat', () => switchTab('dsh'));
     bind('schedules-refresh', loadSchedules);
     bind('schedules-tick', tickSchedules);
     bindTaskEvents();

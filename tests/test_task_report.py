@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""任务报告：一次执行一篇，写的是那一次跑出了什么。
+"""作业报告：一次执行一篇，写的是那一次跑出了什么。
 
 ## 守的是什么
 
@@ -12,13 +12,13 @@
 
   * **溯源**：链路节点记下产出它的任务号（`jobId`）。没有它，"哪一次跑出来的"这个
     问题在数据层就没有答案，报告再好也只是把汇总换个说法；
-  * **任务报告**：`GET /engagements/{eid}/report?job=...`，一次执行一篇。
+  * **作业报告**：`GET /engagements/{eid}/report?job=...`，一次执行一篇。
 
 ## 三处最容易错、而且都不会报错的地方
 
   * **`jobId` 被校验函数丢掉**：四个 `validate_*` 返回的都是**封闭**字典，表外键
     一律丢弃。只在 `write_chain` 里把 `jobId` 塞进 payload 是不够的——它会在
-    `models.validate` 那一步静默消失，症状是"任务报告里一个节点都没有"，而汇总
+    `models.validate` 那一步静默消失，症状是"作业报告里一个节点都没有"，而汇总
     报告里它们照样在，所以没人会发现。
   * **参数名对不上**：前端发 `?job=`、后端读 `job`。对不上时后端忽略它，照常返回
     **汇总报告**——一篇格式完整、内容合理的文档，只是不是你要的那一篇。
@@ -61,7 +61,7 @@ def spec_b(parent_id):
 
     `parentId` 用**字面 id** 而不是 `$ref`：`$ref` 只在一次 `write_chain` 内部解析，
     所以真实的写入器之间不会这样引用彼此。但 `/engagements/{id}/nodes` 那条接口允许
-    调用方直接给字面 parentId——所以这条路径存在，任务报告必须能把它读通。
+    调用方直接给字面 parentId——所以这条路径存在，作业报告必须能把它读通。
     """
     return [
         {"kind": "intent", "localRef": "intent:verify",
@@ -93,12 +93,12 @@ class JobProvenanceTestCase(unittest.TestCase):
         return [n["payload"].get("jobId") for n in self.store.list_nodes(self.eid, kind)]
 
     def test_every_written_node_carries_the_job_id(self):
-        """四类内容节点全部要带上——漏一类就是"那一类在任务报告里看不见"。"""
+        """四类内容节点全部要带上——漏一类就是"那一类在作业报告里看不见"。"""
         job = self.store.create_job("probe", "10.10.10.250", self.eid, "", {})
         engine.write_chain(self.store, self.eid, SPEC_A, job_id=job["id"])
         for kind in ("intent", "fact", "asset"):
             self.assertEqual(self._jobs_of(kind), [job["id"]],
-                             "%s 节点没有记下产出的任务号：任务报告里会少了它"
+                             "%s 节点没有记下产出的任务号：作业报告里会少了它"
                              % kind)
         job2 = self.store.create_job("scan", "/srv/x", self.eid, "", {})
         engine.write_chain(self.store, self.eid, spec_b("asset-1"), job_id=job2["id"])
@@ -108,7 +108,7 @@ class JobProvenanceTestCase(unittest.TestCase):
         """不传 job_id 就**不带这个键**——不能拿一个"上一次"的任务号来填。
 
         这一支是旧调用方（脚本、`/engagements/{id}/nodes`）走的路。给它编一个
-        jobId 会让任务报告里出现"这次跑出来的"实际是别的进程写的节点。
+        jobId 会让作业报告里出现"这次跑出来的"实际是别的进程写的节点。
 
         而且必须是**不带这个键**而不是空串：`public_node` 把 payload 摊平到节点上，
         节点详情面板逐个字段展示，一个恒为 `""` 的 `jobId` 会在每一个节点上都多出
@@ -159,7 +159,7 @@ class JobProvenanceTestCase(unittest.TestCase):
 
 
 class TaskReportTestCase(unittest.TestCase):
-    """任务报告的正文：主语是这次执行，不是这个目标。"""
+    """作业报告的正文：主语是这次执行，不是这个目标。"""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -217,11 +217,11 @@ class TaskReportTestCase(unittest.TestCase):
         self.assertIn("| 授权说明 | AUTH-TEST-1 |", table)
         self.assertNotIn("| 授权说明 | 未填写 |", table)
 
-    # ----------------------------------------------------------- 任务报告
+    # ----------------------------------------------------------- 作业报告
 
     def test_the_task_report_is_about_that_one_execution(self):
         markdown = self.store.report_markdown(self.eid, 200, self.job["id"])
-        self.assertIn("# 任务报告", markdown)
+        self.assertIn("# 作业报告", markdown)
         self.assertIn(self.job["id"], markdown)
         self.assertNotIn("`/srv/app`", markdown, "把别的任务的目标也写进来了")
         # 本次写进来的三类都在
@@ -232,8 +232,8 @@ class TaskReportTestCase(unittest.TestCase):
         self.assertNotIn("[fact]", markdown, "事实那一格印的是结构类型，子类型丢了")
         self.assertIn("asset-1", markdown)
         # 第二个任务写的东西一个都不该出现
-        self.assertNotIn("intent-2", markdown, "任务报告混进了别的任务的节点")
-        self.assertNotIn("finding-1", markdown, "任务报告混进了别的任务的漏洞")
+        self.assertNotIn("intent-2", markdown, "作业报告混进了别的任务的节点")
+        self.assertNotIn("finding-1", markdown, "作业报告混进了别的任务的漏洞")
 
     def test_the_task_report_resolves_the_affected_asset_beyond_its_own_slice(self):
         """漏洞的"影响资产"要能指名道姓，哪怕那条资产是别的任务登记的。
@@ -392,7 +392,7 @@ class TaskReportRouteTestCase(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["jobId"], self.job["id"])
         self.assertEqual(payload["job"]["id"], self.job["id"])
-        self.assertIn("# 任务报告", payload["markdown"])
+        self.assertIn("# 作业报告", payload["markdown"])
         self.assertNotIn("# 渗透测试报告", payload["markdown"])
 
     def test_the_two_documents_really_differ(self):
