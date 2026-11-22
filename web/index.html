@@ -710,7 +710,7 @@
     <header class="page-head">
       <div class="ph-title">
         <h1 class="ph-name">探索链路</h1>
-        <span class="ph-sub">全部目标合并的全局证据图</span>
+        <span class="ph-sub">按目标看链路，或切到全部目标看全局</span>
       </div>
 
       <div class="ph-status">
@@ -733,6 +733,14 @@
              一律保留；新节点落在视野外时画布上那条 `#graph-stale` 提示才出现。
              这颗「刷新链路」仍然有用：自动刷新可以关（左边那颗芯片），失败后的手动
              重试也靠它。 -->
+        <!-- 范围：默认只看当前目标。合并视图在 20 多个目标时是一张几百节点的网，
+             它回答不了「这个目标现在走到哪一步」，而那正是这一页要回答的问题。 -->
+        <button id="graph-scope-single" class="chip on" type="button"
+                data-scope="single" aria-pressed="true"
+                title="只看左侧选中的目标：一条链路、一列目标、一列意图">只看当前目标</button>
+        <button id="graph-scope-all" class="chip" type="button"
+                data-scope="all" aria-pressed="false"
+                title="全部目标合并成一张图：看全局发现了什么（节点会很多）">全部目标</button>
         <button id="graph-auto" class="chip on" type="button" aria-pressed="true"
                 title="数据一变就自动重取（视角保留；你手动缩放 / 拖动过之后，新节点不会把视图拽走）">自动刷新</button>
         <button id="graph-refresh" class="btn sm" type="button"
@@ -769,9 +777,15 @@
       <div class="split-handle" data-split="graph" role="separator"
            aria-orientation="vertical" tabindex="0" aria-label="拖动调整节点详情栏宽度"></div>
 
+      <!-- 右栏两块：节点详情（已经发现了什么）与编排（接下来往哪儿走）。
+           它们共用这一栏宽度，所以只能一次显示一块；切换在顶上的两个 tab 里。 -->
       <aside class="side-panel" id="node-detail">
-        <div class="panel-head">节点详情<span class="panel-head-hint">全部原始字段</span></div>
+        <div class="panel-head side-head">
+          <button class="side-tab on" type="button" data-side="detail">节点详情</button>
+          <button class="side-tab" type="button" data-side="orchestration">编排</button>
+        </div>
         <div class="panel-body" id="node-detail-body"></div>
+        <div class="panel-body hidden" id="orchestration-body"></div>
       </aside>
     </div>
   </section>

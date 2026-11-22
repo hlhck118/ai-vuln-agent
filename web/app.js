@@ -239,6 +239,17 @@ const state = {
   // 「探索链路」跟着心跳自动更新吗（页头那颗「自动刷新」芯片）。默认开：这一页唯一
   // 的用途是"看全部"，而等数据出现的方式原来只有手点一次「刷新链路」。
   graphAuto: true,
+  // 链路范围（编排面）：`single` 只看当前目标，`all` 才把全部目标叠成一张。
+  // 默认单目标——合并图在 20 多个目标时是一张几百个节点的网，它回答不了
+  // 「这个目标现在走到哪一步」，而那才是这一页要回答的问题。
+  graphScope: 'single',
+  // 编排面板的数据：`GET /engagements/{eid}/orchestration` 原样留着。
+  // 它与 `graph` 是两份而不是同一份：图回答「发现了什么」，它回答「接下来
+  // 往哪儿走」，两者的失效时机不同（改一次状态只影响后者）。
+  orchestration: null, orchestrationEid: '',
+  // 面板里那条「刚才做了什么」的提示。它存在 state 而不是 DOM 里：面板每次
+  // 都是整块重画，写进节点的文案活不过下一次重画。
+  orchMessage: { text: '', kind: '' },
   // 上一次算初始缩放时**画布量到尺寸了没有**。0×0 的画布算出来的那个值不可信
   // （见 `BASE_SCALE` 那段），所以第一次量到尺寸时要再算一次——用状态记着它做过，
   // 而不是每次渲染都重算（那会把使用者刚调好的缩放丢掉）。
@@ -1072,7 +1083,13 @@ async function loadGraph(force) {
   // **永远取全部**。窗口是服务端切的（会连带保留锚点与每个目标的 goal），所以
   // "要多少节点"只能作为查询参数发出去，不能在前端过滤——前端过滤会把边一起丢掉，
   // 留下一堆孤立节点，看上去像链路本来就是断的。上限撤掉之后这里只剩一个取值。
-  state.graphInflight = apiGet('/graph?nodes=all')
+  // 范围：默认只看当前目标（一条链路、一列目标、一列意图……），只有选了
+  // 「全部目标」才取合并视图。合并视图会把 20 多个目标的节点画进同一张网，
+  // 而分列布局按节点数增长——那不是「信息更全」，是「看不出这一步属于谁」。
+  const single = state.graphScope === 'single' && state.eid;
+  state.graphInflight = single
+    ? apiGet('/engagements/' + encodeURIComponent(state.eid))
+    : apiGet('/graph?nodes=all')
     .then((view) => {
       Object.assign(state, { graph: view, nodeIndex: buildNodeIndex(view), graphLoaded: true });
       renderGraphStats(view);
@@ -1096,6 +1113,263 @@ async function loadGraph(force) {
     .finally(() => { state.graphInflight = null; });
   return state.graphInflight;
 }
+/* ------------------------------------------------------ 9. 编排面板 ---- */
+
+/** 右栏第二块：目标 / 意图 / 约束 / 暂停。
+ *
+ *  它回答「接下来往哪儿走」，与图回答的「已经发现了什么」是两件事，所以不画在
+ *  图上，也不是只读的：加目标、开意图、改状态、立约束都在这里做完，写完立刻重取
+ *  链路（新节点要出现在图上）。
+ *
+ *  为什么不做成「在图上拖拽」：图是**证据**，它的形状由记录之间的语义决定
+ *  （spawns / yields / proves / covers），拖一条边不会让某件事变得成立。能编排的
+ *  是「接下来做什么」——目标是它，意图是它的下一层，约束是它的边界。
+ */
+function setOrchMessage(text, kind) {
+  state.orchMessage = { text: text || '', kind: kind || '' };
+  const node = document.querySelector('.orch-message');
+  // 面板还没画（或刚被重画）时没有节点可写：文案留在 state 里，下一次
+  // renderOrchestration 会把它带上。**这就是不用 id 取节点的理由**——节点
+  // 是渲染的产物，随渲染消失，而「刚才那条操作成功了」得活过这一次重画。
+  if (!node) return;
+  node.textContent = state.orchMessage.text;
+  node.className = 'orch-message' + (kind ? ' ' + kind : '');
+}
+
+async function loadOrchestration(force) {
+  if (!state.eid) {
+    Object.assign(state, { orchestration: null, orchestrationEid: '' });
+    renderOrchestration();
+    return Promise.resolve();
+  }
+  if (!force && state.orchestrationEid === state.eid && state.orchestration) {
+    renderOrchestration();
+    return Promise.resolve();
+  }
+  try {
+    const data = await apiGet('/engagements/' + encodeURIComponent(state.eid) + '/orchestration');
+    Object.assign(state, { orchestration: data, orchestrationEid: state.eid });
+  } catch (error) {
+    Object.assign(state, { orchestration: null, orchestrationEid: '' });
+    setOrchMessage('编排信息加载失败：' + error.message, 'error');
+  }
+  renderOrchestration();
+  return Promise.resolve();
+}
+
+function orchButton(text, onClick, className) {
+  const button = el('button', className || 'btn xs ghost', text);
+  button.type = 'button';
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function orchRow(rows, row) {
+  rows.append(row);
+}
+
+function orchSection(title, hint, rows) {
+  const block = el('section', 'orch-block');
+  const head = el('div', 'orch-block-head');
+  head.append(el('strong', '', title));
+  if (hint) head.append(el('span', 'orch-hint', hint));
+  block.append(head);
+  if (rows.childNodes.length) block.append(rows);
+  else block.append(el('p', 'orch-empty', '还没有记录'));
+  return block;
+}
+
+/** 一次写操作 + 重取。两个都重取：新节点要上图，计数要跟上。 */
+async function orchAction(path, body, done) {
+  try {
+    await apiPost(path, body || {});
+    setOrchMessage(done || '已保存', 'ok');
+    await loadOrchestration(true);
+    await loadGraph(true);
+  } catch (error) {
+    setOrchMessage(error.message, 'error');
+  }
+}
+
+function orchPath(suffix) {
+  return '/engagements/' + encodeURIComponent(state.eid) + suffix;
+}
+
+function renderOrchestration() {
+  const body = $('#orchestration-body');
+  if (!body) return;
+  clear(body);
+  if (!state.eid) {
+    body.append(el('p', 'muted', '编排是按目标的：先在左侧选中一个目标，再给它加目标、开意图、立约束。'));
+    return;
+  }
+  const data = state.orchestration;
+  if (!data) {
+    // 加载失败也走这里：失败后不会有人再来改这段文案，只说「正在加载」等于
+    // 永远在加载。state.orchMessage 里那句话是 loadOrchestration 的 catch 留下的。
+    const pending = state.orchMessage || { text: '', kind: '' };
+    body.append(el('div', 'orch-message' + (pending.kind ? ' ' + pending.kind : ''),
+      pending.text || '正在加载编排信息…'));
+    return;
+  }
+  const counts = data.counts || {};
+
+  const head = el('div', 'orch-head');
+  head.append(el('span', 'orch-state' + (data.paused ? ' paused' : ''),
+    data.paused ? '已暂停' : '进行中'));
+  head.append(el('span', 'orch-counts',
+    '目标 ' + (counts.goals || 0) + '（达成 ' + (counts.goalsMet || 0) + '）'
+    + ' · 意图 ' + (counts.intents || 0) + '（活跃 ' + (counts.intentsOpen || 0)
+    + ' / 阻塞 ' + (counts.intentsBlocked || 0) + '）'
+    + ' · 约束 ' + (counts.constraints || 0)));
+  head.append(orchButton(data.paused ? '恢复探索' : '暂停探索',
+    () => orchAction(orchPath(data.paused ? '/resume' : '/pause'), {},
+      data.paused ? '探索已恢复' : '探索已暂停'), 'btn sm'));
+  body.append(head);
+  const message = state.orchMessage || { text: '', kind: '' };
+  body.append(el('div', 'orch-message' + (message.kind ? ' ' + message.kind : ''),
+    message.text));
+
+  // 目标：规划器按它派发意图，达成一条就标记它。
+  const goalRows = el('ul', 'orch-list');
+  (data.goals || []).forEach((goal) => {
+    const row = el('li', 'orch-row');
+    row.append(el('span', 'orch-badge kind-goal', goal.stateLabel || goal.state));
+    row.append(el('span', 'orch-text', goal.text || goal.id));
+    if (goal.state !== 'met') {
+      row.append(orchButton('标记达成', () => orchAction(
+        orchPath('/nodes/' + encodeURIComponent(goal.id) + '/state'),
+        { state: 'met' }, '目标已标记达成')));
+    }
+    goalRows.append(row);
+  });
+  const goalSection = orchSection('目标', '规划器据此派发意图、评估完成', goalRows);
+  const goalForm = el('form', 'orch-form');
+  const goalInput = el('input', 'input');
+  goalInput.type = 'text';
+  goalInput.placeholder = '加一条可验证的目标，例如「拿到后台管理员权限」';
+  const goalSubmit = el('button', 'btn sm', '加目标');
+  goalSubmit.type = 'submit';
+  goalForm.append(goalInput, goalSubmit);
+  goalForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const text = (goalInput.value || '').trim();
+    if (!text) return;
+    goalInput.value = '';
+    orchAction(orchPath('/goals'), { text: text }, '目标已添加');
+  });
+  goalSection.append(goalForm);
+  body.append(goalSection);
+
+  // 意图：能开、能改状态、能删。这是人在对话之外介入探索的主要入口。
+  const intentRows = el('ul', 'orch-list');
+  (data.intents || []).forEach((intent) => {
+    const row = el('li', 'orch-row');
+    row.append(el('span', 'orch-badge state-' + (intent.state || ''),
+      intent.stateLabel || intent.state || ''));
+    row.append(el('span', 'orch-text', intent.title || intent.id));
+    const select = el('select', 'select xs-select');
+    (data.intentStates || []).forEach((value) => {
+      const option = el('option', '', STATE_LABEL[value] || value);
+      option.value = value;
+      if (value === intent.state) option.selected = true;
+      select.append(option);
+    });
+    select.addEventListener('change', () => orchAction(
+      orchPath('/nodes/' + encodeURIComponent(intent.id) + '/state'),
+      { state: select.value }, '状态已改为「' + (STATE_LABEL[select.value] || select.value) + '」'));
+    row.append(select);
+    row.append(orchButton('删除', () => orchAction(
+      orchPath('/nodes/' + encodeURIComponent(intent.id) + '/delete'), {}, '意图已删除')));
+    intentRows.append(row);
+  });
+  const intentSection = orchSection('意图', '一条意图 = 一个待验的方向', intentRows);
+  const intentForm = el('form', 'orch-form');
+  const intentInput = el('input', 'input');
+  intentInput.type = 'text';
+  intentInput.placeholder = '开一条后续意图，例如「枚举 /api 未授权接口」';
+  const intentGoal = el('select', 'select xs-select');
+  (data.goals || []).forEach((goal) => {
+    const option = el('option', '', goal.id + ' · ' + (goal.text || '').slice(0, 18));
+    option.value = goal.id;
+    intentGoal.append(option);
+  });
+  const intentSubmit = el('button', 'btn sm', '开意图');
+  intentSubmit.type = 'submit';
+  intentForm.append(intentInput, intentGoal, intentSubmit);
+  intentForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const title = (intentInput.value || '').trim();
+    if (!title) return;
+    intentInput.value = '';
+    orchAction(orchPath('/intents'), { title: title, goalId: intentGoal.value }, '意图已创建');
+  });
+  intentSection.append(intentForm);
+  body.append(intentSection);
+
+  // 约束：allow / deny，注入到 Agent 指令里定义探索边界。
+  const constraintRows = el('ul', 'orch-list');
+  (data.constraints || []).forEach((item) => {
+    const row = el('li', 'orch-row');
+    row.append(el('span', 'orch-badge constraint-' + item.kind, item.kindLabel || item.kind));
+    row.append(el('span', 'orch-text', item.text));
+    row.append(orchButton('删除', () => orchAction(
+      orchPath('/constraints/' + encodeURIComponent(item.id) + '/delete'), {}, '约束已删除')));
+    constraintRows.append(row);
+  });
+  const constraintSection = orchSection('运行约束', '例如「只测当前端口」「禁止爆破」', constraintRows);
+  const constraintForm = el('form', 'orch-form');
+  const kindSelect = el('select', 'select xs-select');
+  (data.constraintKinds || []).forEach((item) => {
+    const option = el('option', '', item.label);
+    option.value = item.value;
+    kindSelect.append(option);
+  });
+  const constraintInput = el('input', 'input');
+  constraintInput.type = 'text';
+  constraintInput.placeholder = '写一条边界，例如「禁止 brute force」';
+  const constraintSubmit = el('button', 'btn sm', '加约束');
+  constraintSubmit.type = 'submit';
+  constraintForm.append(kindSelect, constraintInput, constraintSubmit);
+  constraintForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const text = (constraintInput.value || '').trim();
+    if (!text) return;
+    constraintInput.value = '';
+    orchAction(orchPath('/constraints'), { kind: kindSelect.value, text: text }, '约束已添加');
+  });
+  constraintSection.append(constraintForm);
+  body.append(constraintSection);
+}
+
+function bindOrchestrationEvents() {
+  const single = $('#graph-scope-single'), all = $('#graph-scope-all');
+  const applyScope = (scope) => {
+    state.graphScope = scope;
+    state.graphLoaded = false;
+    [single, all].forEach((button) => {
+      if (!button) return;
+      const on = button.dataset.scope === scope;
+      button.classList.toggle('on', on);
+      button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    loadGraph(true);
+    loadOrchestration(false);
+  };
+  [single, all].forEach((button) => {
+    if (button) button.addEventListener('click', () => applyScope(button.dataset.scope));
+  });
+  // 右栏两块：节点详情 / 编排。它们共用同一栏宽度，所以只能一次显示一块。
+  $$('.side-tab').forEach((button) => {
+    button.addEventListener('click', () => {
+      const side = button.dataset.side;
+      $$('.side-tab').forEach((item) => item.classList.toggle('on', item === button));
+      $('#node-detail-body').classList.toggle('hidden', side !== 'detail');
+      $('#orchestration-body').classList.toggle('hidden', side !== 'orchestration');
+      if (side === 'orchestration') loadOrchestration(false);
+    });
+  });
+}
 /** 切换目标：只影响「漏洞 / 资产 / 报告」的范围；链路是全局的，不跟着重置。 */
 async function selectEngagement(eid) {
   Object.assign(state, {
@@ -1116,6 +1390,10 @@ async function selectEngagement(eid) {
   // 漏洞页若收窄在某个目标上，换目标就跟着换（"我看的是这个目标"这个意图不变）；
   // 「全部目标」则保持全部。左栏高亮由 `renderFindingsTargets` 重画。
   if (state.findingsScope !== '') state.findingsScope = eid;
+  // 单目标视图是「这个目标的链路」，换目标必须重取；合并视图与目标无关，
+  // 保持原样——这正是两种范围该有的差别。
+  if (state.graphScope === 'single') { state.graphLoaded = false; }
+  state.orchestrationEid = '';
   renderScopeStats(eid);
   renderFindingsTargets();
   const panels = { findings: '#findings-list', assets: '#asset-tree', report: '#report-body' };
@@ -1199,7 +1477,7 @@ function loadTabData(tab) {
   // 重取现在不再把人拽回原点：`renderGraph` 只在"从没手动动过视角"时才重新适配
   // （见那里的注释）。自动刷新关掉时仍旧走缓存——那颗芯片的语义就是"这一页由我
   // 手点"，这时不该有后台请求。
-  if (tab === 'graph') { loadGraph(state.graphAuto); return; }
+  if (tab === 'graph') { loadGraph(state.graphAuto); loadOrchestration(false); return; }
   if (tab === 'report') {
     // 目录列的是**全部**任务，所以它同样不该等 `state.eid`：没有选中目标时那一行
     // 「本目标汇总」会明说"未选择目标"，而下面那些任务照常列出来。
@@ -4389,6 +4667,7 @@ function activeTabFromDom() {
 }
 function init() {
   bindEvents();
+  bindOrchestrationEvents();
   bindGraphEvents();
   wireNoticeAnchor();                    // 通知浮层要先站到输入卡片上方
   renderSeverityChips();

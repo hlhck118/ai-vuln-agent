@@ -5856,3 +5856,67 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .traffic-list-pane td.clip { max-width: 28ch; }
 .traffic-side td.clip { max-width: 20ch; }
 
+
+/* ------------------------------------------------------------ 编排面板 --- */
+/* 链路页右栏的第二块：目标 / 意图 / 约束 / 暂停。它与「节点详情」共用一栏宽度，
+   靠顶上的两个 tab 切换，所以这边只管形态、不管位置。
+   颜色全部取自 token：同一条意图在图上与在这一栏里必须是同一个颜色，否则读的人会
+   把它当成两件事——`.state-*` 与图上的 `--kind-*` 是同一套语义的两种呈现。 */
+.panel-head.side-head { gap: 0; padding: 0 var(--sp-2); }
+.side-tab {
+  appearance: none; background: transparent; border: 0;
+  border-bottom: 2px solid transparent;
+  padding: var(--sp-2) 6px;
+  font: inherit; font-size: var(--fs-small); font-weight: 600;
+  color: var(--muted); cursor: pointer;
+}
+.side-tab:hover { color: var(--text-dim); }
+.side-tab.on { color: var(--text); border-bottom-color: var(--accent); }
+
+.orch-head {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding-bottom: var(--sp-2); border-bottom: 1px solid var(--border);
+}
+.orch-state {
+  flex: none; padding: 0 7px; border-radius: var(--r-1);
+  font-size: var(--fs-caption); font-weight: 600; line-height: 1.8;
+  background: var(--tint-ok); color: var(--ok);
+}
+.orch-state.paused { background: var(--tint-warn); color: var(--sev-medium); }
+.orch-counts { flex: 1 1 140px; min-width: 0; color: var(--muted); font-size: var(--fs-caption); }
+
+.orch-block { margin-top: var(--sp-3); }
+.orch-block-head {
+  display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap;
+  margin-bottom: 2px; font-size: var(--fs-small);
+}
+.orch-block-head > strong { font-weight: 600; color: var(--text-dim); }
+.orch-hint { color: var(--muted); font-size: var(--fs-caption); }
+.orch-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.orch-row {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 4px 0; border-bottom: 1px solid var(--border);
+  font-size: var(--fs-small);
+}
+.orch-row:last-child { border-bottom: 0; }
+.orch-text { flex: 1; min-width: 0; word-break: break-all; }
+.orch-badge {
+  flex: none; padding: 0 6px; border-radius: var(--r-1);
+  font-size: var(--fs-caption); line-height: 1.8;
+  background: var(--panel-3); border: 1px solid var(--border-strong); color: var(--text-dim);
+}
+.orch-badge.state-active { color: var(--accent); border-color: var(--accent); }
+.orch-badge.state-met, .orch-badge.state-done, .orch-badge.state-confirmed { color: var(--ok); border-color: var(--ok); }
+.orch-badge.state-blocked { color: var(--sev-high); border-color: var(--sev-high); }
+.orch-badge.state-pending { color: var(--sev-medium); border-color: var(--sev-medium); }
+.orch-badge.state-exhausted, .orch-badge.state-superseded { color: var(--muted); }
+.orch-badge.kind-goal { color: var(--kind-goal); border-color: var(--kind-goal); }
+.orch-badge.constraint-allow { color: var(--ok); border-color: var(--ok); }
+.orch-badge.constraint-deny { color: var(--sev-critical); border-color: var(--sev-critical); }
+.orch-form { display: flex; gap: var(--sp-1); margin-top: var(--sp-2); flex-wrap: wrap; }
+.orch-form > .input { flex: 1 1 140px; min-width: 0; }
+.orch-empty, .orch-message { margin: 2px 0 0; color: var(--muted); font-size: var(--fs-caption); }
+.orch-message.ok { color: var(--ok); }
+.orch-message.error { color: var(--sev-critical); }
+.btn.xs { padding: 1px 7px; font-size: var(--fs-caption); }
+.select.xs-select { padding: 1px 4px; font-size: var(--fs-caption); }

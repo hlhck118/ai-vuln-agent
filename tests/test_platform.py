@@ -165,9 +165,21 @@ class StoreTestCase(unittest.TestCase):
         self.assertEqual(models.fact_kind_label(None), "")
         self.assertEqual(models.fact_kind_label(" HTTP "), "HTTP")
 
-    def test_duplicate_goal_rejected(self):
+    def test_goal_is_appendable_but_never_empty(self):
+        """目标可以追加，但不能是空的。
+
+        原先这里守的是「一个 engagement 只有一条 goal」。编排面进来之后这条不成立：
+        目标是可编的对象（ARTEX 的任务面板就是一份 goals 列表，可增、可删、达成后标
+        `met`），守住的东西只剩一件——**别写进一条空目标**。规划器照着目标派发意图，
+        空目标派出来的一律是「随便看看」，事后没人能从图上看出这一轮为什么被派出去。
+        """
+        second = self.store.add_node(self.eid, "goal", {"target": "再拿一台"})
+        self.assertEqual(second["kind"], "goal")
+        self.assertNotEqual(second["id"], "goal-1",
+                            "追加的目标不能复用 create_engagement 写下的那条")
+        self.assertEqual(second["target"], "再拿一台")
         with self.assertRaises(ValidationError):
-            self.store.add_node(self.eid, "goal", {"target": "again"})
+            self.store.add_node(self.eid, "goal", {"target": "   "})
 
     # ---------------------------------------------------------- 窗口语义
     def test_window_truncates_but_keeps_chain_connected(self):
