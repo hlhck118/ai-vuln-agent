@@ -4588,6 +4588,16 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         self.assertTrue(body, "app.js 里找不到函数 %s" % name)
         return body
 
+    def _arrow(self, name):
+        """箭头函数常量（`const x = (...) => ...;`）的整行。
+
+        图里几个「只算一处判据」的小函数是箭头形式（`displayKindOf` / `priorityTone`），
+        `_fn_body` 只认 `function name(`。两者都要能取到，否则想守的那一处正好取不到。
+        """
+        found = re.search(r"(?m)^const %s = .*$" % re.escape(name), self._app)
+        self.assertTrue(found, "app.js 里找不到 %s" % name)
+        return found.group(0)
+
     @staticmethod
     def _js_list(js, name):
         """取 app.js 里某个字符串数组常量的元素（如 KIND_ORDER / EDGE_KINDS）。"""
@@ -4774,6 +4784,154 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
                          "kindFilter 与 KIND_ORDER 不是同一组类型：漏掉的那个类型"
                          "在启动那一秒整类被隐藏，而芯片是亮的")
 
+
+    # ------------------------------- ARTEX 形态：八类型 / 折叠 / 三档优先级（本轮）
+
+    def test_the_graph_has_eight_kinds_and_only_four_drawn_relations(self):
+        """画布上是八类节点、四条关系。
+
+        八类里有两类是**显示类型**：起点是一颗 `state=origin` 的事实（任务根），
+        提示是一条 `channel=hint` 的事实。库里只有六个 kind，所以 `KIND_ORDER`
+        比它多出两个——这不是笔误，是「节点在图上怎么读」与「节点在库里怎么存」
+        这两件事本来就不同。
+
+        关系只画四条：`covers` 是压缩吸收了谁、`parent` 是资产父子，两条都是结构
+        而非推进。画出来会让压缩节点向它吸收的每条记录发散一把线，整张图从一条链
+        变成一张网。它们仍在 `EDGE_LABEL` 里（详情面板与离线 SVG 用），只是不上画布。
+        """
+        kinds = self._js_list(self._app, "KIND_ORDER")
+        labels = self._js_map(self._app, "KIND_LABEL")
+        edges = self._js_list(self._app, "EDGE_KINDS")
+        hidden = self._js_list(self._app, "EDGE_HIDDEN_KINDS")
+        edge_label = self._js_map(self._app, "EDGE_LABEL")
+
+        self.assertEqual(["begin", "goal", "hint", "intent", "fact", "finding", "digest", "asset"], kinds,
+                         "KIND_ORDER 不再是八类：起点与提示掉了，或者顺序被打乱")
+        self.assertEqual(sorted(kinds), sorted(labels),
+                         "KIND_LABEL 与 KIND_ORDER 不是同一组键：少一个的那类卡上会露出英文")
+        self.assertEqual(["spawns", "derived_from", "yields", "proves"], edges,
+                         "画布上画的关系不再是那四条推进关系")
+        self.assertEqual(["covers", "parent"], hidden,
+                         "不画的关系表变了：压缩会向每条成员发散虚线")
+        self.assertEqual(sorted(edges + hidden), sorted(edge_label),
+                         "EDGE_LABEL 与「画 + 不画」两张表对不上：有一种关系没有中文名")
+
+    def test_the_display_kind_is_decided_on_the_backend(self):
+        """起点与提示由后端算，前端只兜底。
+
+        判定规则要在**一处**：前端拿不到 `channel` 之外的线索，自己再判一遍必然与
+        后端写出两套。所以 `graph.display_kind` 是唯一判据，`build_layout` 把它写进
+        每张卡的 `displayKind`，`renderNodes` 只读不算。
+        """
+        with open(os.path.join(ROOT, "pentestd", "graph.py"), "r", encoding="utf-8") as handle:
+            py = handle.read()
+        self.assertIn("def display_kind(", py, "后端没有 display_kind：前端只能自己猜")
+        body = py[py.index("def display_kind("):]
+        body = body[:body.index("\ndef ", 1)]
+        self.assertIn("origin", body, "display_kind 不再看 state=origin：起点会退回画成事实")
+        self.assertIn("hint", body, "display_kind 不再认 channel=hint：提示会退回画成事实")
+        self.assertIn("\"displayKind\": display_kind(", py,
+                      "build_layout 没把 displayKind 写进卡片：前端拿不到判据")
+        for word in ("begin", "hint"):
+            self.assertIn("\"%s\":" % word, py, "DISPLAY_LABELS 里没有 %s" % word)
+
+        # 前端只兜底，不重算。它必须读 displayKind，且不能出现第二处 origin 判定。
+        kind_of = self._arrow("displayKindOf")
+        self.assertIn("displayKind", kind_of, "displayKindOf 不再读后端的 displayKind")
+        self.assertNotIn("origin", kind_of,
+                         "displayKindOf 自己判起了 origin：前后端会有两套规则")
+
+    def test_the_priority_pill_has_three_tones_not_nine(self):
+        """优先级只分三档：8 以上红灯、5 以上黄灯、其余中性。
+
+        按 1-9 线性插值会让人以为 P6 与 P7 之间有可分辨的差别，而这条读数只在
+        「这张卡要不要先看」这一件事上有意义。三档的颜色必须是**令牌**（换主题要
+        跟着走），而不是写在规则区的字面量。
+        """
+        tone = self._arrow("priorityTone")
+        self.assertIn(">= 8", tone, "优先级红灯的门槛变了")
+        self.assertIn(">= 5", tone, "优先级黄灯的门槛变了")
+        for name in ("red", "amber", "slate"):
+            self.assertIn("'%s'" % name, tone, "优先级少了 %s 这一档" % name)
+
+        back = self._rule(self._css, "rect.gnode-pill.gnode-priority")
+        fore = self._rule(self._css, "text.gnode-pill-text.gnode-priority")
+        self.assertIn("var(--prio-slate-bg", back, "优先级胶囊的底没取令牌")
+        self.assertIn("var(--prio-slate-fg", fore, "优先级胶囊的字没取令牌")
+        for tone_name in ("red", "amber", "slate"):
+            self.assertTrue(self._rule(self._css, "rect.gnode-pill.gnode-priority.tone-%s" % tone_name),
+                            "没有 .tone-%s 的优先级底色：P7 与 P5 看起来一样" % tone_name)
+
+    def test_a_collapsed_digest_takes_its_members_off_the_canvas(self):
+        """被压缩吸收的记录不再单画，边改挂到那张压缩卡上。
+
+        不折叠的话，压缩卡只是链路右边多出一列孤岛：它吸收的十几条事实照样铺在
+        链路里，读的人还是一条条读，而压缩本身成了噪音。三条规矩照 ARTEX：只留
+        active 的压缩、成员收走后边改挂（自环丢、同向同类型去重）、折叠后反向
+        冗余的 `derived_from` 丢掉。
+
+        折叠**只在画布上**发生：`layout` 一个字不动，详情面板与离线 SVG 拿全量。
+        """
+        body = self._graph_fn("collapseDigests")
+        self.assertIn("'covers'", body, "折叠不看 covers：压缩不知道吸收了谁")
+        self.assertIn("member.set(", body, "折叠没建「成员 → 压缩」的映射")
+        self.assertIn("=== 'active'", body, "折叠不过滤 active：被取代的压缩仍在画布上")
+        self.assertIn("derived_from", body, "折叠不处理反向冗余的意图链")
+
+        graph = self._graph_fn("renderGraph")
+        self.assertIn("collapseDigests(", graph, "renderGraph 没接折叠：压缩还是孤岛")
+        edges_fn = self._graph_fn("renderEdges")
+        self.assertIn("EDGE_HIDDEN_KINDS.indexOf", edges_fn,
+                      "renderEdges 不跳过 covers / parent：画布会变成一张网")
+
+    def test_the_digest_reaches_the_canvas_not_only_the_payload(self):
+        """压缩卡必须真的进布局，否则前端那套折叠一行也跑不到。
+
+        折叠是个纯前端动作：它拿 `covers` 边找成员，成员不在画布上就什么都不用做。
+        所以只要布局不下发 digest，这段逻辑在真实产品里就永远是空的——夹具里手工
+        塞过 digest 才看得见效果，那正是「测试通过但功能不存在」的典型形状。
+        """
+        with open(os.path.join(ROOT, "pentestd", "server.py"), "r", encoding="utf-8") as handle:
+            server_src = handle.read()
+        body = re.search(r"def _all_nodes\(.*?\n    def ", server_src, re.S)
+        self.assertTrue(body, "找不到 _all_nodes")
+        self.assertIn('"digests"', body.group(0),
+                      "_all_nodes 没把 digests 收进布局：画布上永远不会有压缩卡")
+        self.assertIn("digestMembers(", self._graph_fn("renderNodeDetail"),
+                      "详情面板没有给压缩列出成员——画布上它们已经不画了")
+
+    def test_the_hint_channel_survives_validation(self):
+        """提示靠一个显式通道认，不靠 `factKind == "info"`。
+
+        `info` 是事实的默认子类型：纠偏指令、情报收集、没写 kind 的普通事实全落在
+        这一档。靠它认提示，图上会把它们一起画成「提示」，而那几条根本不是。
+        所以 `add_hint` 显式写 `channel: "hint"`，校验层只放行表内的值。
+        """
+        with open(os.path.join(ROOT, "pentestd", "models.py"), "r", encoding="utf-8") as handle:
+            models = handle.read()
+        self.assertIn('FACT_CHANNELS = ["hint"]', models, "FACT_CHANNELS 没了：通道没有白名单")
+        self.assertIn('clean["channel"] = channel', models,
+                      "校验层不再保留 channel：提示落库后认不出来")
+
+        with open(os.path.join(ROOT, "pentestd", "artex.py"), "r", encoding="utf-8") as handle:
+            artex = handle.read()
+        self.assertIn('"channel": "hint"', artex,
+                      "add_hint 不再写 channel：它会被当成一条普通说明")
+
+    def test_every_theme_carries_the_two_new_kinds_and_the_tones(self):
+        """新令牌必须进每一套主题，否则从**其它**主题进来时那两类没有颜色。
+
+        `--kind-*` 只在 :root 声明时，液态玻璃与纸质主题下 `.gnode.kind-begin`
+        取到的是空值——起点卡的图标块与类型名会透明，看起来像样式丢了。
+        """
+        blocks = re.findall(r"(?m)^(:root[^{]*)\{([^}]*)\}", self._css)
+        themed = [(sel.strip(), body) for sel, body in blocks if "--kind-goal" in body]
+        self.assertGreaterEqual(len(themed), 5, "主题块少于五套：令牌覆盖不完整")
+        for sel, body in themed:
+            for token in ("--kind-begin", "--kind-hint",
+                          "--prio-red-fg", "--prio-red-bg",
+                          "--prio-amber-fg", "--prio-slate-bg"):
+                self.assertIn(token, body, "%s 主题缺 %s" % (sel, token))
 
 class LiveStepBadgeTestCase(unittest.TestCase):
     """气泡上那个步数徽章：报**实际**步数，上限只在它真会拦人时才报。

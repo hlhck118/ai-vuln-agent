@@ -782,29 +782,37 @@
              整张图看起来"没有从左上角开始"。左上对齐后布局原点就是画布原点，缩放、
              拖动与「适应窗口」都从同一个角出发；`toUserSpace` 也不再要被裁掉的那段偏移。 -->
         <svg id="graph-svg" class="graph-svg hidden" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet"></svg>
-        <!-- 画布左上角的图例：图上每个符号——圆点颜色、线型、虚线——在这里都有说法。
+        <!-- 画布右下角的图例：图上每个符号——色块、线型——在这里都有说法。
              它刻意放在 svg **外面**：放进去就会跟着缩放走，放大到 800% 时最该看的这张
              说明先跑出屏幕。`pointer-events: none` 让它不抢画布的拖动与悬停。
-             关系那几行与 `EDGE_LABEL` 一一对应，改边的语义时这里要一起改——
-             图例说谎比没有图例更糟。 -->
+             八个类型与四条关系逐条对应 `KIND_ORDER`/`KIND_LABEL`/`EDGE_KINDS`/`EDGE_LABEL`
+             （`test_the_legend_speaks_the_same_vocabulary_as_the_graph` 会逐字比对）——
+             图例说谎比没有图例更糟。
+
+             只有四条关系：`covers` 与 `parent` 在画布上不画。它们读的是「归属」
+             而不是「这条链往哪走」，画出来会把一条链变成一张网；那两条边仍在布局
+             与右侧详情里，想知道某条压缩吸收了谁，点开它就行。
+
+             起点与提示排在最前：它们是这张图上最先要认出来的两个位置——「从哪儿
+             开始」与「谁给过这条方向」。两者都是显示类型，库里仍是事实。 -->
         <div class="graph-legend" aria-hidden="true">
           <div class="legend-cap">节点类型</div>
           <div class="legend-kinds">
+            <span class="legend-kind kind-begin">起点</span>
             <span class="legend-kind kind-goal">目标</span>
+            <span class="legend-kind kind-hint">提示</span>
             <span class="legend-kind kind-intent">意图</span>
             <span class="legend-kind kind-fact">事实</span>
             <span class="legend-kind kind-finding">漏洞</span>
-            <span class="legend-kind kind-digest">摘要</span>
+            <span class="legend-kind kind-digest">压缩</span>
             <span class="legend-kind kind-asset">资产</span>
           </div>
           <div class="legend-cap">关系</div>
           <div class="legend-edges">
-            <span class="legend-edge" data-kind="spawns">意图链</span>
+            <span class="legend-edge" data-kind="spawns">派生</span>
+            <span class="legend-edge" data-kind="derived_from">意图链</span>
             <span class="legend-edge" data-kind="yields">产出</span>
-            <span class="legend-edge" data-kind="derived_from">推导自</span>
-            <span class="legend-edge" data-kind="proves">证实</span>
-            <span class="legend-edge" data-kind="covers">覆盖</span>
-            <span class="legend-edge" data-kind="parent">归属</span>
+            <span class="legend-edge" data-kind="proves">证明</span>
           </div>
         </div>
         <div class="empty" id="graph-empty">正在加载链路数据…</div>

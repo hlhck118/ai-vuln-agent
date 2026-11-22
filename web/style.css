@@ -135,7 +135,12 @@
   --kind-fact: #32d74b;
   --kind-finding: #ff9f0a;
   --kind-asset: #64d2ff;      /* 系统青（深色） */
-  --kind-digest: #9aa8ff;     /* 摘要：链路四色之外的第五色 */
+  --kind-digest: #9aa8ff;     /* 压缩：链路四色之外的第五色 */
+  /* 两个**显示类型**：起点与提示都不在 NODE_KINDS 里。起点是「任务是它派生出的那条
+   * origin 事实」，提示是「有人给过这条方向」——后端 `graph.display_kind()` 认出来，
+   * 前端只负责上色。给它们事实那身绿会让人把它们当成探测结果读。 */
+  --kind-begin: #aab6c6;
+  --kind-hint: #c9a7ff;
 
   /* ---- 图谱边色：按关系类型分。原先这份取值写在 app.js 的 EDGE_COLOR 里，
    * 而 SVG 的表现属性不支持 var()，所以它整组绕过了主题——换个主题，节点变了色、
@@ -172,6 +177,16 @@
   --state-blocked-bg: #46301a;
   --state-pending-fg: #c9cdd8;
   --state-pending-bg: #33333d;
+
+  /* ---- 优先级胶囊：三档语气（照 ARTEX 的 prioTone） ----
+   * 8 以上红、5 以上黄、其余中性。三档而不是九个色阶：这条读数只在「先看哪张卡」
+   * 这一件事上有意义，P6 与 P7 之间并没有可分辨的差别。 */
+  --prio-red-fg: #ffb3ab;
+  --prio-red-bg: #4a1f1c;
+  --prio-amber-fg: #ffd479;
+  --prio-amber-bg: #42320f;
+  --prio-slate-fg: #c9cdd8;
+  --prio-slate-bg: #2f343d;
 
   /* ---- 代码正文与内联代码 ---- */
   --code: #cfe3ff;
@@ -377,6 +392,8 @@
   --kind-finding: #9e5c1a;
   --kind-asset: #17758d;
   --kind-digest: #4a56c8;
+  --kind-begin: #4a5563;      /* 起点：中性灰蓝，不是一种探测结果 */
+  --kind-hint: #6b3fa0;       /* 提示：紫，与意图的紫拉开明度 */
 
   /* 状态胶囊在亮底上要整组换：--state-*-bg 是低饱和**浅**填充，文字压到能过 AA 的
    * 那一档。深色那套原样搬过来是白字配浅底——胶囊会像被擦掉了一半。 */
@@ -398,6 +415,13 @@
   --state-blocked-bg: #fce3cd;
   --state-pending-fg: #4d5462;
   --state-pending-bg: #e7e9ee;
+  /* 优先级三档在亮底上的那一套：红/黄/中性的**字**压深、**底**提浅，与状态胶囊同样的取向。 */
+  --prio-red-fg: #8a1a12;
+  --prio-red-bg: #fbdcd8;
+  --prio-amber-fg: #6b4400;
+  --prio-amber-bg: #fbeecd;
+  --prio-slate-fg: #4d5462;
+  --prio-slate-bg: #e7e9ee;
   --edge-spawns: #1b66de;
   --edge-yields: #167b5c;
   --edge-derived: #9046d1;
@@ -520,6 +544,8 @@
   --kind-finding: #a35c00;
   --kind-asset: #0b6b86;
   --kind-digest: #3f4ab0;
+  --kind-begin: #3e4753;      /* 起点：中性灰蓝，不是一种探测结果 */
+  --kind-hint: #5c2f96;       /* 提示：紫，与意图的紫拉开明度 */
 
   /* 状态胶囊在亮底上要整组换：--state-*-bg 是低饱和**浅**填充，文字压到能过 AA 的
    * 那一档。深色那套原样搬过来是白字配浅底——胶囊会像被擦掉了一半。 */
@@ -541,6 +567,12 @@
   --state-blocked-bg: #fce3cd;
   --state-pending-fg: #4d5462;
   --state-pending-bg: #e7e9ee;
+  --prio-red-fg: #8a1a12;
+  --prio-red-bg: #fbdcd8;
+  --prio-amber-fg: #6b4400;
+  --prio-amber-bg: #fbeecd;
+  --prio-slate-fg: #4d5462;
+  --prio-slate-bg: #e7e9ee;
 
   /* 亮底上的边色必须整体压暗：`#e0a13c` 那种琥珀在白画布上细到几乎看不见，
    * 而边是**关系**的唯一载体——看不见边，图谱就退化成一堆孤立的方块。 */
@@ -646,6 +678,15 @@
   --kind-finding: #ffa62b;
   --kind-asset: #63e6da;
   --kind-digest: #b8c4ff;
+  --kind-begin: #9fb3a8;
+  --kind-hint: #e0a6ff;
+
+  --prio-red-fg: #ff9a8f;
+  --prio-red-bg: #3a1512;
+  --prio-amber-fg: #ffd06b;
+  --prio-amber-bg: #33280a;
+  --prio-slate-fg: #b6f2cd;
+  --prio-slate-bg: #14231a;
 
   --edge-spawns: #46d5c8;
   --edge-yields: #4ade80;
@@ -759,6 +800,15 @@
   --kind-finding: #ffb340;
   --kind-asset: #7fe6ff;
   --kind-digest: #93a4ff;
+  --kind-begin: #d0d0d0;
+  --kind-hint: #e0a6ff;
+
+  --prio-red-fg: #ffc4bd;
+  --prio-red-bg: #3a0000;
+  --prio-amber-fg: #ffe9a8;
+  --prio-amber-bg: #33280a;
+  --prio-slate-fg: #e8e8e8;
+  --prio-slate-bg: #1f1f1f;
 
   --edge-spawns: #8ec5ff;
   --edge-yields: #5ceb85;
@@ -1838,8 +1888,12 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
   content: ""; width: 7px; height: 7px; border-radius: 50%;
   background: var(--muted); flex: 0 0 auto;
 }
-/* 类型圆点与节点卡左上角那颗同一个令牌源，一处改两处跟。 */
+/* 类型圆点与节点卡左上角的图标方块同一个令牌源，一处改两处跟。
+   顺序就是 `KIND_ORDER`：两个显示类型（起点 / 提示）排在前头，它们是这张图上
+   最先被认出来的两个位置——「从哪儿开始」与「谁给了这条方向」。 */
+.legend-kind.kind-begin::before { background: var(--kind-begin); }
 .legend-kind.kind-goal::before { background: var(--kind-goal); }
+.legend-kind.kind-hint::before { background: var(--kind-hint); }
 .legend-kind.kind-intent::before { background: var(--kind-intent); }
 .legend-kind.kind-fact::before { background: var(--kind-fact); }
 .legend-kind.kind-finding::before { background: var(--kind-finding); }
@@ -1901,8 +1955,8 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .gedge[data-kind="proves"] { stroke: var(--edge-proves); }
 .gedge[data-kind="parent"] { stroke: var(--edge-parent); }
 .gedge[data-kind="covers"] { stroke: var(--edge-covers); stroke-dasharray: 5 3; }
-/* 覆盖是"这条摘要吸收了哪些记录"，不是推进关系：虚线把它与 spawns/yields 那几条
- * 实线区分开，否则一眼看过去摘要像是在给事实发指令。 */
+/* 覆盖是"这条压缩吸收了哪些记录"，不是推进关系：虚线把它与 spawns/yields 那几条
+ * 实线区分开，否则一眼看过去压缩像是在给事实发指令。 */
 /* 箭头与边同色。它长在 <defs><marker> 里，但仍然被本文档的样式表命中——
  * 曾经把它当"SVG 内部的东西"而写成 fill 属性，于是主题切换时箭头留在旧配色上。 */
 .garrow { fill: var(--edge-spawns); }
@@ -1918,22 +1972,43 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 }
 .gnode text { pointer-events: none; }
 .gnode-box { fill: var(--panel-2); stroke: var(--border-strong); stroke-width: 1.2; }
-/* 节点卡：四条信息各占一角。
+/* 节点卡：三行，照 ARTEX 的卡片结构。
  *
- *  类型在左上（圆点 + 中文名）、优先级在右上（P3）、状态在右下（已确认）、id 在左下。
- *  颜色只出现在圆点与两颗胶囊上，卡身保持中性——六个类型各自有一整套配色，如果
- *  卡身也上色，整张图就变成一大片互不相让的色块，谁也读不出谁。
+ *  第一行  类型方块图标 + 中文类型名 ………………………………… 优先级胶囊（P7）
+ *  第二行  标题
+ *  第三行  两行副标题
+ *  第四行  状态胶囊（已确认） ……………………………………………………… #编号
  *
- *  六个类型共用一个 `color`：圆点用 currentColor、类型名也继承，所以一条
- *  `.gnode.kind-*` 规则就够，不必给六种类型各写两处 fill。 */
+ *  与旧版的区别有两处是有理由的：
+ *
+ *  * 图标做成**实心方块 + 白点**而不是空心圆点：一张图上十几个节点，方块在密排的
+ *    卡片列里比圆点更容易一眼扫出「这一列的卡片都是同一类」；
+ *  * 状态胶囊从左下角挪到正文下面一行、id 从「左下角小字」改成「右下角带井号」，
+ *    两者同一基线上分居两端——中间那段空出来的是拖动画布的地方，压在卡上的手势
+ *    不该被文字挡掉。
+ *
+ *  颜色只出现在图标方块、类型名、优先级胶囊、状态胶囊四处，卡身保持中性：八个类型
+ *  各有一整套配色，卡身也上色就变成一大片互不相让的色块，谁也读不出谁。
+ *
+ *  八个显示类型共用一个 `color`：图标方块用 currentColor 的淡色、类型名也继承，
+ *  所以一条 `.gnode.kind-*` 规则就够，不必给每种类型各写两处 fill。 */
 .gnode-dot { fill: currentColor; }
+.gnode-icon { fill: currentColor; opacity: .22; }
 .gnode-kind { fill: currentColor; font: 600 var(--fs-caption)/1 var(--sans); letter-spacing: .02em; }
 .gnode-id { fill: var(--muted); font: var(--fs-caption)/1 var(--mono); opacity: .7; }
-/* 优先级胶囊：中性灰。它说的是「多急」，与类型色、状态色都不是一回事，
-   所以不参与那两套配色——一条橙色的 P7 会被读成「这是个高危漏洞」。 */
+/* 优先级胶囊：三档语气。它说的是「多急」，与类型色、状态色都不是一回事
+   （一条橙色的 P7 会被读成「这是个高危漏洞」），所以自己占一组令牌：
+   8 以上红、5 以上黄、其余中性——照 ARTEX 的 prioTone，不做九个色阶的插值。 */
 rect.gnode-pill { fill: var(--panel-3); }
 text.gnode-pill-text { fill: var(--text-dim); font: var(--fs-caption)/1 var(--mono); }
-rect.gnode-pill.gnode-priority { fill: var(--panel-2); }
+rect.gnode-pill.gnode-priority { fill: var(--prio-slate-bg, var(--panel-2)); }
+text.gnode-pill-text.gnode-priority { fill: var(--prio-slate-fg, var(--text-dim)); }
+rect.gnode-pill.gnode-priority.tone-red { fill: var(--prio-red-bg, var(--panel-2)); }
+text.gnode-pill-text.gnode-priority.tone-red { fill: var(--prio-red-fg, var(--text-dim)); }
+rect.gnode-pill.gnode-priority.tone-amber { fill: var(--prio-amber-bg, var(--panel-2)); }
+text.gnode-pill-text.gnode-priority.tone-amber { fill: var(--prio-amber-fg, var(--text-dim)); }
+rect.gnode-pill.gnode-priority.tone-slate { fill: var(--prio-slate-bg, var(--panel-2)); }
+text.gnode-pill-text.gnode-priority.tone-slate { fill: var(--prio-slate-fg, var(--text-dim)); }
 rect.gnode-pill.gnode-state { fill: var(--pill-bg, var(--panel-3)); }
 text.gnode-pill-text.gnode-state { fill: var(--pill-fg, var(--text-dim)); font-family: var(--sans); }
 /* 九种状态各取自己那一对令牌（定义在 :root，玻璃与纸感各自覆盖一套浅色）。
@@ -1947,7 +2022,10 @@ text.gnode-pill-text.gnode-state { fill: var(--pill-fg, var(--text-dim)); font-f
 .state-superseded { --pill-fg: var(--state-superseded-fg); --pill-bg: var(--state-superseded-bg); }
 .state-blocked { --pill-fg: var(--state-blocked-fg); --pill-bg: var(--state-blocked-bg); }
 .state-pending { --pill-fg: var(--state-pending-fg); --pill-bg: var(--state-pending-bg); }
+/* 前四个是结构类型，后两个是显示类型（起点 / 提示），顺序与 `KIND_ORDER` 一致。 */
+.gnode.kind-begin { color: var(--kind-begin); }
 .gnode.kind-goal { color: var(--kind-goal); }
+.gnode.kind-hint { color: var(--kind-hint); }
 .gnode.kind-intent { color: var(--kind-intent); }
 .gnode.kind-fact { color: var(--kind-fact); }
 .gnode.kind-finding { color: var(--kind-finding); }
@@ -1955,7 +2033,9 @@ text.gnode-pill-text.gnode-state { fill: var(--pill-fg, var(--text-dim)); font-f
 .gnode.kind-asset { color: var(--kind-asset); }
 .gnode-label { fill: var(--text); font: 600 var(--fs-small) var(--sans); }
 .gnode-sub { fill: var(--muted); font: var(--fs-caption) var(--mono); }
+.gnode.kind-begin .gnode-box { stroke: var(--kind-begin); stroke-dasharray: 4 3; }
 .gnode.kind-goal .gnode-box { stroke: var(--kind-goal); }
+.gnode.kind-hint .gnode-box { stroke: var(--kind-hint); stroke-dasharray: 4 3; }
 .gnode.kind-intent .gnode-box { stroke: var(--kind-intent); }
 .gnode.kind-fact .gnode-box { stroke: var(--kind-fact); }
 .gnode.kind-finding .gnode-box { stroke: var(--kind-finding); }
@@ -2026,6 +2106,31 @@ text.gnode-pill-text.gnode-state { fill: var(--pill-fg, var(--text-dim)); font-f
 }
 .edge-kind { color: var(--accent); min-width: 46px; }
 .edge-dir { color: var(--text-dim); word-break: break-all; }
+
+/* ---- 压缩的成员清单 ----
+ * 画布上被吸收的记录已经不单画了，这里是它们唯一的入口，所以每行必须能点。
+ * 行本身做成按钮（而不是 li 上绑 click）：键盘 Tab 能挨条走，读屏也知道能按。
+ * 三列布局 = 类型标签 / 摘要 / id；摘要那列 minmax(0,1fr) 才允许长文本收窄，
+ * 否则一段没有空格的长命令会把面板撑出横向滚动（与 .kv 当初那处缺陷同源）。 */
+.detail-section-head { margin: var(--sp-3) 0 var(--sp-1); font-size: var(--fs-small); font-weight: 600; color: var(--text-dim); }
+.member-list { list-style: none; margin: 0; padding: 0; }
+.member-row { border-top: 1px solid var(--border); }
+.member-open {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-2);
+  align-items: baseline; width: 100%; text-align: left; cursor: pointer;
+  padding: var(--sp-1) 0; background: transparent; border: 0; color: var(--text);
+  font: var(--fs-caption)/1.6 var(--mono);
+  transition: background var(--t-fast) var(--ease);
+}
+.member-open:hover { background: var(--panel-2); }
+.member-open:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+/* 找不到的成员：仍要读得清，但要一眼看出点不动 */
+.member-open:disabled { color: var(--muted); cursor: default; }
+.member-open:disabled:hover { background: transparent; }
+.member-kind { color: var(--accent); white-space: nowrap; }
+.member-open:disabled .member-kind { color: var(--muted); }
+.member-text { overflow-wrap: anywhere; min-width: 0; }
+.member-id { color: var(--muted); opacity: .8; white-space: nowrap; }
 
 /* -------------------------------------------------------------- 漏洞 --- */
 
@@ -2206,7 +2311,9 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .chip.sev-medium::before { background: var(--sev-medium); }
 .chip.sev-low::before { background: var(--sev-low); }
 .chip.sev-info::before { background: var(--sev-info); box-shadow: 0 0 0 1.5px var(--border-strong) inset; }
+.chip.kind-begin::before { background: var(--kind-begin); }
 .chip.kind-goal::before { background: var(--kind-goal); }
+.chip.kind-hint::before { background: var(--kind-hint); }
 .chip.kind-intent::before { background: var(--kind-intent); }
 .chip.kind-fact::before { background: var(--kind-fact); }
 .chip.kind-finding::before { background: var(--kind-finding); }

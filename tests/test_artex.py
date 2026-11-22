@@ -11,11 +11,16 @@
   * 读路径（`_task`）不许创建目标——一次误点不该在工作台里留下一行垃圾。
 
 用例按分节组织：注册契约 / 读写闭环 / 拒绝面 / 技能手册 / 工具与 MCP 登记。
+
+**关于 `_payload_of`**：`store.get_node` 与 `list_nodes` 给的是原始节点（正文在
+`payload` 下），而 `store.add_node` / `update_node_payload` / `store.findings` 给的
+是 `models.public_node`（正文已摊平、没有 `payload` 键）。混读这两形状曾是真实缺陷
+的来源（报完漏洞回来标题是空的、删资产时说不出有几条漏洞指向空），所以那几处
+专门有用例盯着。
 """
 import json
 import os
 import sys
-import tempfile
 import unittest
 from unittest import mock
 
@@ -24,7 +29,7 @@ ROOT = os.path.dirname(HERE)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from pentestd import artex, artex_spec, chat, mcp, policy, skills, toolconfig, toolkit  # noqa: E402
+from pentestd import artex, artex_spec, chat, policy, skills, toolconfig, toolkit  # noqa: E402
 from pentestd import server  # noqa: E402
 from tests import support  # noqa: E402
 
@@ -55,26 +60,32 @@ class _ArtexCase(unittest.TestCase):
         self._env.stop()
         toolkit.reload()          # 复位模块级适配器表，否则会串到下一个用例
         skills.invalidate()       # 技能目录有 TTL 缓存，不清会读到上一个用例的临时目录
-        support.stop(None, self.store, self.directory)
+        # 这里没有 HTTP 服务，所以不能用 `support.stop`：它第一句就 shutdown 一个
+        # httpd，传 None 进去只会得到一个 AttributeError 把真正的失败盖住。
+        self.store.close()
+        self.directory.cleanup()
 
     # ---------------------------------------------------------------- 调用
 
-    def call(self, name, **args):
+    # 形参叫 tool 而不是 name：`create_skill` / `update_skill_file` 的第一个业务
+    # 参数就叫 name，写成 `def ok(self, name, **args)` 会撞成
+    # `ok() got multiple values for argument 'name'`（实测 13 个用例栽在这上面）。
+    def call(self, tool, **args):
         """走 `execute_tool`：闸门 + 执行一起过。``policy_id="full"`` 是为了不
         让档位把用例挡在门外——档位本身另有用例测。"""
-        return chat.execute_tool(self.plane, name, json.dumps(args), self.eid,
+        return chat.execute_tool(self.plane, tool, json.dumps(args), self.eid,
                                  policy_id="full", role="admin")
 
-    def ok(self, name, **args):
-        outcome = self.call(name, **args)
-        self.assertTrue(outcome["ok"], "%s 失败：%s" % (name, outcome["summary"]))
+    def ok(self, tool, **args):
+        outcome = self.call(tool, **args)
+        self.assertTrue(outcome["ok"], "%s 失败：%s" % (tool, outcome["summary"]))
         return outcome["data"]
 
-    def fails(self, name, expect, **args):
-        outcome = self.call(name, **args)
-        self.assertFalse(outcome["ok"], "%s 本该失败却成功了" % name)
+    def fails(self, tool, expect, **args):
+        outcome = self.call(tool, **args)
+        self.assertFalse(outcome["ok"], "%s 本该失败却成功了" % tool)
         self.assertIn(expect, outcome["summary"],
-                      "%s 的报错没说到点上：%s" % (name, outcome["summary"]))
+                      "%s 的报错没说到点上：%s" % (tool, outcome["summary"]))
         return outcome
 
 
@@ -118,6 +129,12 @@ class RegistrationTestCase(unittest.TestCase):
         for name in artex.HANDLERS:
             self.assertIn(name, listed, "%s 没出现在完全作业档的目录里" % name)
 
+    def test_readonly_catalog_hides_the_writers(self):
+        rows = chat.tool_catalog("readonly", "operator", True, plane=None)
+        listed = set(row["name"] for row in rows)
+        self.assertIn("graph_overview", listed)
+        self.assertNotIn("record_fact", listed, "只读档不该出现写入工具")
+
 
 class ChainTestCase(_ArtexCase):
     """读写闭环：建意图 → 记事实 → 报漏洞 → 挂流量 → 复核 → 案卷。"""
@@ -128,8 +145,12 @@ class ChainTestCase(_ArtexCase):
         self.assertEqual(before["target"], self.target)
         self.assertEqual(before["counts"]["goals"], 1, "建档应有 goal-1")
 
-        self.ok("add_intent", title="摸一下入口", detail="先看首页")
-        self.ok("record_fact", detail="首页 200", target="/")
+        made = self.ok("add_intent",
+                       intents=[{"title": "摸一下入口", "detail": "先看首页"}])
+        # 事实要挂在刚建的意图下：不给 intent_id 时 `_intent_id` 会补建一条
+        # 「会话内记录」，这条用例就变成在数两条意图了。
+        self.ok("record_fact", detail="首页 200", target="/",
+                intent_id=made["intents"][0]["id"])
         after = self.ok("graph_overview")
         self.assertEqual(after["counts"]["intents"], 1)
         self.assertEqual(after["counts"]["facts"], 1)
@@ -154,6 +175,18 @@ class ChainTestCase(_ArtexCase):
         self.assertEqual(static["finding"]["verification"]["verdict"],
                          "confirmed_static")
 
+    def test_report_finding_returns_the_row_it_just_wrote(self):
+        # 这条钉住 `_payload_of`：`add_node` 回的是 public_node（正文已摊平），
+        # 早先 `_finding_row` 去它下面找 `payload` 键，于是刚写完的漏洞在界面上
+        # 标题是空的、等级退回 info。
+        data = self.ok("report_finding", summary="SSH 允许口令登录",
+                       severity="medium")
+        self.assertEqual(data["finding"]["title"], "SSH 允许口令登录")
+        self.assertEqual(data["finding"]["severity"], "medium")
+        listed = self.ok("list_findings")["findings"]
+        self.assertEqual(listed[0]["title"], "SSH 允许口令登录")
+        self.assertEqual(listed[0]["severity"], "medium")
+
     def test_report_finding_refuses_unknown_severity(self):
         self.fails("report_finding", "severity 必须是", summary="x",
                    severity="catastrophic")
@@ -164,7 +197,8 @@ class ChainTestCase(_ArtexCase):
     def test_finding_description_carries_the_vulnclass(self):
         data = self.ok("report_finding", summary="登录处可以注入",
                        vulnclass="sql-injection")
-        self.assertTrue(data["finding"]["description"].startswith("类别：sql-injection"))
+        self.assertTrue(data["finding"]["description"].startswith(
+            "类别：sql-injection"))
 
     def test_update_finding_report_appends_instead_of_replacing(self):
         made = self.ok("report_finding", summary="弱口令", severity="medium")
@@ -186,14 +220,17 @@ class ChainTestCase(_ArtexCase):
         self.ok("set_goals", text="拿到后台管理员权限")
         goals = self.ok("list_goals")
         self.assertEqual(goals["count"], 2, "goal-1 之外应多一条")
-        target = [row for row in goals["goals"] if row["target"] == "拿到后台管理员权限"][0]
+        target = [row for row in goals["goals"]
+                  if row["target"] == "拿到后台管理员权限"][0]
         fact = self.ok("record_fact", detail="后台登录页存在")
         proved = self.ok("prove_goal", goal_id=target["id"],
                          evidence_id=fact["facts"][0]["id"],
                          reason="登录页可用")
         self.assertEqual(proved["goalId"], target["id"])
+        self.assertEqual(proved["evidence"]["kind"], "fact")
         met = self.ok("goal_met", goal_id=target["id"], reason="已登录进后台")
-        self.assertTrue(met["ok"] if "ok" in met else True)
+        self.assertEqual(met["goalId"], target["id"])
+        self.assertEqual(met["goal"]["state"], "met")
 
     def test_prove_goal_refuses_an_asset_as_evidence(self):
         self.ok("insert_assets", assets=[{"type": "subdomain",
@@ -212,30 +249,34 @@ class ChainTestCase(_ArtexCase):
 
     def test_intents_cannot_hang_on_two_anchors(self):
         fact = self.ok("record_fact", detail="x")
-        self.fails("add_intent", "必须且只能挂一个锚点", title="双锚点",
-                   goal_id="goal-1", derived_from_fact_id=fact["facts"][0]["id"])
+        self.fails("add_intent", "必须且只能挂一个锚点",
+                   intents=[{"title": "双锚点", "goalId": "goal-1",
+                             "derivedFromFactId": fact["facts"][0]["id"]}])
 
     def test_intents_need_a_title(self):
         self.fails("add_intent", "没有 title", intents=[{"detail": "没标题"}])
 
+    def test_intents_need_a_batch(self):
+        self.fails("add_intent", "intents 不能为空", title="顶层 title 不算")
+
     def test_kill_work_exhausts_the_intent(self):
-        made = self.ok("add_intent", title="直连数据库")
-        killed = self.ok("kill_work", intent_id=made["intent"]["id"],
+        made = self.ok("add_intent", intents=[{"title": "直连数据库"}])
+        killed = self.ok("kill_work", intent_id=made["intents"][0]["id"],
                          reason="端口不通")
         node = self.store.get_node(self.eid, killed["intentId"])
         self.assertEqual(node["state"], "exhausted")
 
     def test_steer_work_writes_a_correction_fact(self):
-        made = self.ok("add_intent", title="扫一遍子域")
-        steered = self.ok("steer_work", intent_id=made["intent"]["id"],
+        made = self.ok("add_intent", intents=[{"title": "扫一遍子域"}])
+        steered = self.ok("steer_work", intent_id=made["intents"][0]["id"],
                           message="先看 443")
         node = self.store.get_node(self.eid, steered["factId"])
         self.assertTrue(node["payload"]["detail"].startswith("纠偏指令："))
 
     def test_steer_work_needs_a_message(self):
-        made = self.ok("add_intent", title="扫一遍子域")
+        made = self.ok("add_intent", intents=[{"title": "扫一遍子域"}])
         self.fails("steer_work", "message 不能为空",
-                   intent_id=made["intent"]["id"])
+                   intent_id=made["intents"][0]["id"])
 
 
 class ScopeTestCase(_ArtexCase):
@@ -259,9 +300,12 @@ class ScopeTestCase(_ArtexCase):
 
     def test_hints_become_info_facts(self):
         data = self.ok("add_hint", text="同事说后台在 8443")
-        node = self.store.get_node(self.eid, data["facts"][0]["id"])
+        node = self.store.get_node(self.eid, data["hints"][0]["id"])
         self.assertEqual(node["payload"]["factKind"], "info")
         self.assertIn("8443", node["payload"]["detail"])
+
+    def test_hints_need_a_body(self):
+        self.fails("add_hint", "至少要有一条提示正文")
 
     def test_assets_are_reused_by_type_and_value(self):
         first = self.ok("insert_assets", assets=[
@@ -286,7 +330,7 @@ class ScopeTestCase(_ArtexCase):
         self.ok("report_finding", summary="弱口令", asset_ids=[asset])
         gone = self.ok("delete_assets_by_host", host="example.test")
         self.assertEqual(gone["count"], 1)
-        self.assertEqual(gone["findingsWithDanglingAsset"], 1,
+        self.assertEqual(len(gone["findingsWithDanglingAsset"]), 1,
                          "删资产前要说清有多少条漏洞会指向空")
 
     def test_delete_assets_needs_a_host(self):
@@ -342,14 +386,17 @@ class TrafficTestCase(_ArtexCase):
     def test_get_returns_both_sides(self):
         data = self.ok("traffic_get", id=self.traffic)
         self.assertEqual(data["traffic"]["id"], self.traffic)
-        self.assertIn("admin", data["request"]["body"])
+        # 正文是分页结构（text / nextOffset / hasMore…），不是一根裸字符串：
+        # 一条几十万字符的响应要能继续读下去。
+        self.assertIn("admin", data["request"]["body"]["text"])
         self.assertTrue(data["responseTruncated"])
 
     def test_blob_pages_the_body(self):
         data = self.ok("traffic_blob", hash=self.traffic, side="response",
                        offset=0, length=100)
         self.assertEqual(data["side"], "response")
-        self.assertEqual(len(data["body"]), 100)
+        self.assertEqual(len(data["text"]), 100)
+        self.assertTrue(data["hasMore"], "4000 字节只给了 100，还要能续读")
 
     def test_blob_needs_a_traffic_id(self):
         self.fails("traffic_blob", "hash 不能为空")
@@ -359,10 +406,10 @@ class TrafficTestCase(_ArtexCase):
         fid = made["finding"]["id"]
         first = self.ok("bind_finding_traffic", finding_id=fid,
                         traffic_refs=[self.traffic])
-        self.assertEqual(first["added"], 1)
+        self.assertEqual(len(first["added"]), 1)
         again = self.ok("bind_finding_traffic", finding_id=fid,
                         traffic_refs=[self.traffic])
-        self.assertEqual(again["added"], 0, "同一条流量不该挂两遍")
+        self.assertEqual(again["added"], [], "同一条流量不该挂两遍")
         self.assertEqual(len(again["trafficRefs"]), 1)
 
     def test_binding_refuses_an_unknown_traffic_id(self):
@@ -374,6 +421,18 @@ class TrafficTestCase(_ArtexCase):
         made = self.ok("report_finding", summary="登录处可爆破")
         self.fails("bind_finding_traffic", "traffic_refs 不能为空",
                    finding_id=made["finding"]["id"])
+
+    def test_get_finding_traffic_summarises_without_a_side(self):
+        made = self.ok("report_finding", summary="登录处可爆破",
+                       traffic_refs=[self.traffic])
+        data = self.ok("get_finding_traffic",
+                       finding_id=made["finding"]["id"])
+        self.assertEqual(data["side"], "summary")
+        self.assertEqual(data["traffic"][0]["requestBytes"], len("user=admin"))
+        self.assertNotIn("body", data["traffic"][0])
+        with_body = self.ok("get_finding_traffic",
+                            finding_id=made["finding"]["id"], side="request")
+        self.assertIn("admin", with_body["traffic"][0]["body"]["text"])
 
 
 class CaseTestCase(_ArtexCase):
@@ -412,6 +471,12 @@ class CaseTestCase(_ArtexCase):
     def test_case_report_refuses_an_unknown_case(self):
         self.fails("update_finding_case_report", "找不到这个案卷",
                    case_id="nope", version="v1", report="x")
+
+    def test_get_finding_case_accepts_the_group_key(self):
+        group = self._group()
+        page = self.ok("get_finding_case", case_id=group["key"])
+        self.assertEqual(page["total"], 2)
+        self.assertEqual(page["findings"][0]["severity"], "low")
 
     def test_retest_appends_and_keeps_history(self):
         made = self.ok("report_finding", summary="弱口令")
@@ -468,9 +533,7 @@ class CaseTestCase(_ArtexCase):
         self.assertEqual(merged["severity"], "high", "合并取更严重的那一档")
         loser = self.store.get_node(self.eid, b)
         self.assertEqual(loser["payload"]["mergedInto"], [a])
-        self.assertTrue(loser["payload"]["description"].endswith(
-            "（已并入 %s：同一件事）" % a) or "已并入" in
-            loser["payload"]["description"])
+        self.assertIn("已并入", loser["payload"]["description"])
         self.assertEqual(len(self.store.list_nodes(self.eid, "finding")), 2,
                          "合并只标不删：旧记录要能查")
 
@@ -493,7 +556,7 @@ class CaseTestCase(_ArtexCase):
                        finding_ids=[first["finding"]["id"],
                                     second["finding"]["id"]],
                        title="合并后", reason="同一件事")
-        self.assertEqual(len(data["proposal"]["records"]), 2)
+        self.assertEqual(data["proposal"]["records"], 2)
         self.assertEqual(len(self.store.list_nodes(self.eid, "finding")), 2,
                          "建议不该动任何记录")
 
@@ -518,11 +581,15 @@ class IntelligenceTestCase(_ArtexCase):
 
     def test_intelligence_refuses_an_unknown_kind(self):
         self.fails("record_intelligence", "kind 必须是", kind="gossip",
-                   title="x", content="y", evidence="z")
+                   title="x", content="y", evidence="z",
+                   confidence="observed")
 
     def test_intelligence_needs_evidence(self):
+        # 校验顺序是 kind → confidence → title → content → evidence：
+        # 不给 confidence 会先撞上它，所以这条用例必须把它补上。
         self.fails("record_intelligence", "evidence 不能为空",
-                   kind="lead", title="x", content="y")
+                   kind="lead", title="x", content="y",
+                   confidence="inferred")
 
 
 class TaskTestCase(_ArtexCase):
@@ -535,13 +602,20 @@ class TaskTestCase(_ArtexCase):
 
     def test_spawn_task_creates_a_child_it_can_pause(self):
         data = self.ok("spawn_task", description="子任务：打 443",
-                       goal="拿到 443 的证书")
+                       goal="拿到 443 的证书", parent_ref=self.eid)
         child = data["taskId"]
         self.assertNotEqual(child, self.eid)
-        # 子任务天生带 goal-1，父引用要写进去
+        self.assertEqual(data["parentRef"], self.eid)
+        self.assertEqual(data["sourceTaskIds"], [self.eid])
         meta = self.store.get_task(child)
-        self.assertIn(self.eid, meta.get("sourceTaskIds") or []
-                      or [data.get("parentRef")])
+        self.assertIn(self.eid, meta.get("sourceTaskIds") or [])
+
+    def test_spawn_task_can_seed_an_intent(self):
+        data = self.ok("spawn_task", description="子任务：打 443",
+                       goal="拿到 443 的证书", seed_first_intent=True)
+        intents = self.store.list_nodes(data["taskId"], "intent")
+        self.assertEqual(len(intents), 1)
+        self.assertEqual(intents[0]["id"], data["seedIntent"])
 
     def test_spawn_task_refuses_too_many_parents(self):
         self.fails("spawn_task", "最多 8 个", description="子任务",
@@ -550,6 +624,9 @@ class TaskTestCase(_ArtexCase):
     def test_spawn_task_refuses_a_short_no_result_window(self):
         self.fails("spawn_task", "要么是 0", description="子任务", goal="x",
                    no_result_seconds=30)
+
+    def test_spawn_task_needs_a_goal(self):
+        self.fails("spawn_task", "goal 不能为空", description="子任务")
 
     def test_pause_task_flips_both_ways(self):
         self.assertTrue(self.ok("pause_task")["paused"])
@@ -565,6 +642,11 @@ class TaskTestCase(_ArtexCase):
                         scope="example.test")
         self.assertFalse(again["created"], "同一个 scope 不该建第二个目标")
         self.assertNotEqual(again["taskId"], self.eid)
+
+    def test_company_scope_needs_both_halves(self):
+        self.fails("add_company_scope", "company 不能为空",
+                   scope="example.test")
+        self.fails("add_company_scope", "scope 不能为空", company="example")
 
 
 class SkillTestCase(_ArtexCase):
@@ -583,14 +665,16 @@ class SkillTestCase(_ArtexCase):
         self.assertIn("2. 再看 443", body)
 
     def test_create_does_not_overwrite_an_existing_one(self):
+        # `overwritten` 恒为 False：重名不是一次「覆盖成功」，而是根本没写。
         first = self.ok("create_skill", name="My Probe", description="a",
                         instructions="original")
         second = self.ok("create_skill", name="My Probe", description="b",
                          instructions="replacement")
-        self.assertTrue(second["overwritten"])
         self.assertFalse(second["overwritten"])
         with open(first["path"], encoding="utf-8") as handle:
-            self.assertIn("original", handle.read())
+            body = handle.read()
+        self.assertIn("original", body)
+        self.assertNotIn("replacement", body)
 
     def test_create_needs_both_description_and_body(self):
         self.fails("create_skill", "description 不能为空", name="x",
@@ -601,13 +685,20 @@ class SkillTestCase(_ArtexCase):
     def test_created_skills_show_up_in_the_catalog(self):
         data = self.ok("create_skill", name="My Probe", description="a",
                        instructions="b")
-        names = [row["name"] for row in skills.catalog({}, self.plane.data_dir)]
-        self.assertIn(data["slug"], names)
+        rows = skills.catalog({}, self.plane.data_dir)
+        # 目录里显示的是 frontmatter 的 `name:`（也就是当初传进来的原文），
+        # 不是目录名 slug：`update_skill_file` 认的也是这一个。
+        names = [row["name"] for row in rows]
+        self.assertIn("My Probe", names)
+        self.assertEqual(data["slug"], "My-Probe")
+        row = [item for item in rows if item["name"] == "My Probe"][0]
+        self.assertTrue(row["directory"], "目录型手册要标出来")
+        self.assertEqual(os.path.basename(row["path"]), "SKILL.md")
 
     def test_update_writes_into_the_same_folder(self):
         made = self.ok("create_skill", name="My Probe", description="a",
                        instructions="b")
-        updated = self.ok("update_skill_file", name=made["slug"],
+        updated = self.ok("update_skill_file", name=made["name"],
                           file="reference.md", content="# 参考\n")
         self.assertEqual(os.path.basename(updated["path"]), "reference.md")
         self.assertEqual(os.path.dirname(updated["path"]),
@@ -617,7 +708,7 @@ class SkillTestCase(_ArtexCase):
         made = self.ok("create_skill", name="My Probe", description="a",
                        instructions="b")
         self.fails("update_skill_file", "拒绝写到这份手册的目录之外",
-                   name=made["slug"], file="../../escape.md", content="x")
+                   name=made["name"], file="../../escape.md", content="x")
 
     def test_update_refuses_an_unknown_skill(self):
         self.fails("update_skill_file", "没有名为", name="nope", content="x")
@@ -632,7 +723,8 @@ class RegistryTestCase(_ArtexCase):
                        exec={"binaries": ["myprobe"]})
         self.assertEqual(data["path"], self.tools_path)
         self.assertTrue(os.path.isfile(self.tools_path))
-        rows = json.load(open(self.tools_path, encoding="utf-8"))["adapters"]
+        with open(self.tools_path, encoding="utf-8") as handle:
+            rows = json.load(handle)["adapters"]
         self.assertIn("myprobe", [row["id"] for row in rows])
 
     def test_create_custom_tool_refuses_a_duplicate(self):
@@ -650,7 +742,8 @@ class RegistryTestCase(_ArtexCase):
         self.ok("create_custom_tool", key="myprobe", description="内网探针",
                 kind="shell", exec={"binaries": ["myprobe"]})
         self.ok("update_custom_tool", key="myprobe", description="换个说法")
-        rows = json.load(open(self.tools_path, encoding="utf-8"))["adapters"]
+        with open(self.tools_path, encoding="utf-8") as handle:
+            rows = json.load(handle)["adapters"]
         row = [item for item in rows if item["id"] == "myprobe"][0]
         self.assertEqual(row["class"], "shell", "没提到的字段不能被清掉")
         self.assertEqual(row["binaries"], ["myprobe"])
@@ -676,6 +769,11 @@ class RegistryTestCase(_ArtexCase):
         self.fails("create_mcp", "不支持的权限档", name="demo",
                    transport="stdio", command="npx", level="root")
 
+    def test_create_mcp_refuses_a_duplicate(self):
+        self.ok("create_mcp", name="demo", transport="stdio", command="npx")
+        self.fails("create_mcp", "已经登记过", name="demo",
+                   transport="stdio", command="npx")
+
     def test_update_mcp_keeps_command_and_timeout_when_only_renaming(self):
         # 这一条钉的是一个真实修过的缺陷：整条覆盖时如果不把原值补回，
         # “只改名称”会把 command 抹空、把超时从 30 秒还原成默认 60 秒。
@@ -699,7 +797,8 @@ class TaskResolutionTestCase(_ArtexCase):
 
     def test_explicit_task_id_wins(self):
         other = self.store.create_engagement("10.10.10.251")["id"]
-        self.ok("add_intent", title="在别的目标里", task_id=other)
+        self.ok("add_intent", intents=[{"title": "在别的目标里"}],
+                task_id=other)
         self.assertEqual(len(self.store.list_nodes(other, "intent")), 1)
         self.assertEqual(len(self.store.list_nodes(self.eid, "intent")), 0,
                          "task_id 指到哪儿就写哪儿")
@@ -719,7 +818,8 @@ class TaskResolutionTestCase(_ArtexCase):
             self.assertEqual(empty_store.list_engagements(), [],
                              "读路径不许顺手建一个目标")
         finally:
-            support.stop(None, empty_store, empty_directory)
+            empty_store.close()
+            empty_directory.cleanup()
 
 
 class GateTestCase(_ArtexCase):
@@ -760,6 +860,12 @@ class GateTestCase(_ArtexCase):
                                     role="operator")
         self.assertTrue(outcome["ok"], outcome["summary"])
 
+    def test_unknown_tool_lists_what_exists(self):
+        outcome = chat.execute_tool(self.plane, "nope", "{}", self.eid,
+                                    policy_id="full", role="admin")
+        self.assertFalse(outcome["ok"])
+        self.assertIn("不存在名为 nope 的工具", outcome["summary"])
+
 
 class SmugglingTestCase(unittest.TestCase):
     """`execute()` 是 artex 自己的入口，它必须和 `invoke_tool` 一致地报错。"""
@@ -773,7 +879,8 @@ class SmugglingTestCase(unittest.TestCase):
 
     def tearDown(self):
         skills.invalidate()
-        support.stop(None, self.store, self.directory)
+        self.store.close()
+        self.directory.cleanup()
 
     def test_execute_refuses_an_unknown_tool(self):
         with self.assertRaises(ValueError) as caught:
@@ -781,8 +888,10 @@ class SmugglingTestCase(unittest.TestCase):
         self.assertIn("没有实现这条工具", str(caught.exception))
 
     def test_execute_runs_a_real_one(self):
+        # `execute` 交回来的是 `_ok(...)` 原样：`summary` / `data` / `touched`，
+        # `ok` 是 `invoke_tool` 那一层补上的，不该在这里出现。
         outcome = artex.execute(self.plane, "graph_overview", {}, self.eid)
-        self.assertTrue(outcome["ok"])
+        self.assertEqual(sorted(outcome), ["data", "summary", "touched"])
         self.assertEqual(outcome["data"]["taskId"], self.eid)
 
 

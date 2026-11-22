@@ -38,20 +38,47 @@ const BASE_HEADROOM = 5;              // 从基准之上还能再放大五倍（
 // 单位）。用用户坐标定阈值，手抖 1 像素就跨过阈值，于是每一次点选都被判成拖拽、
 // 被 endDrag 吞掉——表现就是"切换节点，节点详情不变"。
 const CLICK_SLOP_PX = 4;
-const KIND_LABEL = { goal: '目标', intent: '意图', fact: '事实', finding: '漏洞', digest: '摘要', asset: '资产' };
+/* 卡上那个「这是什么」的读法。**八个词，不是一个 kind 一个词**：
+ *  `begin` / `hint` 是显示类型（见 `displayKindOf`），库里并没有这两类节点——
+ *  起点是一颗 `state=origin` 的事实（任务根），提示是一条 `channel=hint` 的事实。
+ *  后端 `pentestd/graph.py` 的 `DISPLAY_LABELS` 是同一份词表的另一处，改一处要改两处。
+ *
+ *  `digest` 叫「压缩」而不是「摘要」：这一页上「摘要」还指对话摘要、报告摘要、
+ *  令牌摘要，同一个词在三处指三件事，读图的人只能靠上下文猜。压缩说的正是它的
+ *  行为——把若干条记录压成一段。 */
+const KIND_LABEL = { begin: '起点', goal: '目标', hint: '提示', intent: '意图', fact: '事实', finding: '漏洞', digest: '压缩', asset: '资产' };
 // 节点的生命周期状态（与 `models.STATE_LABELS` 同一套说法）：它回答「这条记录的进展」，
 // 与 `kind` 回答的「这是什么」分开——摘要有 active / superseded，事实有 origin / confirmed。
 // `blocked` / `pending` 是编排面新增的两档（意图可以被挂起或判定走进死路）。原先这份表
 // 只有七个词，于是那两档在卡上会退回显示英文原文——状态是给人扫读的，露出原词等于没有。
 const STATE_LABEL = { origin: '起点', confirmed: '已确认', done: '已完成', exhausted: '已穷尽', met: '已达成', active: '进行中', superseded: '已取代', blocked: '已阻塞', pending: '待跟进' };
-const KIND_ORDER = ['goal', 'intent', 'fact', 'finding', 'digest', 'asset'];
+/* 类型芯片与图例的顺序（照 ARTEX 的画布图例：起点在最前，它是整张图的入口）。
+ *  这份表必须与 `state.kindFilter` 的键**完全一致**，漏一个那一类就关不掉。 */
+const KIND_ORDER = ['begin', 'goal', 'hint', 'intent', 'fact', 'finding', 'digest', 'asset'];
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 const SEVERITY_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '信息' };
-const EDGE_LABEL = { spawns: '意图链', yields: '产出', derived_from: '推导自', proves: '证实', covers: '覆盖', parent: '归属' };
+/* 关系的中文名。四条是**画布上真画出来的**（其余两条见 `EDGE_HIDDEN_KINDS`）：
+ *
+ *  * `spawns` 目标 → 意图，叫「派生」；
+ *  * `derived_from` 事实 → 新意图，叫「意图链」——它就是上一个意图留下的疑点
+ *    又长出一条新意图的那一步；
+ *  * `yields` 意图 → 事实，叫「产出」；
+ *  * `proves` 意图 → 漏洞，叫「证明」。
+ *
+ * 换过一轮：原先 `spawns` 叫「意图链」而它连的是目标→意图，`derived_from` 叫
+ * 「推导自」而它连的是两条意图之间的接力，两个词互相顶着。换过来之后边名自己
+ * 说清谁派生谁。后端 `pentestd/models.py` 的 `EDGE_LABELS` 是同一份。 */
+const EDGE_LABEL = { spawns: '派生', derived_from: '意图链', yields: '产出', proves: '证明', covers: '覆盖', parent: '归属' };
 /** 图谱关系类型。**这里只有类型，没有颜色**——颜色由 CSS 令牌（--edge-*）下发，
  *  见 style.css 的 .gedge 一节。SVG 的表现属性不认 var()，颜色写在这里就等于
  *  整组绕过主题：换主题时节点换了色，边还是深色主题那一套。 */
-const EDGE_KINDS = ['spawns', 'yields', 'derived_from', 'proves', 'covers', 'parent'];
+/* 画布上画的关系，只有这四种。`covers` 是「压缩吸收了谁」、`parent` 是资产父子，
+ *  两条都是**结构**而不是推进：画出来会让压缩节点向它吸收的每条记录发散一把虚线，
+ *  整张图立刻从一条链变成一张网。它们仍在 layout 里（详情面板与离线 SVG 用），
+ *  只是不上画布——见 `EDGE_HIDDEN_KINDS`。 */
+const EDGE_KINDS = ['spawns', 'derived_from', 'yields', 'proves'];
+/** 有数据、但不画在画布上的关系。详情面板与导出仍然列它们。 */
+const EDGE_HIDDEN_KINDS = ['covers', 'parent'];
 /** 没见过的 kind 按这个上色。必须与 .gedge 基础规则里的默认令牌一致。 */
 const EDGE_FALLBACK_KIND = 'spawns';
 /* 资产类型的中文说法。**这不是唯一的来源**：权威词表在 `pentestd/models.py` 的
@@ -74,7 +101,7 @@ const FIELD_LABEL = {
   // 合并视图给每个节点补的两个字段。没有标签的话它们在详情面板里显示为原始键名
   // （`engagementId`），而这是使用者判断"这条证据是哪个目标的"唯一依据。
   engagementId: '所属目标', engagementTarget: '目标地址', goalId: '所属目标节点',
-  derivedFromFactId: '推导自',
+  derivedFromFactId: '意图链',
 };
 
 /* ---------------------------------------------------------- 2. 工具 ---- */
@@ -84,7 +111,24 @@ const asArray = (v) => (Array.isArray(v) ? v : []);
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const emptyBlock = (text) => el('div', 'empty', text);
 const errorBlock = (text) => el('div', 'empty error', text);
+/** 严重度的规范值：认不出的或空的都落回 `info`。
+ *
+ *  后端给的是原值，直接拼进类名会得到 `sev-` 或 `sev-unknown`，样式表里没有这两种，
+ *  圆点又回到没有颜色的老问题。全站所有档位渲染（漏洞卡片、详情页、过滤条、节点卡）
+ *  都必须先过这里。 */
 const severityOf = (v) => { const s = String(v || '').toLowerCase(); return SEVERITY_ORDER.includes(s) ? s : 'info'; };
+/** 卡上那个「这是什么」：**七个结构类型 + 一个派生出来的「起点」**。
+ *
+ *  `state=origin` 的事实就是任务根（整张图最左边那张），画成事实会和它右边一堆
+ *  探测结果长得一样，而它其实是「这条链路从哪来」的那一条。后端 `build_layout`
+ *  已经算好 `displayKind`，这里只兜底——本地缓存的旧快照、或者一次没走布局的
+ *  节点，都还没有那个字段。 */
+const displayKindOf = (node) => (node && (node.displayKind || node.kind)) || 'intent';
+/** 优先级 → 三档语气。照 ARTEX 的 `prioTone`：8 以上红灯、5 以上黄灯、其余中性。
+ *
+ *  三档而不是按 1-9 线性插值：这条读数只在「这张卡要不要先看」这一件事上有意义，
+ *  九个色阶会让人以为 P6 与 P7 之间有可分辨的差别，而实际上没有。 */
+const priorityTone = (p) => (p >= 8 ? 'red' : p >= 5 ? 'amber' : 'slate');
 const cssEscape = (v) => (window.CSS && window.CSS.escape ? window.CSS.escape(String(v)) : String(v).replace(/["\\\]]/g, '\\$&'));
 
 /** 创建 HTML 元素：文本走 textContent，天然转义。 */
@@ -284,9 +328,10 @@ const state = {
   // 当前正在跟随哪条任务的执行过程（null = 没在跟随）。它是**内存态**，
   // 刻意不进 URL：一条 SSE 长连接不该因为有人分享了地址而被别人接过去。
   jobLog: null,
-  // 六个类型一个不能少：漏掉哪个，那一类的节点就在启动那一秒被判定成「已关闭」，
-  // 而芯片却是亮着的——图上一整类节点凭空消失，芯片点两下才回来。
-  kindFilter: { goal: true, intent: true, fact: true, finding: true, digest: true, asset: true },
+  // 八个类型一个不能少（与 `KIND_ORDER` 同一组键）：漏掉哪个，那一类的节点就在
+  // 启动那一秒被判定成「已关闭」，而芯片却是亮着的——图上一整类节点凭空消失，
+  // 芯片点两下才回来。
+  kindFilter: { begin: true, goal: true, hint: true, intent: true, fact: true, finding: true, digest: true, asset: true },
   severityFilter: new Set(SEVERITY_ORDER),
   keyword: '', selectedNodeId: null, selectedAssetId: null,
   loaded: { findings: false, assets: false, report: false }, inflight: {},
@@ -635,10 +680,66 @@ function buildNodeIndex(view) {
     asArray(groups[key]).forEach((raw) => { if (raw && raw.id) index.set(raw.id, { kind, raw }); }));
   return index;
 }
-/** 画边：坐标全部来自后端 layout。 */
+/** 压缩折叠：被「压缩」吸收掉的记录不再单画，它的边改挂到那张压缩卡上。
+ *
+ *  为什么折叠：压缩存在的意义就是「这些细节我看过了，结论在这一段里」。不折叠，
+ *  压缩卡只是在链路右边多出一列孤岛——它吸收的十几条事实照样铺在链路里，读的人
+ *  还是得一条条读，而压缩本身反而成了噪音。折叠之后，那个位置只剩一句结论，
+ *  想看细节点开它（详情面板列成员，照 ARTEX 的抽屉）。
+ *
+ *  三条规矩，都照 ARTEX 的 `collapseDigestGraph`：
+ *
+ *  * 只留 `state=active` 的压缩——被取代的那一代整个丢掉，它的成员回到链路里
+ *    （否则它们会变成一群**没有归属**的孤儿：压缩没了，谁来认领这些事实）；
+ *  * 成员收走之后，原本连成员的边改挂到压缩上，自环丢掉、同向同类型的去重；
+ *  * 折叠之后若「产出 A→B」与「意图链 B→A」成了同一件事的两面，丢掉 `derived_from`
+ *    ——背着箭头画一条反方向的线，读起来像两件事。
+ *
+ *  折叠只在**画布**上发生：`state.graph.edges` 与 `layout.edges` 一个字不动，
+ *  详情面板与被收走的成员照样查得到，离线 SVG 也照旧画全。 */
+function collapseDigests(nodes, edges) {
+  const active = new Set();
+  nodes.forEach((node) => {
+    if (node.kind === 'digest' && (node.state || 'active') === 'active') active.add(node.id);
+  });
+  if (!active.size) return { nodes, edges: asArray(edges) };
+  const member = new Map();
+  asArray(edges).forEach((edge) => {
+    if (edge.kind === 'covers' && active.has(edge.source)) member.set(edge.target, edge.source);
+  });
+  const kept = nodes.filter((node) => (node.kind === 'digest'
+    ? active.has(node.id)                                  // 被取代的压缩整个不画
+    : !member.has(node.id)));                              // 被吸收的记录画进压缩里
+  // 全都收走就说明这张图里只有压缩与它吸收的东西，收完只剩孤零零几张压缩卡——
+  // 那时宁可摊开：空图比折叠图更难读。
+  if (!kept.length) return { nodes, edges: asArray(edges) };
+  const moved = (id) => member.get(id) || id;
+  const seen = new Set(), produced = new Set(), out = [];
+  asArray(edges).forEach((edge) => {
+    if (edge.kind === 'covers') return;                    // 覆盖是结构，不画
+    const source = moved(edge.source), target = moved(edge.target);
+    if (source === target) return;                         // 自环：压缩吸收自己的成员
+    const key = source + '|' + edge.kind + '|' + target;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (edge.kind === 'yields') produced.add(target + '|' + source);
+    out.push(Object.assign({}, edge, { source, target }));
+  });
+  return {
+    nodes: kept,
+    edges: out.filter((edge) => !(edge.kind === 'derived_from'
+      && produced.has(edge.source + '|' + edge.target))),
+  };
+}
+/** 画边：坐标全部来自后端 layout。
+ *
+ *  只画 `EDGE_KINDS` 里那四种推进关系。`covers` / `parent` 有数据但不画：压缩节点
+ *  吸收了十几条记录，每条一条虚线，画布就从一条链变成一张网，而这两条关系在详情
+ *  面板里读得比在图上清楚（它们是「归属」，不是「推进到哪一步」）。 */
 function renderEdges(layer, layoutEdges, boxes) {
   graphIndex.edgeItems = [];
   asArray(layoutEdges).forEach((edge) => {
+    if (EDGE_HIDDEN_KINDS.indexOf(edge.kind) >= 0) return;
     const from = boxes.get(edge.source), to = boxes.get(edge.target);
     if (!from || !to) return;
     const kind = EDGE_KINDS.indexOf(edge.kind) >= 0 ? edge.kind : EDGE_FALLBACK_KIND;
@@ -687,60 +788,78 @@ function svgPill(right, top, text, size, className) {
   label.textContent = text;
   return [rect, label];
 }
-/** 画节点：一张卡上四层信息。
+/** 画节点：一张卡按 ARTEX 的三行排。
  *
- *  左上角是**类型**（彩色圆点 + 中文名），右上角是**优先级**（P3 这种小胶囊，0 不画），
- *  中间是标题与副标题，右下角是**生命周期状态**（已确认 / 已穷尽…），左下角是节点 id。
+ *  第一行是**这是什么**——彩色图标块 + 中文类型名，右端挂优先级（`P3`；0 是「没定级」，
+ *  不是「P0」，所以不画）。第二行是**说了什么**——标题一行、说明两行，多的截断，
+ *  全文留在悬浮提示里。第三行是**走到哪一步**——左端状态胶囊，右端节点 id。
  *
- *  类型、优先级、状态是三件互相正交的事，所以各占一个角而不是挤成一行标签：
- *  挤成一行时，扫读的人分不清"橙色"说的是这是个漏洞，还是它很急，还是它已经做完了。
- *  颜色只在圆点与两个胶囊上，卡身保持中性——整张图靠"颜色出现在哪"来分区。
+ *  为什么不是四角布局：优先级与状态原先各占右上、右下两个角，中间被标题与副标题
+ *  横穿，扫读时眼睛要走 Z 字。三行之后每一行只说一件事，从上往下读两遍就够。
+ *
+ *  颜色只在图标块、类型名与两颗胶囊上，卡身保持中性——八种类型各有全套配色，
+ *  卡身也上色的话整张图就成了一片互不相让的色块。
  */
 function renderNodes(layer, nodes, boxes) {
   graphIndex.nodeItems = [];
   nodes.forEach((node) => {
-    const box = boxes.get(node.id), kind = node.kind || 'intent';
-    const group = svgEl('g', { class: `gnode kind-${kind}`, 'data-id': node.id, 'data-kind': kind });
+    const box = boxes.get(node.id), kind = displayKindOf(node);
+    const group = svgEl('g', { class: 'gnode kind-' + kind, 'data-id': node.id, 'data-kind': kind });
     if (node.severity) group.classList.add('sev-' + severityOf(node.severity));
     const tip = svgEl('title');
     const parts = [
-      svgEl('rect', { class: 'gnode-box', x: box.x, y: box.y, width: box.w, height: box.h, rx: '8' }),
-      // 左上角：类型圆点 + 类型名。圆点用 currentColor 上色，颜色由 `.gnode.kind-*`
-      // 写在 `<g>` 上的 `color` 决定——一处声明同时喂给圆点、类型名与胶囊，
-      // 不必为六个类型各写一条 fill 规则。
-      svgEl('circle', { class: 'gnode-dot', cx: box.x + 13, cy: box.y + 14, r: '3.5' }),
+      svgEl('rect', { class: 'gnode-box', x: box.x, y: box.y, width: box.w, height: box.h, rx: '10' }),
+      // 第一行左端：图标块 + 圆点 + 中文类型名。图标块是 `currentColor` 的淡底
+      // （`.gnode-icon`）、圆点是实的 `currentColor`，颜色由 `.gnode.kind-*` 写在
+      // `<g>` 上的 `color` 决定——一处声明同时喂给图标、圆点、类型名与胶囊。
+      svgEl('rect', { class: 'gnode-icon', x: box.x + 12, y: box.y + 11, width: 16, height: 16, rx: '4' }),
+      svgEl('circle', { class: 'gnode-dot', cx: box.x + 20, cy: box.y + 19, r: '3.2' }),
     ];
-    const kindName = svgEl('text', { class: 'gnode-kind', x: box.x + 21, y: box.y + 18 });
+    const kindName = svgEl('text', { class: 'gnode-kind', x: box.x + 35, y: box.y + 23 });
     kindName.textContent = KIND_LABEL[kind] || kind;
     parts.push(kindName);
+    // 第一行右端：优先级。0 是「没定级」而不是「最低优先级」，所以不画 P0。
+    // 三档色（red / amber / slate）照 ARTEX 的 prioTone：8 以上是红灯，5 以上是黄灯。
     const priority = Number(node.priority) || 0;
-    if (priority > 0) parts.push(...svgPill(box.x + box.w - 10, box.y + 7, 'P' + priority, 9, 'gnode-priority'));
-    const label = svgEl('text', { class: 'gnode-label', x: box.x + 12, y: box.y + 42 });
+    if (priority > 0) {
+      const tone = priorityTone(priority);
+      const pill = svgPill(box.x + box.w - 12, box.y + 9, 'P' + priority, 9, 'gnode-priority');
+      pill.forEach((piece) => piece.classList.add('tone-' + tone));
+      parts.push(...pill);
+    }
+    // 第二行：标题。它承担「这条记录一句话说完了吗」，所以比副标题重一档。
+    const label = svgEl('text', { class: 'gnode-label', x: box.x + 12, y: box.y + 50 });
     label.textContent = truncate(node.label || node.id, Math.max(8, Math.floor((box.w - 24) / 12)));
     parts.push(label);
-    // 副标题按框宽折成两行：单行放不下时截断，而不是让它画到邻居卡上。
+    // 说明按框宽折成两行（ARTEX 的正文是 line-clamp-3，本地标题占掉第一行，所以剩下两行）：
+    // 单行放不下时截断，而不是让它画到邻居卡上。
     const perLine = Math.max(8, Math.floor((box.w - 24) / 11));
     const subtitle = truncate(node.subtitle || '', perLine * 2);
     for (let i = 0; i < 2; i += 1) {
       const chunk = subtitle.slice(i * perLine, (i + 1) * perLine);
       if (!chunk) break;
-      const lineText = svgEl('text', { class: 'gnode-sub', x: box.x + 12, y: box.y + 62 + i * 15 });
+      const lineText = svgEl('text', { class: 'gnode-sub', x: box.x + 12, y: box.y + 68 + i * 15 });
       lineText.textContent = chunk;
       parts.push(lineText);
     }
-    // 右下角：状态胶囊。没有状态就不画——空胶囊会读成"状态缺失"，那是另一个意思。
+    // 第三行左端：状态胶囊。没有状态就不画——空胶囊会读成"状态缺失"，那是另一个意思。
+    // 它左对齐（`svgPill` 收的是右边界，所以先按字宽算出右边界），id 靠右，两个读数
+    // 分占两端：中间空出来的是拖动画布的地方，压在卡上的手势不该被文字挡掉。
     const stateText = node.stateLabel || STATE_LABEL[node.state] || '';
     if (stateText) {
-      const pill = svgPill(box.x + box.w - 10, box.y + box.h - 24, stateText, 9);
+      const pillWidth = Math.ceil(svgTextWidth(stateText, 9) + 12);
+      const pill = svgPill(box.x + 12 + pillWidth, box.y + box.h - 24, stateText, 9);
       pill.forEach((piece) => piece.classList.add('gnode-state', 'state-' + (node.state || 'active')));
       parts.push(...pill);
     }
-    const idText = svgEl('text', { class: 'gnode-id', x: box.x + 12, y: box.y + box.h - 9 });
-    idText.textContent = node.id;
+    const idText = svgEl('text', {
+      class: 'gnode-id', x: box.x + box.w - 12, y: box.y + box.h - 13, 'text-anchor': 'end',
+    });
+    idText.textContent = '#' + node.id;
     parts.push(idText);
-    // 悬浮提示把四层信息串成一行一句：卡片上的字是截断过的，这里是完整的。
+    // 悬浮提示把被截断的内容补全：卡片上的字是截断过的，这里是完整的。
     tip.textContent = [
-      `${KIND_LABEL[kind] || kind}｜${node.label || node.id}`, node.subtitle || '',
+      (KIND_LABEL[kind] || kind) + '｜' + (node.label || node.id), node.subtitle || '',
       stateText, priority > 0 ? 'P' + priority : '', node.id,
     ].filter(Boolean).join('\n');
     parts.push(tip);
@@ -790,12 +909,14 @@ function renderGraph() {
   });
   const viewport = svgEl('g', { id: 'graph-viewport' });
   const edgeLayer = svgEl('g', { class: 'edge-layer' }), nodeLayer = svgEl('g', { class: 'node-layer' });
+  // 折叠只发生在画这一步：`layout` 本身不动，详情面板与离线 SVG 拿到的还是全量。
+  const view = collapseDigests(nodes, layout.edges);
   const boxes = new Map();
-  nodes.forEach((node) => boxes.set(node.id, nodeBox(node)));
+  view.nodes.forEach((node) => boxes.set(node.id, nodeBox(node)));
   viewport.append(edgeLayer, nodeLayer);
   svg.append(defs, viewport);
-  renderEdges(edgeLayer, layout.edges, boxes);
-  renderNodes(nodeLayer, nodes, boxes);
+  renderEdges(edgeLayer, view.edges, boxes);
+  renderNodes(nodeLayer, view.nodes, boxes);
   buildNeighborIndex();
   applyKindFilter();
   // **视图与选中项一律跨重画保留**，只在"画布还没量到尺寸"时摆正一次。
@@ -1031,14 +1152,25 @@ function renderNodeDetail(id) {
   clear(body);
   if (!id) { body.append(emptyBlock('点击左侧节点查看其全部原始字段')); return; }
   if (!entry) { body.append(emptyBlock(`当前数据中找不到节点 ${id}`)); return; }
+  // 类型徽章走**显示类型**而不是结构类型：卡片上写「起点」「提示」的那些节点，点开
+  // 之后如果写回「事实」，读的人会以为自己点错了。显示类型只有后端算得准
+  // （`graph.display_kind`：origin 的事实是起点、channel=hint 的事实是提示），所以这里
+  // 到 layout 里取同一个节点的 `displayKind`，不在前端把那条规则再写一遍。
+  const layoutNode = asArray(state.graph && state.graph.layout && state.graph.layout.nodes)
+    .find((node) => node.id === id);
+  const kind = displayKindOf(layoutNode || { kind: entry.kind });
   const sev = entry.raw.severity ? severityOf(entry.raw.severity) : null, head = el('div', 'detail-title');
-  head.append(el('span', 'detail-badge', KIND_LABEL[entry.kind] || entry.kind));
+  head.append(el('span', 'detail-badge', KIND_LABEL[kind] || kind));
   // 优先级也贴一颗：卡片上它只是个小胶囊，点开之后要能看到那条记录凭什么排在这。
   if (Number(entry.raw.priority) > 0) head.append(el('span', 'detail-badge', 'P' + Number(entry.raw.priority)));
   if (entry.raw.state) head.append(el('span', 'detail-badge', STATE_LABEL[entry.raw.state] || entry.raw.state));
   if (sev) head.append(el('span', `sev-badge sev-${sev}`, SEVERITY_LABEL[sev]));
   head.append(el('span', 'detail-id', id));
   body.append(head, kvList(entry.raw));
+  // 压缩的成员清单。画布上被吸收的记录已经不单画了，这里就是它们唯一的入口——
+  // 折叠是为了「先读结论」，不是「看不见细节」。成员按 id 回查索引，点一下就地
+  // 换成那一条的详情（它不在画布上，所以不会高亮任何卡片，但字段一个不少）。
+  if (kind === 'digest') body.append(digestMembers(entry.raw));
   const related = asArray(state.graph && state.graph.edges).filter((edge) => edge.sourceId === id || edge.targetId === id);
   if (!related.length) return;
   const list = el('ul', 'edge-list');
@@ -1050,6 +1182,35 @@ function renderNodeDetail(id) {
     list.append(item);
   });
   body.append(list);
+}
+/** 压缩的成员清单：它吸收了哪些记录，逐条列出来并可以点进去。
+ *
+ *  成员 id 在 payload.memberIds 里分 facts / intents 两组（这两个词是数据形状，不是
+ *  中文说法），合并成一个列表——对读的人而言「这条记录是事实还是意图」已经写在每条
+ *  的小字里，不必再分成两节。
+ *
+ *  找不到的那条也要列：压缩记的是写入当时的 id 集合，而节点可能已被窗口截掉。
+ *  悄悄跳过会让人以为压缩吸收了 3 条，而它写着 5 条。 */
+function digestMembers(raw) {
+  const box = el('div', 'detail-section'), ids = [];
+  const members = (raw && raw.memberIds) || {};
+  ['facts', 'intents'].forEach((key) => asArray(members[key]).forEach((id) => ids.push(String(id))));
+  box.append(el('div', 'detail-section-head', `成员 ${ids.length} 条`));
+  if (!ids.length) { box.append(emptyBlock('这一代压缩没有吸收任何记录')); return box; }
+  const list = el('ul', 'member-list');
+  ids.forEach((id) => {
+    const hit = state.nodeIndex.get(id), item = el('li', 'member-row');
+    const button = el('button', 'member-open');
+    button.type = 'button';
+    button.append(el('span', 'member-kind', hit ? (KIND_LABEL[displayKindOf(hit.raw)] || hit.kind) : '已不在窗口内'));
+    button.append(el('span', 'member-text', hit ? truncate(String(hit.raw.detail || hit.raw.title || hit.raw.name || id), 60) : id));
+    button.append(el('span', 'member-id', id));
+    if (hit) { button.addEventListener('click', () => renderNodeDetail(id)); }
+    else { button.disabled = true; }
+    item.append(button); list.append(item);
+  });
+  box.append(list);
+  return box;
 }
 function selectNode(id) {
   state.selectedNodeId = id;
