@@ -60,6 +60,12 @@
     // 消息通知：`GET /notify` 的原样返回（设置、渠道、投递记录、下拉选项都在
     // 那一份里，前端不自己再列一遍种类——两边各列一次就会对不上）。
     notify: null, notifyError: null, notifyBusy: null, notifyEditingId: null,
+    // 工具拦截：`GET /intercept` 的原样返回（开关、规则表、试匹配用的枚举都在里面）。
+    // `interceptEditingId` 为 null 表示表单处于「新建」，否则是在改哪一条。
+    intercept: null, interceptError: null, interceptBusy: null,
+    interceptEditingId: null,
+    // 探索链路：`GET /exploration` 的原样返回（开关、上下界、每个目标的缺口）。
+    exploration: null, explorationError: null, explorationBusy: null,
   };
 
   let dom = {};
@@ -168,6 +174,41 @@
     notifyExtra: byId('notify-extra'), notifySubmit: byId('notify-submit'),
     notifyCancel: byId('notify-cancel'), notifyFormMessage: byId('notify-form-message'),
     notifyDeliveries: byId('notify-deliveries'),
+    interceptMeta: byId('intercept-meta'), interceptRefresh: byId('intercept-refresh'),
+    interceptMessage: byId('intercept-message'),
+    interceptSettingsForm: byId('intercept-settings-form'),
+    interceptEnabled: byId('intercept-enabled'), interceptSave: byId('intercept-save'),
+    interceptReset: byId('intercept-reset'),
+    interceptSettingsMessage: byId('intercept-settings-message'),
+    interceptTestForm: byId('intercept-test-form'),
+    interceptTestTool: byId('intercept-test-tool'),
+    interceptTestText: byId('intercept-test-text'),
+    interceptTestMessage: byId('intercept-test-message'),
+    interceptTest: byId('intercept-test'),
+    interceptRules: byId('intercept-rules'),
+    interceptFormTitle: byId('intercept-form-title'),
+    interceptForm: byId('intercept-rule-form'), interceptName: byId('intercept-name'),
+    interceptPriority: byId('intercept-priority'),
+    interceptRuleEnabled: byId('intercept-rule-enabled'),
+    interceptMatchType: byId('intercept-match-type'),
+    interceptPattern: byId('intercept-pattern'),
+    interceptMessageText: byId('intercept-message-text'),
+    interceptTimeoutEnabled: byId('intercept-timeout-enabled'),
+    interceptTimeoutSeconds: byId('intercept-timeout-seconds'),
+    interceptTimeoutAction: byId('intercept-timeout-action'),
+    interceptSubmit: byId('intercept-submit'), interceptCancel: byId('intercept-cancel'),
+    interceptFormMessage: byId('intercept-form-message'),
+    explorationMeta: byId('exploration-meta'),
+    explorationRefresh: byId('exploration-refresh'),
+    explorationMessage: byId('exploration-message'),
+    explorationSettingsForm: byId('exploration-settings-form'),
+    explorationEnabled: byId('exploration-enabled'),
+    explorationInterval: byId('exploration-interval'),
+    explorationMax: byId('exploration-max'),
+    explorationSave: byId('exploration-save'),
+    explorationTick: byId('exploration-tick'),
+    explorationSettingsMessage: byId('exploration-settings-message'),
+    explorationEngagements: byId('exploration-engagements'),
     };
   }
 
@@ -1343,6 +1384,10 @@
       if (view.group === 'mcp' && !view.mcp) loadMcp();
       // 通知同理：渠道的「最近一次投递成功没有」会变，第一次切进来现拉一次。
       if (view.group === 'notify' && !view.notify) loadNotify();
+      // 拦截规则也是会变的（另一个管理员刚加了一条），第一次切进来现拉一次。
+      if (view.group === 'intercept' && !view.intercept) loadIntercept();
+      // 探索链路推导的是**当前**的缺口（另一个人刚提交了漏洞就会变），切进来现拉一次。
+      if (view.group === 'exploration' && !view.exploration) loadExploration();
       // DSH 运行时的状态也是会变的（另一台管理员刚打开、DSH 刚被装上），
       // 而设置页的整体加载可能发生在很久之前 —— 第一次切进来时现拉一次。
       // 「扫描执行」与它在同一个响应里，所以两组共用这一次拉取。
@@ -2851,6 +2896,504 @@
     }
   }
 
+  /* ---------------------------------------------------------- 工具拦截 ---- */
+
+  function interceptRulePayload(rule, overrides) {
+    const next = overrides || {};
+    return {
+      id: rule.id,
+      name: next.name !== undefined ? next.name : rule.name,
+      enabled: next.enabled !== undefined ? next.enabled : rule.enabled,
+      priority: next.priority !== undefined ? next.priority : rule.priority,
+      matchTarget: rule.matchTarget || "tool_input",
+      matchType: rule.matchType || "regex",
+      pattern: next.pattern !== undefined ? next.pattern : rule.pattern,
+      action: rule.action || "deny",
+      message: rule.message || "",
+      timeoutEnabled: rule.timeoutEnabled,
+      timeoutSeconds: rule.timeoutSeconds,
+      timeoutAction: rule.timeoutAction,
+    };
+  }
+
+  function interceptRuleCard(rule) {
+    const card = el("article", "intercept-card");
+    const head = el("div", "mode-head");
+    head.append(el("strong", "mode-name", rule.name || rule.id));
+    // 优先级不折成「高/中/低」：匹配就是按这个数从大到小逐条试的，
+    // 折成档位之后人就没法解释「为什么是 B 先命中而不是 A」。
+    head.append(el("span", "mode-badge", "P" + rule.priority));
+    if (rule.builtin) head.append(el("span", "mode-badge", "内置"));
+    if (!rule.enabled) head.append(el("span", "mode-badge", "已停用"));
+    card.append(head);
+    card.append(el("code", "mode-id", rule.id));
+    card.append(el("p", "mode-desc",
+      (rule.matchType === "literal" ? "字面量：" : "正则：") + rule.pattern));
+    if (rule.message) card.append(el("p", "mode-note", "拒绝理由：" + rule.message));
+    if (rule.timeoutEnabled) {
+      card.append(el("p", "mode-note",
+        "超时 " + rule.timeoutSeconds + " 秒后"
+        + (rule.timeoutAction === "allow" ? "放行" : "拒绝")));
+    }
+    const foot = el("div", "notify-card-foot");
+    const toggle = el("button", "btn sm", rule.enabled ? "停用" : "启用");
+    toggle.type = "button";
+    toggle.dataset.interceptAction = "toggle";
+    toggle.dataset.interceptId = rule.id;
+    foot.append(toggle);
+    const edit = el("button", "btn sm", "编辑");
+    edit.type = "button";
+    edit.dataset.interceptAction = "edit";
+    edit.dataset.interceptId = rule.id;
+    foot.append(edit);
+    const remove = el("button", "btn sm danger", "删除");
+    remove.type = "button";
+    remove.dataset.interceptAction = "delete";
+    remove.dataset.interceptId = rule.id;
+    foot.append(remove);
+    card.append(foot);
+    return card;
+  }
+
+  function renderInterceptRules() {
+    if (!dom.interceptRules) return;
+    clear(dom.interceptRules);
+    const rules = ((view.intercept || {}).rules) || [];
+    if (!rules.length) {
+      dom.interceptRules.append(ui().emptyBlock(
+        "一条规则都没有：所有工具入参都会直接放行。点「恢复内置规则」可以拿回默认的 20 条。"));
+      return;
+    }
+    rules.forEach((rule) => dom.interceptRules.append(interceptRuleCard(rule)));
+  }
+
+  function renderIntercept() {
+    const data = view.intercept || {};
+    const counts = data.counts || {};
+    if (dom.interceptMeta) {
+      if (view.interceptError) {
+        dom.interceptMeta.textContent = "不可用：" + view.interceptError;
+      } else if (!view.intercept) {
+        dom.interceptMeta.textContent = "登录后加载拦截规则。";
+      } else {
+        const parts = [(counts.total || 0) + " 条规则"];
+        parts.push((counts.enabled || 0) + " 条生效");
+        if (counts.disabled) parts.push(counts.disabled + " 条停用");
+        parts.push(data.enabled ? "总开关开启" : "总开关关闭");
+        dom.interceptMeta.textContent = parts.join(" · ")
+          + (data.admin ? "" : " · 只读（需要管理员）");
+      }
+    }
+    if (dom.interceptEnabled) {
+      // 只在加载完成时把服务端值写回表单，避免用户正在切下拉时被覆盖。
+      dom.interceptEnabled.value = data.enabled === false ? "0" : "1";
+    }
+    const admin = !!data.admin;
+    if (dom.interceptSave) dom.interceptSave.disabled = !admin;
+    if (dom.interceptReset) dom.interceptReset.disabled = !admin;
+    if (dom.interceptSubmit) dom.interceptSubmit.disabled = !admin;
+    if (dom.interceptTest) dom.interceptTest.disabled = false;
+    renderInterceptRules();
+  }
+
+  async function loadIntercept(force) {
+    if (view.interceptBusy && !force) return;
+    view.interceptBusy = true;
+    setButtonBusy(dom.interceptRefresh, true, "刷新中");
+    try {
+      const data = await ui().apiGet("/intercept");
+      view.intercept = data;
+      view.interceptError = null;
+    } catch (error) {
+      view.interceptError = error.message;
+    }
+    view.interceptBusy = null;
+    setButtonBusy(dom.interceptRefresh, false, "刷新");
+    renderIntercept();
+  }
+
+  function interceptById(id) {
+    const rules = ((view.intercept || {}).rules) || [];
+    for (let index = 0; index < rules.length; index += 1) {
+      if (rules[index].id === id) return rules[index];
+    }
+    return null;
+  }
+
+  async function saveInterceptSettings() {
+    showNotice(dom.interceptSettingsMessage, "");
+    setButtonBusy(dom.interceptSave, true, "保存中");
+    try {
+      const data = await ui().apiPost("/intercept/settings",
+        { enabled: dom.interceptEnabled && dom.interceptEnabled.value === "1" });
+      if (!view.intercept) view.intercept = {};
+      view.intercept.enabled = !!(data && data.enabled);
+      showNotice(dom.interceptSettingsMessage,
+        view.intercept.enabled ? "已开启：命中的工具调用会被拒绝。" : "已关闭：规则保留，但不再拦截。",
+        "ok");
+      renderIntercept();
+    } catch (error) {
+      showNotice(dom.interceptSettingsMessage, error.message, "error");
+    }
+    setButtonBusy(dom.interceptSave, false, "保存");
+  }
+
+  async function resetInterceptRules() {
+    // 恢复是**只动内置**的那几条，自建的一条不删；这一点写进确认框，
+    // 否则没人敢点——「恢复默认」在很多地方等于「清空我的配置」。
+    const text = "恢复内置规则？只重建内置的那几条，你自己添加的规则不会被删除。";
+    if (typeof window !== "undefined" && window.confirm && !window.confirm(text)) return;
+    showNotice(dom.interceptSettingsMessage, "");
+    setButtonBusy(dom.interceptReset, true, "恢复中");
+    try {
+      const data = await ui().apiPost("/intercept/reset", {});
+      showNotice(dom.interceptSettingsMessage,
+        "已恢复 " + ((data && data.restored) || 0) + " 条内置规则");
+      await loadIntercept(true);
+    } catch (error) {
+      showNotice(dom.interceptSettingsMessage, error.message, "error");
+    }
+    setButtonBusy(dom.interceptReset, false, "恢复内置规则");
+  }
+
+  async function testIntercept() {
+    const text = (dom.interceptTestText && dom.interceptTestText.value) || "";
+    if (!text) {
+      showNotice(dom.interceptTestMessage, "先填一段要试的入参文本。", "error");
+      return;
+    }
+    showNotice(dom.interceptTestMessage, "");
+    setButtonBusy(dom.interceptTest, true, "匹配中");
+    try {
+      const data = await ui().apiPost("/intercept/test", {
+        tool: (dom.interceptTestTool && dom.interceptTestTool.value) || "",
+        text: text,
+      });
+      if (data && data.matched) {
+        showNotice(dom.interceptTestMessage, "命中：" + (data.message || ""), "error");
+      } else {
+        showNotice(dom.interceptTestMessage, "没有命中任何启用的规则。", "ok");
+      }
+    } catch (error) {
+      showNotice(dom.interceptTestMessage, error.message, "error");
+    }
+    setButtonBusy(dom.interceptTest, false, "试一下");
+  }
+
+  function resetInterceptForm() {
+    view.interceptEditingId = null;
+    if (dom.interceptFormTitle) dom.interceptFormTitle.textContent = "添加规则";
+    ["interceptName", "interceptPattern", "interceptMessageText"].forEach((key) => {
+      if (dom[key]) dom[key].value = "";
+    });
+    if (dom.interceptPriority) dom.interceptPriority.value = "50";
+    if (dom.interceptRuleEnabled) dom.interceptRuleEnabled.value = "1";
+    if (dom.interceptMatchType) dom.interceptMatchType.value = "regex";
+    if (dom.interceptTimeoutEnabled) dom.interceptTimeoutEnabled.value = "0";
+    if (dom.interceptTimeoutSeconds) dom.interceptTimeoutSeconds.value = "60";
+    if (dom.interceptTimeoutAction) dom.interceptTimeoutAction.value = "deny";
+    if (dom.interceptSubmit) dom.interceptSubmit.textContent = "保存规则";
+    showNotice(dom.interceptFormMessage, "");
+  }
+
+  function openInterceptRule(rule) {
+    view.interceptEditingId = rule.id;
+    if (dom.interceptFormTitle) dom.interceptFormTitle.textContent = "编辑规则：" + rule.id;
+    if (dom.interceptName) dom.interceptName.value = rule.name || "";
+    if (dom.interceptPriority) dom.interceptPriority.value = String(rule.priority || 50);
+    if (dom.interceptRuleEnabled) dom.interceptRuleEnabled.value = rule.enabled ? "1" : "0";
+    if (dom.interceptMatchType) dom.interceptMatchType.value = rule.matchType || "regex";
+    if (dom.interceptPattern) dom.interceptPattern.value = rule.pattern || "";
+    if (dom.interceptMessageText) dom.interceptMessageText.value = rule.message || "";
+    if (dom.interceptTimeoutEnabled) {
+      dom.interceptTimeoutEnabled.value = rule.timeoutEnabled ? "1" : "0";
+    }
+    if (dom.interceptTimeoutSeconds) {
+      dom.interceptTimeoutSeconds.value = String(rule.timeoutSeconds || 60);
+    }
+    if (dom.interceptTimeoutAction) {
+      dom.interceptTimeoutAction.value = rule.timeoutAction || "deny";
+    }
+    if (dom.interceptSubmit) dom.interceptSubmit.textContent = "保存修改";
+    showNotice(dom.interceptFormMessage, "");
+    if (dom.interceptForm && dom.interceptForm.scrollIntoView) {
+      dom.interceptForm.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  async function submitInterceptRule() {
+    showNotice(dom.interceptFormMessage, "");
+    const body = {
+      name: (dom.interceptName && dom.interceptName.value) || "",
+      priority: Number(dom.interceptPriority && dom.interceptPriority.value) || 0,
+      enabled: !dom.interceptRuleEnabled || dom.interceptRuleEnabled.value === "1",
+      matchTarget: "tool_input",
+      matchType: (dom.interceptMatchType && dom.interceptMatchType.value) || "regex",
+      pattern: (dom.interceptPattern && dom.interceptPattern.value) || "",
+      action: "deny",
+      message: (dom.interceptMessageText && dom.interceptMessageText.value) || "",
+      timeoutEnabled: !!(dom.interceptTimeoutEnabled
+        && dom.interceptTimeoutEnabled.value === "1"),
+      timeoutSeconds: Number(dom.interceptTimeoutSeconds
+        && dom.interceptTimeoutSeconds.value) || 60,
+      timeoutAction: (dom.interceptTimeoutAction
+        && dom.interceptTimeoutAction.value) || "deny",
+    };
+    if (view.interceptEditingId) body.id = view.interceptEditingId;
+    setButtonBusy(dom.interceptSubmit, true, "保存中");
+    try {
+      const data = await ui().apiPost("/intercept/rules", body);
+      showNotice(dom.interceptFormMessage,
+        (data && data.created ? "已添加：" : "已更新：")
+        + ((data && data.rule && data.rule.name) || body.name), "ok");
+      resetInterceptForm();
+      await loadIntercept(true);
+    } catch (error) {
+      showNotice(dom.interceptFormMessage, error.message, "error");
+    }
+    setButtonBusy(dom.interceptSubmit, false, view.interceptEditingId ? "保存修改" : "保存规则");
+  }
+
+  async function interceptAction(action, id, button) {
+    const rule = interceptById(id);
+    if (!rule) return;
+    if (action === "edit") {
+      openInterceptRule(rule);
+      return;
+    }
+    if (action === "toggle") {
+      setButtonBusy(button, true, "处理中");
+      try {
+        await ui().apiPost("/intercept/rules",
+          interceptRulePayload(rule, { enabled: !rule.enabled }));
+        await loadIntercept(true);
+      } catch (error) {
+        showNotice(dom.interceptMessage, error.message, "error");
+      }
+      setButtonBusy(button, false, rule.enabled ? "停用" : "启用");
+      return;
+    }
+    if (action === "delete") {
+      const text = "删除规则「" + (rule.name || rule.id) + "」？删掉之后这条不再拦截任何调用。";
+      if (typeof window !== "undefined" && window.confirm && !window.confirm(text)) return;
+      setButtonBusy(button, true, "删除中");
+      try {
+        await ui().apiPost("/intercept/rules/" + encodeURIComponent(id) + "/delete", {});
+        if (view.interceptEditingId === id) resetInterceptForm();
+        await loadIntercept(true);
+      } catch (error) {
+        showNotice(dom.interceptMessage, error.message, "error");
+        setButtonBusy(button, false, "删除");
+      }
+    }
+  }
+
+  /* ---------------------------------------------------------------- 探索链路 ---- */
+
+  function explorationRow(row) {
+    const card = el("article", "exploration-card");
+    const head = el("div", "mode-head");
+    head.append(el("strong", "mode-name",
+      row.target || row.goalTarget || row.engagementId));
+    const counts = row.counts || {};
+    head.append(el("span", "mode-badge", "意图 " + (counts.intents || 0)));
+    head.append(el("span", "mode-badge", "事实 " + (counts.facts || 0)));
+    head.append(el("span", "mode-badge", "漏洞 " + (counts.findings || 0)));
+    head.append(el("span", "mode-badge", "资产 " + (counts.assets || 0)));
+    // 在途为 0 时不挂徽标：一排都是 0 的徽标会让人以为这里有东西要看。
+    if (row.inFlight) head.append(el("span", "mode-badge", "在途 " + row.inFlight));
+    card.append(head);
+    card.append(el("code", "mode-id", row.engagementId));
+    const intents = row.intents || [];
+    if (!intents.length) {
+      card.append(el("p", "mode-note",
+        "没有可推导的缺口：链路已经完整，或者这个目标还没有目标节点。"));
+      return card;
+    }
+    intents.forEach((item) => {
+      card.append(el("p", "mode-desc", (item.label || item.kind || "") + " · "
+        + (item.title || item.key || "")));
+      if (item.reason) card.append(el("p", "mode-note", item.reason));
+    });
+    return card;
+  }
+
+  function renderExplorationEngagements() {
+    if (!dom.explorationEngagements) return;
+    clear(dom.explorationEngagements);
+    const rows = ((view.exploration || {}).engagements) || [];
+    if (!rows.length) {
+      dom.explorationEngagements.append(ui().emptyBlock(
+        "还没有任何目标：先在对话里立一个目标，这里才会出现缺口。"));
+      return;
+    }
+    rows.forEach((row) => dom.explorationEngagements.append(explorationRow(row)));
+  }
+
+  function renderExploration() {
+    const data = view.exploration || {};
+    const config = data.settings || {};
+    if (dom.explorationMeta) {
+      if (view.explorationError) {
+        dom.explorationMeta.textContent = "不可用：" + view.explorationError;
+      } else if (!view.exploration) {
+        dom.explorationMeta.textContent = "登录后加载探索链路。";
+      } else {
+        const parts = [data.enabled ? "自动排产开启" : "自动排产关闭"];
+        parts.push("间隔 " + (config.intervalSeconds || 0) + " 秒");
+        parts.push("在途上限 " + (config.maxPending || 0));
+        parts.push(((data.engagements || []).length) + " 个目标");
+        dom.explorationMeta.textContent = parts.join(" · ")
+          + (data.admin ? "" : " · 只读（需要管理员）");
+      }
+    }
+    if (!view.exploration) return;
+    // 只在加载完成时回填表单：正在改数字时被服务端值覆盖，是最烦人的一种小毛病。
+    if (dom.explorationEnabled) {
+      dom.explorationEnabled.value = config.enabled ? "1" : "0";
+    }
+    if (dom.explorationInterval) {
+      dom.explorationInterval.value = String(config.intervalSeconds || 900);
+    }
+    if (dom.explorationMax) {
+      dom.explorationMax.value = String(config.maxPending || 3);
+    }
+    // 上下界由服务端给：界面上写死 60/86400 之后，后端一改就会变成"能点但保存不了"。
+    const ranges = data.ranges || {};
+    const intervalRange = ranges.intervalSeconds || [60, 86400];
+    const pendingRange = ranges.maxPending || [1, 20];
+    if (dom.explorationInterval) {
+      dom.explorationInterval.min = String(intervalRange[0]);
+      dom.explorationInterval.max = String(intervalRange[1]);
+    }
+    if (dom.explorationMax) {
+      dom.explorationMax.min = String(pendingRange[0]);
+      dom.explorationMax.max = String(pendingRange[1]);
+    }
+    const admin = !!data.admin;
+    if (dom.explorationSave) dom.explorationSave.disabled = !admin;
+    if (dom.explorationTick) dom.explorationTick.disabled = !admin;
+    renderExplorationEngagements();
+  }
+
+  async function loadExploration(force) {
+    if (view.explorationBusy && !force) return;
+    view.explorationBusy = true;
+    setButtonBusy(dom.explorationRefresh, true, "刷新中");
+    try {
+      const data = await ui().apiGet("/exploration");
+      view.exploration = data;
+      view.explorationError = null;
+    } catch (error) {
+      view.explorationError = error.message;
+    }
+    view.explorationBusy = null;
+    setButtonBusy(dom.explorationRefresh, false, "刷新");
+    renderExploration();
+  }
+
+  async function saveExplorationSettings() {
+    showNotice(dom.explorationSettingsMessage, "");
+    const interval = numberOrNull(dom.explorationInterval && dom.explorationInterval.value);
+    const maxPending = numberOrNull(dom.explorationMax && dom.explorationMax.value);
+    // 先在界面上挡一次：后端也会拒，但那时候用户已经点过一次保存、还不知道为什么没生效。
+    if (interval === null || maxPending === null) {
+      showNotice(dom.explorationSettingsMessage, "间隔与在途上限都要填数字。", "error");
+      return;
+    }
+    setButtonBusy(dom.explorationSave, true, "保存中");
+    try {
+      await ui().apiPost("/exploration/settings", {
+        enabled: dom.explorationEnabled && dom.explorationEnabled.value === "1",
+        intervalSeconds: interval,
+        maxPending: maxPending,
+      });
+      showNotice(dom.explorationSettingsMessage, "已保存。", "ok");
+      await loadExploration(true);
+    } catch (error) {
+      showNotice(dom.explorationSettingsMessage, error.message, "error");
+    }
+    setButtonBusy(dom.explorationSave, false, "保存");
+  }
+
+  async function tickExploration() {
+    showNotice(dom.explorationMessage, "");
+    setButtonBusy(dom.explorationTick, true, "排产中");
+    try {
+      const result = await ui().apiPost("/exploration/tick", { force: true });
+      const created = (result && result.created) || [];
+      const skipped = (result && result.skipped) || [];
+      let text;
+      if (result && result.enabled === false) {
+        text = "总开关关着：这一轮什么都没派。";
+      } else if (!created.length) {
+        text = "没有新的缺口可派（" + skipped.length + " 条被静默期或在途上限挡住）。";
+      } else {
+        text = "派了 " + created.length + " 条："
+          + created.map((item) => item.title || item.intentKey).join("；");
+      }
+      showNotice(dom.explorationMessage, text, "ok");
+      await loadExploration(true);
+    } catch (error) {
+      showNotice(dom.explorationMessage, error.message, "error");
+    }
+    setButtonBusy(dom.explorationTick, false, "立刻排一轮");
+  }
+
+  function bindExplorationEvents() {
+    if (dom.explorationRefresh) {
+      dom.explorationRefresh.addEventListener("click", function () {
+        loadExploration(true);
+      });
+    }
+    if (dom.explorationSettingsForm) {
+      dom.explorationSettingsForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        saveExplorationSettings();
+      });
+    }
+    if (dom.explorationTick) {
+      dom.explorationTick.addEventListener("click", tickExploration);
+    }
+  }
+
+  function bindInterceptEvents() {
+    if (dom.interceptRefresh) {
+      dom.interceptRefresh.addEventListener("click", () => loadIntercept(true));
+    }
+    if (dom.interceptSettingsForm) {
+      dom.interceptSettingsForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        saveInterceptSettings();
+      });
+    }
+    if (dom.interceptReset) dom.interceptReset.addEventListener("click", resetInterceptRules);
+    if (dom.interceptTestForm) {
+      dom.interceptTestForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        testIntercept();
+      });
+    }
+    if (dom.interceptForm) {
+      dom.interceptForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        submitInterceptRule();
+      });
+    }
+    if (dom.interceptCancel) {
+      dom.interceptCancel.addEventListener("click", () => resetInterceptForm());
+    }
+    if (dom.interceptRules) {
+      dom.interceptRules.addEventListener("click", (event) => {
+        const button = event.target.closest
+          ? event.target.closest("[data-intercept-action]") : null;
+        if (!button || button.disabled) return;
+        interceptAction(button.dataset.interceptAction, button.dataset.interceptId, button);
+      });
+    }
+    resetInterceptForm();
+  }
+
   /* ---------------------------------------------------------- 插件市场 ---- */
 
   function hubRow(item) {
@@ -3608,7 +4151,9 @@
     bindPolicyEvents();
     bindHubEvents();
     bindNavEvents();
-  bindNotifyEvents();
+    bindNotifyEvents();
+    bindInterceptEvents();
+    bindExplorationEvents();
     bindThemeEvents();
     bindAppearanceEvents();
     bindAgentFormEvents();

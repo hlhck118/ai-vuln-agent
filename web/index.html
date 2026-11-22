@@ -1078,6 +1078,8 @@
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="review">工具审批</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="plugins">插件市场</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="mcp">MCP 服务</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="intercept">工具拦截</button>
+      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="exploration">探索链路</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="notify">消息通知</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="skills">Skills</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="users">用户管理</button>
@@ -1611,6 +1613,138 @@
            三条取舍写在界面上：只有 test 与 retry 是同步发送（人正等着结果），
            其余先落库再后台发；密文只写不读（地址与 token 一律遮蔽成 hasSecret）；
            改配置、测试、重试要求管理员——那几件事会把内容发到外部。 -->
+      <!-- 工具拦截：拦的是**入参形态**，不是权限。权限档回答「你允不允许调用这个工具」，
+           这里回答「这次调用传的参数会不会把东西弄没」。判据全在服务端 intercept.py，
+           界面只负责让人看清规则、试出命中、以及改坏之后能恢复内置。 -->
+      <section class="setup-card wide" data-settings-group="intercept">
+        <div class="panel-head">工具拦截
+          <span class="panel-head-hint">按入参正则拦下不可逆操作</span>
+          <span class="spacer"></span>
+          <span class="muted" id="intercept-meta">尚未加载</span>
+          <button id="intercept-refresh" class="btn sm" type="button">刷新</button>
+        </div>
+        <div class="panel-body">
+          <p class="muted" id="intercept-note">规则匹配的是<strong>工具入参</strong>：同一份 JSON 全文与其中每个字符串都会被试一遍，
+            第一条命中的规则就是拒绝理由。这一层是防手滑，不是安全边界 —— 规则本身出错时按放行处理。</p>
+          <div id="intercept-message"></div>
+
+          <div class="settings-subhead">总开关</div>
+          <form id="intercept-settings-form" class="settings-form" autocomplete="off">
+            <div class="form-row">
+              <label class="field-label" for="intercept-enabled">拦截开关</label>
+              <select id="intercept-enabled" class="select sm-select">
+                <option value="1">开启</option>
+                <option value="0">关闭（规则保留，不再拦截）</option>
+              </select>
+              <span class="spacer"></span>
+              <button id="intercept-save" class="btn sm" type="submit">保存</button>
+              <button id="intercept-reset" class="btn sm ghost" type="button">恢复内置规则</button>
+            </div>
+            <div id="intercept-settings-message"></div>
+          </form>
+
+          <div class="settings-subhead">试匹配（不执行任何工具）</div>
+          <form id="intercept-test-form" class="settings-form" autocomplete="off">
+            <div class="form-row">
+              <label class="field-label" for="intercept-test-tool">工具名</label>
+              <input id="intercept-test-tool" class="input" type="text" placeholder="shell">
+              <label class="field-label" for="intercept-test-text">入参文本</label>
+              <input id="intercept-test-text" class="input" type="text" placeholder="rm -rf /">
+              <button id="intercept-test" class="btn sm" type="submit">试一下</button>
+            </div>
+            <div id="intercept-test-message"></div>
+          </form>
+
+          <div class="settings-subhead">规则（优先级从高到低，先命中者生效）</div>
+          <div id="intercept-rules" class="list-block"></div>
+
+          <div class="settings-subhead" id="intercept-form-title">添加规则</div>
+          <form id="intercept-rule-form" class="settings-form" autocomplete="off">
+            <div class="form-row">
+              <label class="field-label" for="intercept-name">名称</label>
+              <input id="intercept-name" class="input" type="text" placeholder="禁止递归强删">
+              <label class="field-label" for="intercept-priority">优先级</label>
+              <input id="intercept-priority" class="input num-input" type="number" min="1" max="100" value="50">
+              <label class="field-label" for="intercept-rule-enabled">状态</label>
+              <select id="intercept-rule-enabled" class="select sm-select">
+                <option value="1">启用</option>
+                <option value="0">停用</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="intercept-match-type">匹配方式</label>
+              <select id="intercept-match-type" class="select sm-select">
+                <option value="regex">正则</option>
+                <option value="literal">字面量</option>
+              </select>
+              <label class="field-label" for="intercept-pattern">匹配式</label>
+              <input id="intercept-pattern" class="input" type="text" placeholder="rm\s+-rf\s+/">
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="intercept-message-text">拒绝理由</label>
+              <input id="intercept-message-text" class="input" type="text" placeholder="这条会原样显示给被拦的人">
+            </div>
+            <div class="form-row">
+              <label class="field-label" for="intercept-timeout-enabled">超时</label>
+              <select id="intercept-timeout-enabled" class="select sm-select">
+                <option value="0">不启用</option>
+                <option value="1">启用</option>
+              </select>
+              <label class="field-label" for="intercept-timeout-seconds">超时秒数</label>
+              <input id="intercept-timeout-seconds" class="input num-input" type="number" min="1" max="3600" value="60">
+              <label class="field-label" for="intercept-timeout-action">超时后</label>
+              <select id="intercept-timeout-action" class="select sm-select">
+                <option value="deny">拒绝</option>
+                <option value="allow">放行</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <span class="spacer"></span>
+              <button id="intercept-submit" class="btn" type="submit">保存规则</button>
+              <button id="intercept-cancel" class="btn ghost" type="button">取消编辑</button>
+            </div>
+            <div id="intercept-form-message"></div>
+          </form>
+        </div>
+      </section>
+
+      <section class="setup-card wide" data-settings-group="exploration">
+        <div class="panel-head">探索链路
+          <span class="panel-head-hint">按缺口自动派活</span>
+          <span class="spacer"></span>
+          <span class="muted" id="exploration-meta">尚未加载</span>
+          <button id="exploration-refresh" class="btn sm" type="button">刷新</button>
+        </div>
+        <div class="panel-body">
+          <p class="muted" id="exploration-note">这条链路按「目标 → 意图 → 事实 / 漏洞 / 资产」推导离定稿还差哪一步，
+            默认<strong>关闭</strong>：打开之后后台会按间隔把缺口变成 explore 任务塞进队列。派过的那一条在静默期内不再重复派，
+            同一目标在途超过上限时整轮跳过 —— 排产只负责「该做的还没做」，不负责催。</p>
+          <div id="exploration-message"></div>
+
+          <div class="settings-subhead">排产口径</div>
+          <form id="exploration-settings-form" class="settings-form" autocomplete="off">
+            <div class="form-row">
+              <label class="field-label" for="exploration-enabled">自动排产</label>
+              <select id="exploration-enabled" class="select sm-select">
+                <option value="0">关闭（只推导，不派活）</option>
+                <option value="1">开启</option>
+              </select>
+              <label class="field-label" for="exploration-interval">间隔（秒）</label>
+              <input id="exploration-interval" class="input num-input" type="number" min="60" max="86400" value="900">
+              <label class="field-label" for="exploration-max">在途上限</label>
+              <input id="exploration-max" class="input num-input" type="number" min="1" max="20" value="3">
+              <span class="spacer"></span>
+              <button id="exploration-save" class="btn sm" type="submit">保存</button>
+              <button id="exploration-tick" class="btn sm ghost" type="button">立刻排一轮</button>
+            </div>
+            <div id="exploration-settings-message"></div>
+          </form>
+
+          <div class="settings-subhead">目标与缺口</div>
+          <div id="exploration-engagements" class="list-block"></div>
+        </div>
+      </section>
+
       <section class="setup-card wide" data-settings-group="notify">
         <div class="panel-head">消息通知
           <span class="panel-head-hint">Webhook / 钉钉 / 飞书 / 企微 / Telegram / 邮件</span>

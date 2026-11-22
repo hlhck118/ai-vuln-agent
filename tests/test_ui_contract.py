@@ -8076,9 +8076,9 @@ class GuideGroupOrdinalTestCase(unittest.TestCase):
         return found
 
     def test_every_ordinal_matches_the_real_position_in_the_nav(self):
-        numerals = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二"]
+        numerals = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二", "十三", "十四"]
         labels = self._nav_labels()
-        self.assertEqual(12, len(labels), "导航不是十二组了：%s" % labels)
+        self.assertEqual(14, len(labels), "导航不是十四组了：%s" % labels)
         problems = []
         for ordinal, name in self._guide_groups():
             if ordinal not in numerals:
