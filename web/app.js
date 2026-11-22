@@ -1443,15 +1443,12 @@ function loadTabData(tab) {
     watchJobs();
     return;
   }
-  // 新增的六页（仪表盘 / 流量 / 请求重发 / 工作空间 / 审批记录 / 日志）由
-  // `panels.js` 自己渲染，**同样排在 `!state.eid` 早退之前**：它们回答的是
-  // "整个平台上发生了什么"，与有没有选中某个目标无关。
+  // 新增的八页（仪表盘 / 渗透任务 / 计划任务 / 流量 / 请求重发 / 工作空间 /
+  // 审批记录 / 日志）由 `panels.js` 自己渲染，**同样排在 `!state.eid` 早退之前**：
+  // 它们回答的是"整个平台上发生了什么"，与有没有选中某个目标无关。
   //
-  if (tab === 'dashboard') {
-    if (window.PentestPanels) window.PentestPanels.load(tab);
-    return;
-  }
-  if (tab === 'traffic' || tab === 'repeater' || tab === 'workspace'
+  if (tab === 'dashboard' || tab === 'tasks' || tab === 'schedules'
+      || tab === 'traffic' || tab === 'repeater' || tab === 'workspace'
       || tab === 'approvals' || tab === 'logs') {
     if (window.PentestPanels) window.PentestPanels.load(tab);
     return;

@@ -2353,6 +2353,7 @@ class CssLayoutGuardTestCase(unittest.TestCase):
                     ".kv-table td.clip",
                     ".panel-head > .doc-name", ".ph-sub",
                     ".rail-user-name", ".rpt-target", ".side-panel", ".target-name",
+                    ".task-sub",
                     "body"]
         self.assertEqual(containers, expected,
                          "overflow: hidden 的容器集合变了：%s；"
@@ -2663,7 +2664,7 @@ class CssLayoutGuardTestCase(unittest.TestCase):
             r'<section\s+id="(panel-[a-z-]+)"\s+class="([^"]*)"\s*>(.*?)'
             r'(?=<section\s+id="panel-|\Z)', html, flags=re.S)
         self.assertTrue(sections, "一个 `section.panel` 都没抓到，多半是读错了文件")
-        self.assertEqual(len(sections), 15,
+        self.assertEqual(len(sections), 17,
                          "页签数量变了（现在是 %d 个）：新增的页也要用页头当第一张卡"
                          % len(sections))
         wrong = []
@@ -6733,8 +6734,8 @@ class RailTabIconTestCase(unittest.TestCase):
 
     # 导航条目数。**改这个数就是改导航**：两个 9 被钉在这里，是为了让"加了一页
     # 却忘了给它画图标"和"删了一页却留着图标"都变成红灯。2026-11 按 artex 补六页
-    # 之后是 15（功能 11 + 系统 4）。
-    TAB_COUNT = 15
+    # 之后是 15（功能 11 + 系统 4）；再加「渗透任务」「计划任务」两页是 17。
+    TAB_COUNT = 17
 
     def test_every_rail_tab_carries_exactly_one_inline_icon(self):
         self.assertEqual(len(re.findall(r'<svg class="tab-ico"', self.html)),
@@ -7456,7 +7457,8 @@ class PanelsWiringTestCase(unittest.TestCase):
     # 侧边栏这一轮新增的六页。**改这里等于改界面**：多一页就要多一组接线，
     # 少一页就该有人问它去哪了——所以键名钉死在用例里，而不是从文件里读回来
     # 再跟自己比（那种写法在整块被删掉时仍然全绿）。
-    PAGES = ("dashboard", "traffic", "repeater", "workspace", "approvals", "logs")
+    PAGES = ("dashboard", "tasks", "schedules", "traffic", "repeater",
+             "workspace", "approvals", "logs")
 
     @classmethod
     def setUpClass(cls):

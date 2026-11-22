@@ -1,4 +1,5 @@
-/* 新增六页的渲染（仪表盘 / 流量 / 请求重发 / 工作空间 / 审批记录 / 日志）。
+/* 新增八页的渲染（仪表盘 / 渗透任务 / 计划任务 / 流量 / 请求重发 / 工作空间 /
+ * 审批记录 / 日志）。
  *
  * 为什么单独一个文件而不是继续塞进 app.js：那个文件已经 4300 行，而这几页共用
  * 一套很窄的东西——拉一次数据、按表格画出来、失败时给一段能读的说明。放进主文件
@@ -21,9 +22,55 @@
     formatCount, formatDuration, jobView, severityView } = UI;
 
   /* ------------------------------------------------------------ 仪表盘 */
-  // 一次 `/panel` 请求换四块读数。**不另开接口**：概览页与资产/漏洞页读的必须是
-  // 同一份快照，否则"概览说 18 个资产、资产页列 17 条"是最容易被当成 bug 的现象
-  // （见 server.py 里 panel 的注释）。
+  // 一次 `/dashboard` 换整屏读数：它回答「平台上现在什么样」——引擎模式、任务
+  // 状态分布、资产类型分布、链路构成、作业队列、系统指标。**不再读 `/panel`**：
+  // 那条接口服务的是「某个目标 + 最近四条」，两份视图的取舍不同，混用会让同一屏
+  // 上的数字来自两个时刻。
+  function statCard(host, label, value, hint) {
+    const box = el('div', 'dash-stat');
+    box.append(el('div', 'dash-stat-label', label));
+    // `formatCount` 加千分位：这里是「扫一眼读量级」的地方，1200 与 1,200 在读的
+    // 时候不是一回事。
+    box.append(el('div', 'dash-stat-value', formatCount(value)));
+    if (hint) box.append(el('div', 'dash-stat-hint', hint));
+    host.append(box);
+  }
+
+  function dashCard(title) {
+    const card = el('section', 'dash-card');
+    card.append(el('h2', 'dash-card-title', title));
+    return card;
+  }
+
+  function kvRow(list, label, value) {
+    const row = el('div', 'dash-row');
+    row.append(el('span', 'dash-row-main', label));
+    row.append(el('span', 'dash-row-meta', value == null || value === '' ? '—' : String(value)));
+    list.append(row);
+    return row;
+  }
+
+  function countOf(map) {
+    let total = 0;
+    Object.keys(map || {}).forEach((key) => { total += Number(map[key]) || 0; });
+    return total;
+  }
+
+  // 字节数只在指标卡里出现，写一个本地小函数就够，不必再进 PentestUI。
+  function bytesText(value) {
+    const size = Number(value) || 0;
+    if (size >= 1024 * 1024 * 1024) return (size / 1024 / 1024 / 1024).toFixed(1) + ' GB';
+    if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(0) + ' MB';
+    if (size >= 1024) return (size / 1024).toFixed(0) + ' KB';
+    return size + ' B';
+  }
+
+  function percentText(block) {
+    if (!block || !block.totalBytes) return '—';
+    return (block.percent || 0) + '%（' + bytesText(block.usedBytes) + ' / '
+      + bytesText(block.totalBytes) + '）';
+  }
+
   async function loadDashboard() {
     const host = $('#dashboard-body');
     if (!host) return;
@@ -31,106 +78,896 @@
     host.append(el('div', 'muted', '正在读取概览…'));
     let data = null;
     try {
-      data = await apiGet('/panel');
+      data = await apiGet('/dashboard');
     } catch (error) {
       clear(host);
       host.append(errorBlock('概览加载失败：' + error.message));
       return;
     }
+    let metrics = null;
+    try {
+      metrics = await apiGet('/system/metrics');
+    } catch (error) {
+      // 指标是附加项：读不到不该让整屏空着。这一句也是给「为什么指标卡是空的」
+      // 留的解释入口（卡片自己会再写一遍）。
+      metrics = null;
+    }
     clear(host);
-    const platform = data.platform || {};
-    const counts = data.counts || {};
+    const labels = data.statusLabels || {};
+    const tasks = data.tasks || {};
+    const findings = data.findings || {};
+    const jobs = data.jobs || {};
+    const exploration = data.exploration || {};
+    const meta = $('#dashboard-meta');
+    if (meta) {
+      meta.textContent = '引擎 ' + (labels[data.engineMode] || data.engineMode || '未知')
+        + ' · 更新于 ' + formatTime(data.generatedAt);
+    }
 
-    // 规模读数：四块，每块一个数。数值用 `formatCount` 会加千分位——
-    // "1200" 与 "1,200" 在扫一眼时不是一回事。
     const stats = el('div', 'dash-stats');
-    const card = (label, value, hint) => {
-      const box = el('div', 'dash-stat');
-      box.append(el('div', 'dash-stat-label', label));
-      // `formatCount` 加千分位：这里是「扫一眼读量级」的位置，1200 与 1,200
-      // 在读的时候不是一回事。上面那段注释一直是这么说的，代码却直接 `String()`——
-      // 注释承诺了千分位，屏幕上没有。
-      box.append(el('div', 'dash-stat-value', formatCount(value)));
-      if (hint) box.append(el('div', 'dash-stat-hint', hint));
-      return box;
-    };
-    stats.append(
-      card('目标', platform.engagements || 0, '每个目标一条独立链路'),
-      card('节点', platform.nodes || 0, '意图 / 事实 / 漏洞 / 资产'),
-      card('资产', counts.assets || 0, `其中高危漏洞 ${formatCount(counts.highFindings || 0)} 条`),
-      card('任务', counts.jobs || 0, `待执行 ${formatCount(platform.pendingJobs || 0)} · 执行中 ${formatCount(platform.runningJobs || 0)}`),
-    );
+    statCard(stats, '任务', tasks.all || 0,
+      '进行中 ' + formatCount(tasks.running || 0) + ' · 排队 ' + formatCount(tasks.queued || 0));
+    statCard(stats, '资产', data.assets || 0, '按类型分布见下');
+    statCard(stats, '漏洞', countOf(findings),
+      '高危及以上 ' + formatCount((findings.critical || 0) + (findings.high || 0)));
+    statCard(stats, '作业', jobs.total || 0,
+      '待跑 ' + formatCount(jobs.pending || 0) + ' · 在跑 ' + formatCount(jobs.running || 0));
+    statCard(stats, '流量', data.traffic || 0, '收发记录');
     host.append(stats);
 
-    // 执行节点：在线数来自 platform.executorsOnline。**离线也算一条**——
-    // "0 个节点"与"3 个节点全离线"在排障时是两件事。
-    const nodeCard = el('section', 'dash-card');
-    nodeCard.append(el('h2', 'dash-card-title', '执行节点'));
-    const online = platform.executorsOnline || 0;
-    const totalExec = platform.executors || 0;
-    nodeCard.append(el('p', 'muted',
-      `在线 ${formatCount(online)} / 共 ${formatCount(totalExec)}` + (totalExec && !online ? '（全部离线：任务会一直排队）' : '')));
-    host.append(nodeCard);
-
-    // 最近任务：只列 8 条。这一页要回答"刚才发生了什么"，不是"历史上发生过什么"。
-    const jobCard = el('section', 'dash-card');
-    jobCard.append(el('h2', 'dash-card-title', '最近任务'));
-    const jobs = (data.jobs || []).slice(0, 8);
-    if (!jobs.length) {
-      jobCard.append(emptyBlock('还没有任何任务'));
+    const active = data.activeTask;
+    const activeCard = dashCard('当前任务');
+    if (!active) {
+      activeCard.append(emptyBlock('还没有任务：到「渗透任务」页新建一个目标，就有第一条了。'));
     } else {
+      activeCard.append(el('p', 'muted',
+        (active.name || active.target || '未命名') + ' · '
+        + (labels[active.status] || active.status || '')
+        + (active.paused ? ' · 已暂停' : '')));
+      if (active.goal) activeCard.append(el('p', 'muted', '目标：' + active.goal));
       const list = el('div', 'dash-list');
-      jobs.forEach((job) => {
+      kvRow(list, '目标达成', formatCount(active.goalsMet || 0) + ' / ' + formatCount(active.goalsTotal || 0));
+      kvRow(list, '发现', countOf(active.findings || {}));
+      kvRow(list, '在途作业', formatCount(active.inFlight || 0));
+      kvRow(list, '累计运行', formatDuration(active.runSeconds || 0));
+      kvRow(list, '最近活动', active.lastActivity ? formatTime(active.lastActivity) : '—');
+      activeCard.append(list);
+    }
+    host.append(activeCard);
+
+    // 两张「明细」卡都放在当前任务之后、链路之前：它们回答的是「现在最该管的事」，
+    // 档位序与状态词都走共享表（severityView / jobView），不在这里再抄一份——抄了之后
+    // 加一档、改一个说法，两处就会各说各话。
+    const risky = (data.topFindings || [])
+      .filter((item) => severityView.rank(item.severity) <= 1);
+    const riskyCard = dashCard('高危漏洞');
+    if (!risky.length) {
+      riskyCard.append(emptyBlock('还没有高危及以上漏洞'));
+    } else {
+      const riskyList = el('div', 'dash-list');
+      risky.forEach((item) => {
         const row = el('div', 'dash-row');
-        // 状态一律走 `PentestUI.jobView`（同一个 `jobStatusOf`、同一张中文表）。
-        // 这里原先直接印 `job.status`：仪表盘上是 pending / done，而任务页把同一个
-        // 状态印成「待执行」/「已完成」——一个词两种写法，读的人会当成两件事。
-        // 圆点的类名同样取归一后的状态：库里的写法一变，类名就对不上，圆点会静默
-        // 回落成灰的，看上去像这个任务没有状态。
-        const status = jobView.statusOf(job);
-        row.append(el('span', `dash-dot is-${status}`));
-        const mainJob = el('span', 'dash-row-main', job.kindLabel || job.kind || '任务');
-        mainJob.title = mainJob.textContent;   // 截断后的完整值（见 style.css .dash-row-main）
-        row.append(mainJob);
-        row.append(el('span', 'dash-row-meta', jobView.label[status] || status));
-        row.append(el('span', 'dash-row-time', formatTime(job.createdAt)));
-        list.append(row);
+        const main = el('span', 'dash-row-main');
+        main.append(el('span', `sev-dot sev-${severityView.of(item.severity)}`));
+        main.append(el('span', 'finding-desc', item.name || '未命名漏洞'));
+        row.append(main);
+        row.append(el('span', 'dash-row-meta',
+          severityView.label(item.severity) + ' · ' + (item.target || '—')));
+        riskyList.append(row);
       });
-      jobCard.append(list);
+      riskyCard.append(riskyList);
+    }
+    host.append(riskyCard);
+
+    const recent = data.recentJobs || [];
+    const jobCard = dashCard('最近作业');
+    if (!recent.length) {
+      jobCard.append(emptyBlock('还没有派过作业'));
+    } else {
+      const jobList = el('div', 'dash-list');
+      recent.forEach((job) => {
+        const row = el('div', 'dash-row');
+        row.append(el('span', 'dash-row-main',
+          jobView.kindLabel(job.kind) + ' · ' + (job.target || '—')));
+        row.append(el('span', 'dash-row-meta',
+          jobView.label(job.status) + ' · ' + formatTime(job.createdAt)));
+        jobList.append(row);
+      });
+      jobCard.append(jobList);
     }
     host.append(jobCard);
 
-    // 高危漏洞：这一页不该只给一个数字。要能一眼看到"哪几条"，
-    // 否则仪表盘就退化成一个装饰。
-    const findCard = el('section', 'dash-card');
-    findCard.append(el('h2', 'dash-card-title', '高危漏洞'));
-    // 「高危及以上」按共享顺序判（`PentestUI.severityView`），不写死两个字面量：
-    // 后端 `panel()` 用的是 `severity_rank(...) <= 1`，两处一旦有一边改了档位或
-    // 排序，这一页挑出来的与 `counts.highFindings` 数的就不是同一批。
-    const high = (data.findings || [])
-      .filter((item) => severityView.rank(item.severity) <= 1).slice(0, 8);
-    if (!high.length) {
-      findCard.append(emptyBlock('没有高危记录'));
-    } else {
-      const list = el('div', 'dash-list');
-      high.forEach((item) => {
-        const row = el('div', 'dash-row');
-        // 档位先归一再拼类名：`severity` 是后端原值，认不出的（或空的）直接拼进去
-        // 就成了 `sev-` 或 `sev-unknown`，那两种类名样式表里没有，圆点会没有颜色。
-        // `severityView.of` 与漏洞卡片、详情页、过滤条用的是同一个归一函数。
-        row.append(el('span', `sev-dot sev-${severityView.of(item.severity)}`));
-        const mainFind = el('span', 'dash-row-main', item.title || '（无标题）');
-        mainFind.title = mainFind.textContent;
-        row.append(mainFind);
-        row.append(el('span', 'dash-row-meta', item.severityLabel || item.severity || ''));
-        list.append(row);
-      });
-      findCard.append(list);
-    }
-    host.append(findCard);
+    const chainCard = dashCard('探索链路');
+    const chain = el('div', 'dash-list');
+    kvRow(chain, '目标', exploration.goal || 0);
+    kvRow(chain, '意图', exploration.intent || 0);
+    kvRow(chain, '事实', exploration.fact || 0);
+    kvRow(chain, '漏洞', exploration.finding || 0);
+    kvRow(chain, '摘要', exploration.digest || 0);
+    chainCard.append(chain);
+    host.append(chainCard);
 
-    const meta = $('#dashboard-meta');
-    if (meta) meta.textContent = '更新于 ' + formatTime(data.generatedAt);
+    const taskCard = dashCard('任务状态');
+    const taskList = el('div', 'dash-list');
+    ['running', 'queued', 'paused', 'done', 'idle', 'archived'].forEach((key) => {
+      kvRow(taskList, labels[key] || key, formatCount(tasks[key] || 0));
+    });
+    taskCard.append(taskList);
+    host.append(taskCard);
+
+    const assetMap = data.assetCounts || {};
+    const assetCard = dashCard('资产类型');
+    const assetKeys = Object.keys(assetMap).sort();
+    if (!assetKeys.length) {
+      assetCard.append(emptyBlock('还没有收集到资产'));
+    } else {
+      const assetList = el('div', 'dash-list');
+      assetKeys.forEach((key) => kvRow(assetList, key, formatCount(assetMap[key])));
+      assetCard.append(assetList);
+    }
+    host.append(assetCard);
+
+    const metricCard = dashCard('系统指标');
+    if (!metrics) {
+      metricCard.append(emptyBlock('没有读到系统指标（接口不可用）'));
+    } else {
+      const metricList = el('div', 'dash-list');
+      const cpu = metrics.cpu || {};
+      kvRow(metricList, 'CPU', (cpu.percent || 0) + '% · ' + formatCount(cpu.cores || 0) + ' 核');
+      kvRow(metricList, '内存', percentText(metrics.memory));
+      kvRow(metricList, '系统盘', percentText(metrics.disk));
+      kvRow(metricList, '数据盘', percentText(metrics.dataDisk));
+      if ((metrics.loadAverage || []).length) {
+        kvRow(metricList, '负载', metrics.loadAverage.join(' / '));
+      }
+      (metrics.notes || []).forEach((note) => kvRow(metricList, '说明', note));
+      metricCard.append(metricList);
+    }
+    host.append(metricCard);
+  }
+
+  /* ------------------------------------------------------------ 渗透任务 */
+  // 这一页与「任务」页（jobs）不是一回事：那边一行是一条**作业**（一次扫描、一次
+  // 探测，跑完就结束），这边一行是一个**目标**（E-xxxx，有目标、能暂停、会攒作业
+  // 和漏洞）。两页都叫「任务」会让人找不到对应关系，所以这一页叫「渗透任务」。
+  //
+  // 「状态」是**派生**的（后端 `Store._task_status`）：暂停优先于进行中，因为一个
+  // 被暂停的目标上可能还有一条早先派出去的作业在跑。界面上照搬后端的判定，不自己
+  // 再算一遍——两处各算一次就是两个状态词在同一个人眼前打架。
+  const TASK_STATES = ['running', 'queued', 'paused', 'done', 'idle'];
+  const TASK_STATE_TEXT = {
+    running: '进行中', queued: '排队中', paused: '已暂停', done: '已完成', idle: '未开始',
+  };
+  let tasksData = null;
+  let tasksFilter = { status: '', archived: false, keyword: '' };
+  let tasksOpen = '';
+  let tasksNote = { text: '', bad: false };
+
+  function taskState(task) {
+    return TASK_STATE_TEXT[task.status] || task.status || '未知';
+  }
+
+  function taskCounts(task) {
+    const findings = task.findings || {};
+    const jobs = task.jobs || {};
+    const parts = [];
+    parts.push('漏洞 ' + formatCount(findings.total || 0));
+    parts.push('作业 ' + formatCount(jobs.total || 0)
+      + (jobs.running ? '（在跑 ' + formatCount(jobs.running) + '）' : ''));
+    parts.push('目标 ' + formatCount(task.goalsMet || 0) + '/'
+      + formatCount(task.goalsTotal || 0));
+    if (task.runSeconds) parts.push('运行 ' + formatDuration(task.runSeconds));
+    return parts.join(' · ');
+  }
+
+  function taskNote(text, bad) {
+    tasksNote = { text: text || '', bad: !!bad };
+  }
+
+  // 一个动作请求：成功后刷新列表。写接口自身会回权威计数，但列表的顺序（置顶、
+  // 最近活动）也是这次动作的结果，所以照旧重取一遍，避免前端自己维护顺序。
+  async function taskAction(path, body) {
+    try {
+      await apiPost(path, body || {});
+      taskNote('已提交', false);
+    } catch (error) {
+      taskNote(error.message, true);
+    }
+    await loadTasks();
+  }
+
+  async function openTask(taskId) {
+    if (tasksOpen === taskId) { tasksOpen = ''; renderTasks(); return; }
+    tasksOpen = taskId;
+    renderTasks();
+    let detail = null;
+    try {
+      detail = await apiGet(`/tasks/${encodeURIComponent(taskId)}`);
+    } catch (error) {
+      taskNote('读取任务详情失败：' + error.message, true);
+      tasksOpen = '';
+      renderTasks();
+      return;
+    }
+    const host = $('#tasks-body');
+    const slot = host ? host.querySelector('[data-task-detail="' + taskId + '"]') : null;
+    if (!slot) return;
+    clear(slot);
+    const counts = detail.counts || {};
+    const chain = el('div', 'task-detail-chain');
+    ['goal', 'intent', 'fact', 'finding', 'digest', 'asset'].forEach((key) => {
+      chain.append(el('span', 'task-detail-chip', key + ' ' + formatCount(counts[key] || 0)));
+    });
+    slot.append(chain);
+    const jobs = detail.recentJobs || [];
+    if (!jobs.length) {
+      slot.append(emptyBlock('这个目标还没有跑过作业'));
+      return;
+    }
+    const list = el('div', 'dash-list');
+    jobs.forEach((job) => {
+      const row = el('div', 'dash-row');
+      row.append(el('span', 'dash-row-main',
+        jobView.kindLabel(job.kind || job.kindLabel || '') + ' · ' + (job.target || '')));
+      row.append(el('span', 'dash-row-meta', jobView.label(job.status)
+        + ' · ' + formatTime(job.createdAt || 0)));
+      list.append(row);
+    });
+    slot.append(list);
+  }
+
+  function taskRow(task) {
+    const box = el('article', 'task-row');
+    const head = el('div', 'task-head');
+    if (task.pinned) head.append(el('span', 'task-pin', '置顶'));
+    const name = el('span', 'task-name', task.name || task.target || '（未命名）');
+    name.title = name.textContent;
+    head.append(name);
+    head.append(el('span', 'task-state state-' + (task.status || 'idle'), taskState(task)));
+    if (task.archived) head.append(el('span', 'task-state state-archived', '已归档'));
+    head.append(el('span', 'task-meta', taskCounts(task)));
+    box.append(head);
+    const sub = [];
+    if (task.goal) sub.push('目标：' + task.goal);
+    else if (task.objective) sub.push('目标：' + task.objective);
+    if (task.remark) sub.push('备注：' + task.remark);
+    if (task.target) sub.push('入口：' + task.target);
+    if (sub.length) box.append(el('p', 'task-sub', sub.join(' · ')));
+    const acts = el('div', 'task-acts');
+    acts.append(taskButton('详情', 'detail', task));
+    if (!task.archived) {
+      acts.append(taskButton(task.paused ? '恢复' : '暂停', task.paused ? 'resume' : 'pause', task));
+      acts.append(taskButton(task.pinned ? '取消置顶' : '置顶', 'pin', task));
+    }
+    acts.append(taskButton(task.archived ? '取消归档' : '归档', task.archived ? 'unarchive' : 'archive', task));
+    box.append(acts);
+    if (tasksOpen === task.id) {
+      const slot = el('div', 'task-detail');
+      slot.dataset.taskDetail = task.id;
+      slot.append(el('div', 'muted', '正在读取详情…'));
+      box.append(slot);
+    }
+    return box;
+  }
+
+  // 行内按钮只带 `data-act` 与 `data-id`，事件绑在容器上（委托）：一份页面里
+  // 可能有一百行，逐行 addEventListener 等于给自己攒一百个闭包。
+  function taskButton(label, act, task) {
+    const button = el('button', 'btn xs', label);
+    button.type = 'button';
+    button.dataset.act = act;
+    button.dataset.id = task.id;
+    return button;
+  }
+
+  function taskFilters(host) {
+    const bar = el('div', 'task-filters');
+    const select = el('select', 'select xs-select');
+    const all = el('option', '', '全部状态');
+    all.value = '';
+    select.append(all);
+    TASK_STATES.forEach((key) => {
+      const option = el('option', '', TASK_STATE_TEXT[key]);
+      option.value = key;
+      if (tasksFilter.status === key) option.selected = true;
+      select.append(option);
+    });
+    select.addEventListener('change', () => {
+      tasksFilter.status = select.value;
+      loadTasks();
+    });
+    bar.append(select);
+    const archivedLabel = el('label', 'task-check');
+    const archived = el('input');
+    archived.type = 'checkbox';
+    archived.checked = tasksFilter.archived;
+    archived.addEventListener('change', () => {
+      tasksFilter.archived = archived.checked;
+      loadTasks();
+    });
+    archivedLabel.append(archived);
+    archivedLabel.append(document.createTextNode('只看归档'));
+    bar.append(archivedLabel);
+    const search = el('input', 'input xs-input');
+    search.type = 'search';
+    search.placeholder = '按名称、目标、备注或编号找';
+    search.value = tasksFilter.keyword;
+    search.addEventListener('change', () => {
+      tasksFilter.keyword = search.value.trim();
+      loadTasks();
+    });
+    bar.append(search);
+    host.append(bar);
+  }
+
+  function taskCreateForm() {
+    const form = el('form', 'task-create');
+    form.append(el('h2', 'dash-card-title', '新建渗透任务'));
+    form.append(el('p', 'task-sub', '一个任务对应一个目标：它会出现在链路、漏洞、资产和报告里。'));
+    const target = el('input', 'input');
+    target.type = 'text';
+    target.placeholder = '目标：域名、URL 或 IP';
+    target.required = true;
+    const objective = el('input', 'input');
+    objective.type = 'text';
+    objective.placeholder = '想达成什么：例如拿下后台管理员权限';
+    const auth = el('input', 'input');
+    auth.type = 'text';
+    auth.placeholder = '授权依据：例如客户授权书 2026-01';
+    form.append(target);
+    form.append(objective);
+    form.append(auth);
+    const submit = el('button', 'btn sm', '创建');
+    submit.type = 'submit';
+    form.append(submit);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const value = target.value.trim();
+      if (!value) {
+        taskNote('目标不能为空', true);
+        renderTasks();
+        return;
+      }
+      // 目标一旦建错，它的作业、链路、漏洞都挂在下面；删除要逐表清，不是
+      // 「点错了再点一下」的事。所以这里问一句，并念出将要写入的目标。
+      if (!window.confirm('创建任务「' + value + '」？\n\n'
+        + '任务会带着自己的链路、资产与漏洞记录，建错了要单独删。')) return;
+      submit.disabled = true;
+      try {
+        await apiPost('/engagements', {
+          target: value,
+          objective: objective.value.trim(),
+          authorization: auth.value.trim(),
+        });
+        target.value = '';
+        objective.value = '';
+        auth.value = '';
+        taskNote('已创建任务，到「链路」页就能看到它的目标节点', false);
+      } catch (error) {
+        taskNote(error.message, true);
+      }
+      submit.disabled = false;
+      await loadTasks();
+    });
+    return form;
+  }
+
+  function renderTasks() {
+    const host = $('#tasks-body');
+    if (!host) return;
+    clear(host);
+    const meta = $('#tasks-meta');
+    const counts = (tasksData && tasksData.counts) || {};
+    if (meta) {
+      meta.textContent = '共 ' + formatCount(counts.all || 0) + ' 个任务'
+        + ' · 进行中 ' + formatCount(counts.running || 0)
+        + ' · 排队 ' + formatCount(counts.queued || 0)
+        + ' · 已暂停 ' + formatCount(counts.paused || 0)
+        + ' · 归档 ' + formatCount(counts.archived || 0);
+    }
+    taskFilters(host);
+    if (tasksNote.text) {
+      host.append(el('p', 'task-note' + (tasksNote.bad ? ' bad' : ''), tasksNote.text));
+      tasksNote = { text: '', bad: false };
+    }
+    if (!tasksData) {
+      host.append(el('div', 'muted', '正在读取任务…'));
+      return;
+    }
+    const items = tasksData.tasks || [];
+    if (!items.length) {
+      host.append(emptyBlock(tasksFilter.archived
+        ? '没有归档的任务'
+        : '没有符合条件的任务。新建一个，它会成为链路的起点。'));
+    } else {
+      const list = el('div', 'task-list');
+      items.forEach((item) => list.append(taskRow(item)));
+      host.append(list);
+    }
+    host.append(taskCreateForm());
+  }
+
+  async function loadTasks() {
+    const host = $('#tasks-body');
+    if (!host) return;
+    const params = [];
+    if (tasksFilter.status) params.push('status=' + encodeURIComponent(tasksFilter.status));
+    if (tasksFilter.archived) params.push('archived=1');
+    if (tasksFilter.keyword) params.push('q=' + encodeURIComponent(tasksFilter.keyword));
+    params.push('limit=200');
+    const query = params.join('&');
+    try {
+      tasksData = await apiGet('/tasks?' + query);
+    } catch (error) {
+      clear(host);
+      host.append(errorBlock('任务加载失败：' + error.message));
+      return;
+    }
+    renderTasks();
+  }
+
+  function bindTaskEvents() {
+    const host = $('#tasks-body');
+    if (!host) return;
+    host.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-act]');
+      if (!button) return;
+      const id = button.dataset.id;
+      const act = button.dataset.act;
+      const task = ((tasksData && tasksData.tasks) || [])
+        .filter((item) => item.id === id)[0];
+      if (act === 'detail') { openTask(id); return; }
+      if (act === 'pause') { taskAction(`/tasks/${encodeURIComponent(id)}/pause`, {}); return; }
+      if (act === 'resume') { taskAction(`/tasks/${encodeURIComponent(id)}/resume`, {}); return; }
+      if (act === 'archive') {
+        // 归档不改目标，只把它从默认列表里收起来；取消归档随时能回来。
+        // 仍要念一句，因为这个动作会让它从当前列表里消失，读的人容易以为删了。
+        if (!window.confirm('把任务「' + ((task && task.name) || id) + '」收进归档？\n\n'
+          + '它不会被删除：勾上「只看归档」就能找回来。')) return;
+        taskAction(`/tasks/${encodeURIComponent(id)}/archive`, {});
+        return;
+      }
+      if (act === 'unarchive') { taskAction(`/tasks/${encodeURIComponent(id)}/unarchive`, {}); return; }
+      if (act === 'pin') {
+        const pinned = !!(task && task.pinned);
+        taskAction(`/tasks/${encodeURIComponent(id)}`, { pinned: !pinned });
+      }
+    });
+  }
+
+  /* ------------------------------------------------------------ 计划任务 */
+  // 一条计划 = 一个**时间窗口规则** + 一组要放开的任务。窗口进：恢复任务；窗口出：
+  // 暂停任务。判定全在后端（`pentestd/schedules.py`），前端只做表单一件事——把"哪天、
+  // 几点、星期几"翻译成后端要的三个字段，再把它算出来的状态显示出来。
+  //
+  // **为什么不在前端算「下次窗口」**：算窗口要认时区、跨午夜、规则过期三种情况，
+  // 前端算一份、后端算一份，两边差一分钟就是两个不同的答案。这一页所有时间词都
+  // 来自 `schedules.view()`。
+  const SCHED_STATE_TEXT = {
+    waiting: '等待窗口', running: '窗口运行中', outside: '窗口外',
+    completed: '已完成', error: '错误',
+  };
+  const SCHED_RULE_TEXT = { once: '指定日期', weekly: '按周' };
+  const SCHED_ZONE_TEXT = { system: '系统时区', beijing: '北京时间 UTC+8' };
+  const SCHED_KIND_TEXT = { enter: '进窗口', exit: '出窗口', manual: '手动运行' };
+  const SCHED_WEEKDAYS = [[1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'],
+    [5, '周五'], [6, '周六'], [7, '周日']];
+  let schedData = null;
+  let schedEditing = null;
+  let schedOpen = '';
+  let schedNote = { text: '', bad: false };
+  let schedCandidates = null;
+
+  function schedState(item) {
+    return SCHED_STATE_TEXT[item.state] || item.statusLabel || item.state || '未知';
+  }
+
+  function schedWhen(item) {
+    const rule = SCHED_RULE_TEXT[item.rule] || item.rule || '';
+    const parts = [rule];
+    if (item.rule === 'once') {
+      if (item.startDate) parts.push(item.startDate);
+    } else if ((item.weekdayLabels || []).length) {
+      parts.push(item.weekdayLabels.join('、'));
+    }
+    if (item.startTime) {
+      parts.push(item.endTime ? item.startTime + '–' + item.endTime
+        : item.startTime + ' 起 1 小时');
+    }
+    if (item.endDate) parts.push('到 ' + item.endDate);
+    return parts.join(' · ');
+  }
+
+  function schedSetNote(text, bad) {
+    schedNote = { text: text || '', bad: !!bad };
+  }
+
+  async function schedAction(path, body) {
+    try {
+      await apiPost(path, body || {});
+      schedSetNote('已提交', false);
+    } catch (error) {
+      schedSetNote(error.message, true);
+    }
+    await loadSchedules();
+  }
+
+  async function loadSchedCandidates() {
+    if (schedCandidates) return schedCandidates;
+    try {
+      const data = await apiGet('/tasks?limit=200');
+      schedCandidates = data.tasks || [];
+    } catch (error) {
+      // 拿不到任务列表不该挡住「只建一条不绑任务的计划」这种事。
+      schedCandidates = [];
+    }
+    return schedCandidates;
+  }
+
+  function schedWeekdayRow(form, item) {
+    const row = el('div', 'sched-weekdays');
+    const picked = item.weekdays || [];
+    SCHED_WEEKDAYS.forEach((pair) => {
+      const label = el('label', 'task-check');
+      const box = el('input');
+      box.type = 'checkbox';
+      box.name = 'weekday';
+      box.value = String(pair[0]);
+      box.checked = picked.indexOf(pair[0]) >= 0;
+      label.append(box);
+      label.append(document.createTextNode(pair[1]));
+      row.append(label);
+    });
+    form.append(row);
+    return row;
+  }
+
+  function schedTaskRow(form, item, candidates) {
+    const box = el('div', 'sched-tasks');
+    box.append(el('div', 'sched-label', '要放开的任务'));
+    if (!candidates.length) {
+      box.append(el('p', 'task-sub', '还没有任务可绑；先到「渗透任务」页建一个。'));
+      form.append(box);
+      return box;
+    }
+    const picked = item.taskIds || [];
+    candidates.forEach((task) => {
+      const label = el('label', 'task-check');
+      const input = el('input');
+      input.type = 'checkbox';
+      input.name = 'task';
+      input.value = task.id;
+      input.checked = picked.indexOf(task.id) >= 0;
+      label.append(input);
+      label.append(document.createTextNode(
+        (task.name || task.target || task.id) + '（' + (task.status || '') + '）'));
+      box.append(label);
+    });
+    form.append(box);
+    return box;
+  }
+
+  function schedField(form, label, node, hint) {
+    const wrap = el('label', 'sched-field');
+    wrap.append(el('span', 'sched-label', label));
+    wrap.append(node);
+    if (hint) wrap.append(el('span', 'task-sub', hint));
+    form.append(wrap);
+    return node;
+  }
+
+  function schedInput(kind, name, value) {
+    const node = el('input', 'input');
+    node.type = kind;
+    node.name = name;
+    if (value) node.value = value;
+    return node;
+  }
+
+  function schedSelect(name, options, value) {
+    const node = el('select', 'select');
+    node.name = name;
+    options.forEach((pair) => {
+      const option = el('option', '', pair[1]);
+      option.value = pair[0];
+      if (value === pair[0]) option.selected = true;
+      node.append(option);
+    });
+    return node;
+  }
+
+  async function schedFormView(host) {
+    const item = schedEditing || {};
+    const editing = !!item.id;
+    const form = el('form', 'sched-form');
+    form.append(el('h2', 'dash-card-title', editing ? '编辑计划' : '新建计划'));
+    schedField(form, '计划名称', schedInput('text', 'name', item.name || ''),
+      '列表上按名称、编号、任务编号搜索');
+    schedField(form, '规则', schedSelect('rule',
+      [['once', '指定日期'], ['weekly', '按周']], item.rule || 'weekly'),
+      '指定日期只在当天生效；按周按星期几重复');
+    schedField(form, '时区', schedSelect('timezone', [['system', '系统时区'],
+      ['beijing', '北京时间 UTC+8']], item.timezone || 'system'),
+      '窗口时间按这个时区解释');
+    schedField(form, '开始日期', schedInput('date', 'startDate', item.startDate || ''),
+      '按周可以留空 = 从本周开始');
+    schedField(form, '结束日期', schedInput('date', 'endDate', item.endDate || ''),
+      '留空 = 一直有效');
+    form.append(el('div', 'sched-label', '星期（按周时必选）'));
+    schedWeekdayRow(form, item);
+    schedField(form, '开始时间', schedInput('time', 'startTime', item.startTime || ''),
+      '窗口从这里开始');
+    schedField(form, '结束时间', schedInput('time', 'endTime', item.endTime || ''),
+      '留空 = 1 小时；早于开始时间表示跨午夜');
+    schedField(form, '备注', schedInput('text', 'remark', item.remark || ''), '');
+    const flags = el('div', 'sched-flags');
+    [['enabled', '启用这条计划', item.enabled !== false],
+      ['startImmediately', '窗口开启时立刻恢复任务', !!item.startImmediately],
+    ].forEach((pair) => {
+      const label = el('label', 'task-check');
+      const box = el('input');
+      box.type = 'checkbox';
+      box.name = pair[0];
+      box.checked = pair[2];
+      label.append(box);
+      label.append(document.createTextNode(pair[1]));
+      flags.append(label);
+    });
+    form.append(flags);
+    const candidates = await loadSchedCandidates();
+    schedTaskRow(form, item, candidates);
+    const acts = el('div', 'sched-acts');
+    const submit = el('button', 'btn sm', editing ? '保存' : '创建');
+    submit.type = 'submit';
+    acts.append(submit);
+    const cancel = el('button', 'btn sm ghost', '取消');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => {
+      schedEditing = null;
+      renderSchedules();
+    });
+    acts.append(cancel);
+    form.append(acts);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const days = Array.prototype.slice
+        .call(form.querySelectorAll('input[name="weekday"]'))
+        .filter((box) => box.checked)
+        .map((box) => Number(box.value));
+      const tasks = Array.prototype.slice
+        .call(form.querySelectorAll('input[name="task"]'))
+        .filter((box) => box.checked)
+        .map((box) => box.value);
+      const read = (name) => {
+        const node = form.querySelector('[name="' + name + '"]');
+        return node ? node.value.trim() : '';
+      };
+      const flag = (name) => {
+        const node = form.querySelector('[name="' + name + '"]');
+        return !!(node && node.checked);
+      };
+      const body = {
+        name: read('name'),
+        rule: read('rule'),
+        timezone: read('timezone'),
+        startDate: read('startDate'),
+        endDate: read('endDate'),
+        startTime: read('startTime'),
+        endTime: read('endTime'),
+        weekdays: days,
+        taskIds: tasks,
+        remark: read('remark'),
+        enabled: flag('enabled'),
+        startImmediately: flag('startImmediately'),
+      };
+      // 后端会逐条报出缺哪个字段（"按周的计划要至少选一个星期"），所以这里
+      // 不预校验——预校验写一份、后端写一份，两份话术迟早不一致。
+      submit.disabled = true;
+      try {
+        if (editing) {
+          await apiPost(`/schedules/${encodeURIComponent(item.id)}`, body);
+        } else {
+          await apiPost('/schedules', body);
+        }
+        schedEditing = null;
+        schedSetNote('已保存', false);
+      } catch (error) {
+        schedSetNote(error.message, true);
+      }
+      submit.disabled = false;
+      await loadSchedules();
+    });
+    host.append(form);
+  }
+
+  function schedTimeline(item) {
+    const box = el('div', 'sched-timeline');
+    box.dataset.schedRuns = item.id;
+    box.append(el('div', 'muted', '正在读取运行时间线…'));
+    return box;
+  }
+
+  async function loadSchedRuns(id) {
+    const host = $('#schedules-body');
+    const slot = host ? host.querySelector('[data-sched-runs="' + id + '"]') : null;
+    if (!slot) return;
+    let data = null;
+    try {
+      data = await apiGet(`/schedules/${encodeURIComponent(id)}/runs?limit=20`);
+    } catch (error) {
+      clear(slot);
+      slot.append(errorBlock('读取时间线失败：' + error.message));
+      return;
+    }
+    clear(slot);
+    const runs = data.runs || [];
+    if (!runs.length) {
+      slot.append(emptyBlock('计划进入第一个窗口后会显示时间线'));
+      return;
+    }
+    const list = el('div', 'dash-list');
+    runs.forEach((run) => {
+      const row = el('div', 'dash-row');
+      row.append(el('span', 'dash-row-main',
+        (SCHED_KIND_TEXT[run.kind] || run.kind || '运行')
+        + (run.detail ? ' · ' + run.detail : '')));
+      row.append(el('span', 'dash-row-meta', formatTime(run.createdAt || 0)));
+      list.append(row);
+    });
+    slot.append(list);
+  }
+
+  function schedButton(label, act, item) {
+    const button = el('button', 'btn xs', label);
+    button.type = 'button';
+    button.dataset.act = act;
+    button.dataset.id = item.id;
+    return button;
+  }
+
+  function schedRow(item) {
+    const box = el('article', 'sched-row');
+    const head = el('div', 'task-head');
+    const name = el('span', 'task-name', item.name || item.id);
+    name.title = name.textContent;
+    head.append(name);
+    head.append(el('span', 'task-state state-' + (item.enabled ? (item.state || 'outside') : 'idle'),
+      item.enabled ? schedState(item) : '已停用'));
+    head.append(el('span', 'task-meta', (SCHED_RULE_TEXT[item.rule] || item.rule || '')
+      + ' · ' + (SCHED_ZONE_TEXT[item.timezone] || item.timezone || '')));
+    box.append(head);
+    box.append(el('p', 'task-sub', schedWhen(item)));
+    const meta = [];
+    meta.push('绑定任务 ' + formatCount((item.taskIds || []).length));
+    meta.push('运行 ' + formatCount(item.runCount || 0) + ' 次');
+    if (item.nextAt) meta.push('下次 ' + formatTime(item.nextAt));
+    if (item.lastRun) meta.push('最近 ' + formatTime(item.lastRun.createdAt || 0));
+    if (item.remark) meta.push('备注：' + item.remark);
+    box.append(el('p', 'task-meta', meta.join(' · ')));
+    const acts = el('div', 'task-acts');
+    acts.append(schedButton('编辑', 'edit', item));
+    acts.append(schedButton('立即运行', 'run', item));
+    acts.append(schedButton(item.enabled ? '停用' : '启用',
+      item.enabled ? 'disable' : 'enable', item));
+    acts.append(schedButton('运行时间线', 'timeline', item));
+    acts.append(schedButton('删除', 'delete', item));
+    box.append(acts);
+    if (schedOpen === item.id) box.append(schedTimeline(item));
+    return box;
+  }
+
+  function renderSchedules() {
+    const host = $('#schedules-body');
+    if (!host) return;
+    clear(host);
+    const counts = (schedData && schedData.counts) || {};
+    const meta = $('#schedules-meta');
+    if (meta) {
+      meta.textContent = '共 ' + formatCount(counts.total || 0) + ' 条'
+        + ' · 启用 ' + formatCount(counts.enabled || 0)
+        + ' · 窗口运行中 ' + formatCount(counts.running || 0)
+        + ' · 停用 ' + formatCount(counts.disabled || 0);
+    }
+    if (schedNote.text) {
+      host.append(el('p', 'task-note' + (schedNote.bad ? ' bad' : ''), schedNote.text));
+      schedNote = { text: '', bad: false };
+    }
+    if (!schedData) {
+      host.append(el('div', 'muted', '正在读取计划…'));
+      return;
+    }
+    const items = schedData.schedules || [];
+    if (!items.length && !schedEditing) {
+      host.append(emptyBlock('还没有计划。新建一条，它会在窗口开启时恢复绑定的任务。'));
+    } else if (items.length) {
+      const list = el('div', 'sched-list');
+      items.forEach((item) => list.append(schedRow(item)));
+      host.append(list);
+    }
+    if (!schedEditing) {
+      const newButton = el('button', 'btn sm', '新建计划');
+      newButton.type = 'button';
+      newButton.addEventListener('click', () => {
+        schedEditing = {};
+        renderSchedules();
+      });
+      host.append(newButton);
+    } else {
+      schedFormView(host);
+    }
+  }
+
+  async function loadSchedules() {
+    const host = $('#schedules-body');
+    if (!host) return;
+    try {
+      schedData = await apiGet('/schedules?limit=200');
+    } catch (error) {
+      clear(host);
+      host.append(errorBlock('计划加载失败：' + error.message));
+      return;
+    }
+    renderSchedules();
+    if (schedOpen) loadSchedRuns(schedOpen);
+  }
+
+  async function tickSchedules() {
+    // 计划线程本来每 20 秒跑一轮；这个按钮给「等不及」和自测用。它会**真的**
+    // 恢复/暂停任务，所以按钮上写的是「立即对表」而不是「模拟」。
+    try {
+      const data = await apiPost('/schedules/tick', {});
+      const created = data.created || [];
+      const skipped = data.skipped || [];
+      schedSetNote(created.length
+        ? '对表完成：处理了 ' + formatCount(created.length) + ' 条计划'
+        : '对表完成：没有需要处理的窗口'
+          + (skipped.length ? '（跳过 ' + formatCount(skipped.length) + ' 条）' : ''), false);
+    } catch (error) {
+      schedSetNote(error.message, true);
+    }
+    await loadSchedules();
+  }
+
+  function bindSchedEvents() {
+    const host = $('#schedules-body');
+    if (!host) return;
+    host.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-act]');
+      if (!button) return;
+      const id = button.dataset.id;
+      const act = button.dataset.act;
+      const item = ((schedData && schedData.schedules) || [])
+        .filter((row) => row.id === id)[0];
+      if (act === 'edit') {
+        schedEditing = item || {};
+        renderSchedules();
+        return;
+      }
+      if (act === 'timeline') {
+        schedOpen = schedOpen === id ? '' : id;
+        renderSchedules();
+        if (schedOpen) loadSchedRuns(schedOpen);
+        return;
+      }
+      if (act === 'run') {
+        // 「立即运行」会**真的恢复**这条计划绑定的任务（等同窗口开启）。
+        // 不是预览：任务会开始跑，所以先问一句，并念出绑了几个任务。
+        const bound = ((item && item.taskIds) || []).length;
+        if (!window.confirm('立即运行「' + ((item && item.name) || id) + '」？\n\n'
+          + (bound ? '会恢复它绑定的 ' + formatCount(bound) + ' 个任务。' : '这条计划没有绑定任务。'))) return;
+        schedAction(`/schedules/${encodeURIComponent(id)}/run`, {});
+        return;
+      }
+      if (act === 'enable') { schedAction(`/schedules/${encodeURIComponent(id)}/enable`, {}); return; }
+      if (act === 'disable') { schedAction(`/schedules/${encodeURIComponent(id)}/disable`, {}); return; }
+      if (act === 'delete') {
+        // 删掉的是规则本身；它的运行记录留在时间线里（后端 delete_schedule 只删
+        // 计划行），所以这里不必说「记录也会没」。
+        if (!window.confirm('删除计划「' + ((item && item.name) || id) + '」？\n\n'
+          + '之后这条规则不再放开任务；已经跑过的运行记录会留下。')) return;
+        schedAction(`/schedules/${encodeURIComponent(id)}/delete`, {});
+      }
+    });
   }
 
   /* ------------------------------------------------------------ 流量 */
@@ -724,6 +1561,8 @@
   /* ------------------------------------------------------------ 分派 */
   const LOADERS = {
     dashboard: loadDashboard,
+    tasks: loadTasks,
+    schedules: loadSchedules,
     traffic: loadTraffic,
     repeater: () => {
       if (!repeaterState) repeaterState = { method: 'GET', url: '', headers: '', body: '' };
@@ -742,7 +1581,8 @@
     if (fn) fn();
   }
 
-  window.PentestPanels = { load, prefillRepeater, loadDashboard, loadTraffic, loadApprovals, loadLogs };
+  window.PentestPanels = { load, prefillRepeater, loadDashboard, loadTasks,
+    loadSchedules, loadTraffic, loadApprovals, loadLogs };
 
   // 「刷新」「清空」这类按钮在这里绑，理由与上面同一条：它们只属于这几页。
   document.addEventListener('DOMContentLoaded', () => {
@@ -751,6 +1591,11 @@
       if (node) node.addEventListener('click', handler);
     };
     bind('dashboard-refresh', loadDashboard);
+    bind('tasks-refresh', loadTasks);
+    bind('schedules-refresh', loadSchedules);
+    bind('schedules-tick', tickSchedules);
+    bindTaskEvents();
+    bindSchedEvents();
     bind('traffic-refresh', loadTraffic);
     bind('traffic-clear', async () => {
       const host = $('#traffic-detail');
