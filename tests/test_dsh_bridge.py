@@ -24,7 +24,10 @@ if ROOT not in sys.path:
 from pentestd import dsh_bridge as br                             # noqa: E402
 from pentestd import dsh_runtime as rt                           # noqa: E402
 
-# 实测：readonly 23 / probe 36 / audit 39 / full 45（full 按操作员计，管理员 48）
+# 实测：readonly 52 / probe 88 / audit 94 / full 100（full 按操作员计，管理员 107）
+# ARTEX 那 59 项工具并进 chat.TOOLS 时一次性改了这组数：只读 +29、探测 +23、审计 +3、
+# 完全作业 +4（其中后四条进 ADMIN_TOOLS，管理员差额从 3 变 7）。并进的是同一张
+# `policy.TOOL_LEVEL` 表，所以四档都是累加口径，四个数必须一次改完。
 # 加 `http_request`（探测档）：probe 35→36，而 audit / full 是累加口径，跟着 38→39、
 # 44→45，管理员侧 47→48。与上面几次一样，这几行必须一次改完。
 # 加 `agent_loop`、`netscan`（都是探测档）时各漏改过一次：代码与 guide.js 都加了，只有这里还写着旧数。
@@ -35,11 +38,11 @@ from pentestd import dsh_runtime as rt                           # noqa: E402
 # 清空任务队列那次是**反向**的：`clear_finished_jobs` 进了 `policy.ADMIN_TOOLS`（清空任务
 # 队列是跨用户的动作，与 `POST /jobs/clear` 同一条判据），于是操作员的 full 档从 45 掉到
 # 44，而管理员那一侧不动。数字变小同样要改这一行 —— 否则漂移只是换了个方向。
-EXPECTED_COUNTS = {"readonly": 23, "probe": 36, "audit": 39, "full": 45}
+EXPECTED_COUNTS = {"readonly": 52, "probe": 88, "audit": 94, "full": 100}
 
 # 管理员那一档多出来的三个正是 `policy.ADMIN_TOOLS`：单钉操作员那个数会漏掉"某一项被
 # 悄悄挪到管理员侧"这种改动（操作员少了 1、管理员没变，两边都不红）。
-EXPECTED_ADMIN_FULL = 48
+EXPECTED_ADMIN_FULL = 107
 
 
 class _Store:

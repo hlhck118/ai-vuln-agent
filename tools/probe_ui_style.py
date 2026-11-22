@@ -15,7 +15,7 @@
 
 两个实现细节都不是可选的：
   * 注入的脚本必须**延后 1200ms** —— 夹具的 `switchTab` / `fetch` 是异步的，同步执行时
-    控制台外壳还没取消 `hidden`，量到的全是 0×0；
+    工作台外壳还没取消 `hidden`，量到的全是 0×0；
   * 结果写进 `<html data-probe>` 再用 `--dump-dom` 取回 —— 无头浏览器没有 stdout 可打印。
 """
 import argparse
@@ -37,7 +37,7 @@ def probe(html_path: str, script: str, wait_ms: int = 12000) -> dict:
     with open(html_path, "r", encoding="utf-8") as handle:
         html = handle.read()
     # 必须延后到夹具自己的初始化之后：footer 里的 switchTab / fetch 是异步的，
-    # 同步执行时控制台外壳还没取消 hidden，量到的全是 0×0。
+    # 同步执行时工作台外壳还没取消 hidden，量到的全是 0×0。
     inject = ("<script>setTimeout(function(){try{var v=(function(){%s})();"
               "document.documentElement.setAttribute('data-probe',"
               "JSON.stringify(v));}catch(e){document.documentElement."

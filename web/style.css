@@ -147,6 +147,32 @@
   --edge-parent: #7d8794;
   --edge-covers: #9aa8ff;
 
+  /* ---- 状态胶囊：九种节点状态各自一对「字色 / 底色」 ----
+   * 为什么单独成对而不是复用 --kind-*（类型色）：类型与状态是两件事，一张卡上同时
+   * 出现——左上圆点是类型，右下胶囊是状态。共用一套色，读者会把「已确认」读成
+   * 「这是个事实」，而它也可能长在一张漏洞卡上。
+   * 也不复用 --sev-*（严重度）：那四档说的是「有多重」，是读数；胶囊说的是
+   * 「走到哪一步」，是进度。红胶囊出现在一条已确认的低危事实上时，读起来像误报。
+   * 底色一律是低饱和深色（亮色主题下换成浅色），文字是对它过 AA 的那一档。 */
+  --state-origin-fg: #a8b6c9;
+  --state-origin-bg: #39424f;
+  --state-confirmed-fg: #7ed6a5;
+  --state-confirmed-bg: #234030;
+  --state-done-fg: #7fb3ff;
+  --state-done-bg: #20384f;
+  --state-exhausted-fg: #a6aebc;
+  --state-exhausted-bg: #2e3440;
+  --state-met-fg: #ffd479;
+  --state-met-bg: #3f3418;
+  --state-active-fg: #9aa8ff;
+  --state-active-bg: #2a2b46;
+  --state-superseded-fg: #9daab9;
+  --state-superseded-bg: #252b38;
+  --state-blocked-fg: #ff9d4d;
+  --state-blocked-bg: #46301a;
+  --state-pending-fg: #c9cdd8;
+  --state-pending-bg: #33333d;
+
   /* ---- 代码正文与内联代码 ---- */
   --code: #cfe3ff;
   --code-inline: #ffd0a3;
@@ -226,12 +252,17 @@
     "Cascadia Code", Consolas, "Liberation Mono", "Microsoft YaHei UI",
     "PingFang SC", "Hiragino Sans GB", monospace;
 
-  /* ---- 字号：五档。正文 13px，其余按 11 / 12 / 15 / 20 递进 ---- */
-  --fs-caption: 11px;   /* 元信息、标识、徽章 */
-  --fs-small: 12px;     /* 说明、次级正文、表单标签 */
-  --fs-body: 13px;      /* 正文与控件 */
-  --fs-title: 15px;     /* 卡片标题、气泡标题 */
-  --fs-display: 20px;   /* 登录标题、报告 h1 */
+  /* ---- 字号：五档。正文 14px，其余按 12 / 13 / 16 / 22 递进 ----
+   *
+   * 2026-11 整档上抬 1px（正文 13→14）。原来 11/12/13 三档挤在 2px 之内，中文
+   * 在 11px 上笔画会糊、正文档与说明档差一像素分不出层级——使用者反馈「字体有点
+   * 小」。抬的时候**五档一起抬**：只抬 body 会让它和 caption 拉开到 4px，层级是
+   * 清楚了，但满屏的元信息仍是 11px，读起来还是小字当道。 */
+  --fs-caption: 12px;   /* 元信息、标识、徽章 */
+  --fs-small: 13px;     /* 说明、次级正文、表单标签 */
+  --fs-body: 14px;      /* 正文与控件 */
+  --fs-title: 16px;     /* 卡片标题、气泡标题 */
+  --fs-display: 22px;   /* 登录标题、报告 h1 */
 
   /* ---- 间距：4 的倍数。--sp-1 用于图标与文字之间，--sp-6 用于面板之间 ---- */
   --sp-1: 4px;
@@ -346,6 +377,27 @@
   --kind-finding: #9e5c1a;
   --kind-asset: #17758d;
   --kind-digest: #4a56c8;
+
+  /* 状态胶囊在亮底上要整组换：--state-*-bg 是低饱和**浅**填充，文字压到能过 AA 的
+   * 那一档。深色那套原样搬过来是白字配浅底——胶囊会像被擦掉了一半。 */
+  --state-origin-fg: #4a5563;
+  --state-origin-bg: #dfe3ea;
+  --state-confirmed-fg: #1f6b46;
+  --state-confirmed-bg: #d8efe2;
+  --state-done-fg: #1f4f8f;
+  --state-done-bg: #dbe8fb;
+  --state-exhausted-fg: #5a6270;
+  --state-exhausted-bg: #e6e8ec;
+  --state-met-fg: #7a5400;
+  --state-met-bg: #fbeecd;
+  --state-active-fg: #3a3fa0;
+  --state-active-bg: #e2e3fb;
+  --state-superseded-fg: #5d6673;
+  --state-superseded-bg: #e4e7ec;
+  --state-blocked-fg: #8a4400;
+  --state-blocked-bg: #fce3cd;
+  --state-pending-fg: #4d5462;
+  --state-pending-bg: #e7e9ee;
   --edge-spawns: #1b66de;
   --edge-yields: #167b5c;
   --edge-derived: #9046d1;
@@ -468,6 +520,27 @@
   --kind-finding: #a35c00;
   --kind-asset: #0b6b86;
   --kind-digest: #3f4ab0;
+
+  /* 状态胶囊在亮底上要整组换：--state-*-bg 是低饱和**浅**填充，文字压到能过 AA 的
+   * 那一档。深色那套原样搬过来是白字配浅底——胶囊会像被擦掉了一半。 */
+  --state-origin-fg: #4a5563;
+  --state-origin-bg: #dfe3ea;
+  --state-confirmed-fg: #1f6b46;
+  --state-confirmed-bg: #d8efe2;
+  --state-done-fg: #1f4f8f;
+  --state-done-bg: #dbe8fb;
+  --state-exhausted-fg: #5a6270;
+  --state-exhausted-bg: #e6e8ec;
+  --state-met-fg: #7a5400;
+  --state-met-bg: #fbeecd;
+  --state-active-fg: #3a3fa0;
+  --state-active-bg: #e2e3fb;
+  --state-superseded-fg: #5d6673;
+  --state-superseded-bg: #e4e7ec;
+  --state-blocked-fg: #8a4400;
+  --state-blocked-bg: #fce3cd;
+  --state-pending-fg: #4d5462;
+  --state-pending-bg: #e7e9ee;
 
   /* 亮底上的边色必须整体压暗：`#e0a13c` 那种琥珀在白画布上细到几乎看不见，
    * 而边是**关系**的唯一载体——看不见边，图谱就退化成一堆孤立的方块。 */
@@ -854,7 +927,7 @@
  * 系统开关的人只要动一次磨砂滑块，那项偏好就被静默撤销了。
  *
  * --glass-card-blur 是给**内容卡片**的一档更弱的模糊，与外壳分开。理由见下方
- * 1c 节：外壳背后是缓慢流动的色晕，卡片背后是同一层，但卡片上要读 13px 正文。
+ * 1c 节：外壳背后是缓慢流动的色晕，卡片背后是同一层，但卡片上要读 `--fs-body` 正文。
  * 两档分开之后，"把外壳调厚"不会同时把正文泡进一片糊里。
  * ==========================================================================*/
 
@@ -906,7 +979,7 @@
  *   · 内容卡片——卡片本身不动，但它们之间的**画布色晕**在滚动时从卡片边缘掠过，
  *     亮色主题里这一层尤其明显（深色主题下色晕几乎看不出，所以这条在那边收益小）。
  *
- * 两档分开给值，而不是共用一个 --glass-blur：把外壳调厚不该同时把 13px 正文泡进
+ * 两档分开给值，而不是共用一个 --glass-blur：把外壳调厚不该同时把 `--fs-body` 正文泡进
  * 一片糊里。卡片档默认比外壳低一半左右。
  *
  * 上边缘那道 1px 高光——**没有它，半透明只是一块灰**。玻璃的"实体感"几乎全在这
@@ -1234,13 +1307,15 @@ body {
 /* 导航分两段（功能 / 系统），段之间用一条淡分隔线 + 一个小标签区分。
  * 段标签是**分类**，不是可点的东西，所以没有交互态。
  *
- * 它原来是 10px/600/`--muted`：**又小又淡**，而下面的条目是 13px。两个字号贴得太近、
+ * 它原来是 10px/600/`--muted`：**又小又淡**，而下面的条目是 `--fs-body`。两个字号贴得太近、
  * 颜色只差"淡一点"，于是段标签读起来像"某一项字小了一号"，而不是"下面几项归成一类"
  * （使用者原话：字号太小、和下面的分项没区别）。
  *
  * 现在把层级交给两件互不重叠的事，改哪一件都不会把另一件带坏：
- *   ① 字号回到 `--fs-small`（12px）、**加重到 700**、字距 .12em —— 比条目"更紧、
- *      更像标题"，而不是"更小"。条目是 13px 常规字重，两者不再只差一个字号差。
+ *   ① 字号落在 `--fs-small`、**加重到 700**、字距 .12em —— 比条目"更紧、
+ *      更像标题"，而不是"更小"。条目是 `--fs-body` 常规字重，两者不再只差一个字号差。
+ *      （两档一度差到 1px，段标签反而更像"某一项"；2026-11 整档抬字时它们一起上移，
+ *      差值与档位关系都没变——这正是用令牌而不用 px 的理由。）
  *   ② 颜色从 `--muted` 提到 `--text-dim`：分类是结构信息，不该比它分类的东西更弱。
  *
  * 原来还有第三件：标签右侧一条接到栏边的 1px 细线（`::after`）。**已按使用者要求
@@ -1464,7 +1539,7 @@ option:hover { background-color: var(--accent); color: var(--on-accent); }
 .error-icon {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; border-radius: 50%;
-  background: var(--danger); color: var(--on-danger); font: 700 12px/1 var(--mono);
+  background: var(--danger); color: var(--on-danger); font: 700 var(--fs-small)/1 var(--mono);
 }
 .error-text { flex: 1 1 auto; font-family: var(--mono); font-size: var(--fs-small); }
 
@@ -1527,7 +1602,7 @@ option:hover { background-color: var(--accent); color: var(--on-accent); }
 .tab-badge {
   display: inline-block; margin-left: auto; padding: 0 6px;
   border-radius: var(--r-pill); background: var(--accent-dim);
-  color: var(--on-accent-deep); font: var(--fs-caption)/16px var(--mono);
+  color: var(--on-accent-deep); font: var(--fs-caption)/17px var(--mono);
 }
 .tab-badge:empty { display: none; }
 /* `.tab-entry`（「入口」徽章）已撕：第一页本身就是入口，不需要再挂一块牌子。
@@ -1588,7 +1663,7 @@ button.fold-head {
      UA 重置按钮用的是 `font` **简写**（Chromium：`font: 400 13.3333px Arial`），
      而 `font` 简写里带着 `line-height: normal`——所以行高被一起重置了，只是
      没人注意。旁边那个同样是 `.panel-head` 的 `div` 继承 body 的 `1.55`，
-     12px 字号下两条行盒差 2.6px，两个卡头的底边于是**不在同一条水平线上**
+     两条行盒于是差几个像素（当年按 12px 量的是 2.6px），卡头底边**不在同一条水平线上**
      （实测 33.0 vs 35.6）。
 
      只在两个卡头并排时看得见：分开的两处各自都正常，所以它不会在任何
@@ -1670,7 +1745,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
   min-height: 52px;
 }
 .ph-title { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; flex: 0 1 auto; }
-.ph-name { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+.ph-name { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
 .ph-sub {
   color: var(--muted); font-size: var(--fs-caption); min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1736,6 +1811,81 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .graph-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
 .graph-svg.dragging { cursor: grabbing; }
 
+/* 图例：画布**右下角**一张卡，说明「圆点是类型、线型是关系」。
+ *
+ *  压在图上而不是占一行高度：画布的可用面积就是这一页的价值，图例再重要也不该
+ *  分走一条横带。压在图上就必须付代价——**不吃指针事件**，否则拖动画布时指针正好
+ *  落在它上面，拖动会在这里断掉（pointerdown 收不到，表现是「这块区域拖不动」）。
+ *
+ *  为什么不是左上角（参考图里它在那儿）：链路是从左上角长出来的，layout 的 MARGIN
+ *  只有 40 个用户单位，初始缩放下第一张卡正好落在左上角——图例摆那儿就是**压住
+ *  第一个节点**，而且是标题与类型徽标那一块。右下角在链路长大后才会被占用，那时
+ *  人已经在拖动了；左下角留给缩放控件，两者不打架。 */
+.graph-legend {
+  position: absolute; bottom: 10px; right: 10px; z-index: 3; pointer-events: none;
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-2);
+  background: var(--panel); box-shadow: var(--shadow-1);
+  font: var(--fs-caption)/1.4 var(--sans); color: var(--muted);
+}
+.legend-cap { color: var(--text-dim); }
+/* 宽度刻意压到 150px：卡片的首列在 layout 里从 MARGIN=40 起，而默认缩放下限是
+ *  600%，于是最左边那张卡离画布左边约 216px。图例一旦宽过这个数就会**压住卡片**——
+ *  它是 chrome，压住内容就成了遮挡。150px 装不下六个类型一行，折成两三行反而更窄。 */
+.legend-kinds, .legend-edges { display: flex; flex-wrap: wrap; gap: 3px 10px; max-width: 150px; }
+.legend-kind, .legend-edge { display: inline-flex; align-items: center; gap: 4px; color: var(--text-dim); }
+.legend-kind::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--muted); flex: 0 0 auto;
+}
+/* 类型圆点与节点卡左上角那颗同一个令牌源，一处改两处跟。 */
+.legend-kind.kind-goal::before { background: var(--kind-goal); }
+.legend-kind.kind-intent::before { background: var(--kind-intent); }
+.legend-kind.kind-fact::before { background: var(--kind-fact); }
+.legend-kind.kind-finding::before { background: var(--kind-finding); }
+.legend-kind.kind-digest::before { background: var(--kind-digest); }
+.legend-kind.kind-asset::before { background: var(--kind-asset); }
+/* 线段图例画一段 14px 的线；covers 那条与画布上一样是虚线，两处必须对得上，
+   否则图例在替一条它并不描述的线作保。 */
+.legend-edge::before {
+  content: ""; width: 14px; height: 0; flex: 0 0 auto;
+  border-top: 1.4px solid var(--edge-spawns);
+}
+.legend-edge[data-kind="yields"]::before { border-top-color: var(--edge-yields); }
+.legend-edge[data-kind="derived_from"]::before { border-top-color: var(--edge-derived); }
+.legend-edge[data-kind="proves"]::before { border-top-color: var(--edge-proves); }
+.legend-edge[data-kind="parent"]::before { border-top-color: var(--edge-parent); }
+.legend-edge[data-kind="covers"]::before { border-top-style: dashed; border-top-color: var(--edge-covers); }
+
+/* 缩放控件：画布左下角竖排的 + / − / ⛶。
+ *
+ *  **从页头搬下来的**。页头那颗 .ph-actions 是「这一页怎么取数」的地方（范围、跟随、
+ *  刷新），而缩放是「我怎么看这张图」，属于画布本身——手在图中央放大的时候，眼睛和
+ *  指针都不该往右上角跑。三颗按钮改成图标：竖排之后每多一个字宽度就翻倍，而这一列
+ *  压在图上，越窄越好。 */
+.graph-zoom {
+  position: absolute; bottom: 10px; left: 10px; z-index: 3;
+  display: flex; flex-direction: column; align-items: stretch; gap: 2px;
+  padding: 3px; border: 1px solid var(--border); border-radius: var(--r-2);
+  background: var(--panel); box-shadow: var(--shadow-1);
+}
+.gzoom-btn {
+  width: 26px; height: 24px; padding: 0; display: inline-flex;
+  align-items: center; justify-content: center;
+  border: 0; border-radius: var(--r-1); background: transparent;
+  color: var(--text-dim); font: var(--fs-small)/1 var(--sans); cursor: pointer;
+}
+.gzoom-btn:hover { background: var(--panel-3); color: var(--text); }
+/* 焦点环用内描边而不是 outline：外描边会被这一列 3px 的内边距裁掉一半。 */
+.gzoom-btn:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+/* 读数留在这一列最下面：它回答「现在多大」，与三颗按钮是同一件事，分开摆反而要
+   两处找。宽度不再固定 44px（那是页头横排时的排版需要），这里居中即可。 */
+.graph-zoom .zoom-level {
+  min-width: 0; text-align: center; padding: 1px 0 2px;
+  font: var(--fs-caption)/1.2 var(--mono); color: var(--muted);
+}
+
+
 /* 图谱边色：**由 CSS 下发，不在 JS 里**。
  *
  * SVG 的表现属性（stroke= / fill=）不认 var()，所以这套颜色原先只能写成字面量躺在
@@ -1768,6 +1918,41 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 }
 .gnode text { pointer-events: none; }
 .gnode-box { fill: var(--panel-2); stroke: var(--border-strong); stroke-width: 1.2; }
+/* 节点卡：四条信息各占一角。
+ *
+ *  类型在左上（圆点 + 中文名）、优先级在右上（P3）、状态在右下（已确认）、id 在左下。
+ *  颜色只出现在圆点与两颗胶囊上，卡身保持中性——六个类型各自有一整套配色，如果
+ *  卡身也上色，整张图就变成一大片互不相让的色块，谁也读不出谁。
+ *
+ *  六个类型共用一个 `color`：圆点用 currentColor、类型名也继承，所以一条
+ *  `.gnode.kind-*` 规则就够，不必给六种类型各写两处 fill。 */
+.gnode-dot { fill: currentColor; }
+.gnode-kind { fill: currentColor; font: 600 var(--fs-caption)/1 var(--sans); letter-spacing: .02em; }
+.gnode-id { fill: var(--muted); font: var(--fs-caption)/1 var(--mono); opacity: .7; }
+/* 优先级胶囊：中性灰。它说的是「多急」，与类型色、状态色都不是一回事，
+   所以不参与那两套配色——一条橙色的 P7 会被读成「这是个高危漏洞」。 */
+rect.gnode-pill { fill: var(--panel-3); }
+text.gnode-pill-text { fill: var(--text-dim); font: var(--fs-caption)/1 var(--mono); }
+rect.gnode-pill.gnode-priority { fill: var(--panel-2); }
+rect.gnode-pill.gnode-state { fill: var(--pill-bg, var(--panel-3)); }
+text.gnode-pill-text.gnode-state { fill: var(--pill-fg, var(--text-dim)); font-family: var(--sans); }
+/* 九种状态各取自己那一对令牌（定义在 :root，玻璃与纸感各自覆盖一套浅色）。
+   这里只做「状态类 → 令牌对」的映射，具体颜色一律不进规则区。 */
+.state-origin { --pill-fg: var(--state-origin-fg); --pill-bg: var(--state-origin-bg); }
+.state-confirmed { --pill-fg: var(--state-confirmed-fg); --pill-bg: var(--state-confirmed-bg); }
+.state-done { --pill-fg: var(--state-done-fg); --pill-bg: var(--state-done-bg); }
+.state-exhausted { --pill-fg: var(--state-exhausted-fg); --pill-bg: var(--state-exhausted-bg); }
+.state-met { --pill-fg: var(--state-met-fg); --pill-bg: var(--state-met-bg); }
+.state-active { --pill-fg: var(--state-active-fg); --pill-bg: var(--state-active-bg); }
+.state-superseded { --pill-fg: var(--state-superseded-fg); --pill-bg: var(--state-superseded-bg); }
+.state-blocked { --pill-fg: var(--state-blocked-fg); --pill-bg: var(--state-blocked-bg); }
+.state-pending { --pill-fg: var(--state-pending-fg); --pill-bg: var(--state-pending-bg); }
+.gnode.kind-goal { color: var(--kind-goal); }
+.gnode.kind-intent { color: var(--kind-intent); }
+.gnode.kind-fact { color: var(--kind-fact); }
+.gnode.kind-finding { color: var(--kind-finding); }
+.gnode.kind-digest { color: var(--kind-digest); }
+.gnode.kind-asset { color: var(--kind-asset); }
 .gnode-label { fill: var(--text); font: 600 var(--fs-small) var(--sans); }
 .gnode-sub { fill: var(--muted); font: var(--fs-caption) var(--mono); }
 .gnode.kind-goal .gnode-box { stroke: var(--kind-goal); }
@@ -1924,7 +2109,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .sev-badge.sev-medium { background: var(--sev-medium); }
 .sev-badge.sev-low { background: var(--sev-low); }
 .sev-badge.sev-info { background: var(--sev-info); color: var(--bg); }
-/* 卡片内的元信息与 .row-meta 同档（11px）；.muted 本身继承 13px 正文，落在这里会大一号 */
+/* 卡片内的元信息与 .row-meta 同档（`--fs-caption`）；`.muted` 本身继承 `--fs-body` 正文，落在这里会大一号 */
 .finding-meta .muted, .row-meta .muted { font-size: var(--fs-caption); }
 .finding-meta { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin: 6px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 /* 长描述只占首屏 4 行，完整文本靠 title 提示找回（超长文本随 .finding-desc 的滚动条可达） */
@@ -2162,7 +2347,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   transition: background var(--t-fast) var(--ease);
 }
 .rpt-row:hover { background: var(--panel-2); }
-/* 选中态与资产树、任务页的「列表内选中」是同一套：左侧 2px 蓝条 + 淡蓝底。
+/* 选中态与资产树、作业页的「列表内选中」是同一套：左侧 2px 蓝条 + 淡蓝底。
  * 只换底色不画指示条的话，悬停与选中在截图里几乎分不出来。 */
 .rpt-row.on { background: var(--accent-soft); border-color: var(--accent-dim);
   box-shadow: inset 2px 0 0 var(--accent); }
@@ -2182,7 +2367,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    而失败的任务同样会显示它——那正是需要一眼看出来的地方（写失败 = 有 chainError）。 */
 .rpt-count { color: var(--accent); }
 .rpt-count.bad { color: var(--text-danger); }
-/* 分节标题（「本次目标」/「全部任务」）。目录里两类行的身份必须一眼可分：
+/* 分节标题（「本次目标」/「全部作业」）。目录里两类行的身份必须一眼可分：
    上面那条是**这个目标的汇总**，下面那些是**每一次执行的作业报告**。 */
 .rpt-group {
   margin: var(--sp-2) 0 2px; padding: 0 var(--sp-2);
@@ -2192,7 +2377,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .rpt-group:first-child { margin-top: 0; }
 
 /* ------------------------------------------------------------- 任务按目标分组 */
-/* 任务页一组一个目标。组标题沿用 `.rpt-group`（报告目录那边已经有它，两处是
+/* 作业页一组一个目标。组标题沿用 `.rpt-group`（报告目录那边已经有它，两处是
  * 同一件事：分节的那一行），这里只补组内两处：名字要能长（目标可能是很长的
  * URL，截断就分不清是哪两台），条数要跟名字分开排（它是整组的，不是某一条的）。
  *
@@ -2214,7 +2399,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   margin: var(--sp-5) 0 var(--sp-2); line-height: 1.3; font-weight: 600; letter-spacing: -.01em;
 }
 .markdown h1 { font-size: var(--fs-display); border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-.markdown h2 { font-size: 16px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+.markdown h2 { font-size: 17px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
 .markdown h3 { font-size: var(--fs-title); }
 .markdown h4, .markdown h5, .markdown h6 { font-size: var(--fs-body); color: var(--text-dim); }
 .markdown p { margin: var(--sp-2) 0; }
@@ -2280,7 +2465,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 /* 圆角跟着卡片半径走。原先写死 11px —— 那是"深夜"档的 --r-3 减 1，玻璃档把 --r-3
  * 提到 16px 之后，卡头会从卡片的圆角里露出一角。 */
 .setup-card .panel-head { background: var(--panel-2); border-radius: calc(var(--r-3) - 1px) calc(var(--r-3) - 1px) 0 0; }
-/* 任务列表的局部反馈（已删除 / 已清空 N 条）。:empty 时收起，
+/* 作业列表的局部反馈（已删除 / 已清空 N 条）。:empty 时收起，
    否则每个面板上方都会多出一条看不见的空行。 */
 .jobs-message { font-size: var(--fs-caption); margin: 0 0 6px; }
 .jobs-message:empty { display: none; }
@@ -2594,7 +2779,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .row-summary { margin: 5px 0 0; font: var(--fs-small)/1.6 var(--mono); color: var(--text-dim); word-break: break-word; }
 .row-error { margin: 5px 0 0; font: var(--fs-small)/1.6 var(--mono); color: var(--text-danger); word-break: break-word; }
 /* ---------------------------------------------------------- 任务执行过程面板 */
-/* 面板挂在 `#job-list` **之外**（见 index.html 的注释）：任务列表每 10 秒整个
+/* 面板挂在 `#job-list` **之外**（见 index.html 的注释）：作业列表每 10 秒整个
  * 重建一次，面板放在里面会连同它的 EventSource 一起被连根拔掉。
  *
  * 这里**刻意不用 `overflow: hidden`**：日志正文要的是滚动，而且那道
@@ -2611,7 +2796,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 }
 .job-log-title { font-weight: 600; }
 .job-log-id { color: var(--text-dim); user-select: all; }
-/* 高度封顶：一条 npm 式的长日志不加限制会把整页撑成一条线，而任务列表是
+/* 高度封顶：一条 npm 式的长日志不加限制会把整页撑成一条线，而作业列表是
  * 这个页面上唯一的操作目标——把操作目标顶出视口是比"日志太长"更糟的事。 */
 .job-log-body {
   max-height: 320px; overflow: auto; padding: var(--sp-2) var(--sp-3);
@@ -2635,7 +2820,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
  * 顶栏上比主操作更抢眼，而它们恰恰是低频且不该被误点的两个。 */
 .btn.danger { border-color: var(--border-danger); color: var(--text-danger); }
 .btn.danger:hover { background: var(--tint-danger); border-color: var(--sev-critical); }
-/* 主按钮（每屏至多一个：发送 / 下发任务 / 保存配置）。取 --accent-dim +
+/* 主按钮（每屏至多一个：发送 / 下发作业 / 保存配置）。取 --accent-dim +
  * --on-accent-deep 这一对而不是 --accent + --on-accent：后者在绝大部分「强调色
  * 替换」主题块里没有重新定义，换一个强调色就出现浅底浅字白字（白压 #4f8cff 只有
  * 2.95:1）。与 .chat-review-primary 同一套。
@@ -2733,7 +2918,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .auth-loading { margin: 6px 0 2px; color: var(--muted); font-size: var(--fs-small); text-align: center; }
 /* 登录门与其它表单统一到 8px 刻度；原先 gap 6px 与 input 的 margin-bottom 6px 叠加成 12px */
 .auth-form { display: flex; flex-direction: column; gap: var(--sp-2); }
-.auth-title { margin: 0 0 var(--sp-1); font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.auth-title { margin: 0 0 var(--sp-1); font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
 .auth-hint { margin: 0 0 var(--sp-3); color: var(--muted); font-size: var(--fs-small); }
 .auth-input { width: 100%; min-width: 0; }
 .auth-submit { margin-top: var(--sp-3); padding: 8px var(--sp-3); }
@@ -2959,7 +3144,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
   padding-bottom: 6px; border-bottom: 1px solid var(--border);
 }
-.guide-sec-title { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.guide-sec-title { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
 .guide-sec-summary { margin: var(--sp-2) 0 var(--sp-3); color: var(--muted); font-size: var(--fs-small); }
 .guide-p { margin: var(--sp-2) 0; }
 .guide-list, .guide-steps { margin: var(--sp-2) 0; padding-left: var(--sp-6); }
@@ -3235,8 +3420,8 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   font-size: var(--fs-caption);
 }
 /* ---- 上下文栏 · 任务 ---- */
-/* 侧栏这一份比「任务」页签那份窄得多，所以一行只留判断"要不要点进去"所需的三样：
-   状态、类型、目标；时间放第二行。耗时、任务号、执行节点、AI 规划出处全部留在
+/* 侧栏这一份比「作业」页签那份窄得多，所以一行只留判断"要不要点进去"所需的三样：
+   状态、类型、目标；时间放第二行。耗时、作业号、执行节点、AI 规划出处全部留在
    ——那边的完整列表里。**同一批数据、两种详略**在这里是成立的：两份的定位不同
    （这里是"还有活在跑吗"，那边是"这条任务到底怎么样"），而且状态词表与排序
    只有一份（`PentestUI.jobView`），不会出现"执行中"和"运行中"并存。 */
@@ -3257,7 +3442,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    带底色的胶囊（`.tag` 的默认形态），五条任务排成一列就是五个框——视觉重量反过来
    压过了状态徽章。去掉框与底色、字号收到 caption，它才落到该在的位置。
 
-   只在 `.chat-side-job` 里覆盖：`.tag` 在漏洞列表、任务页签那些地方是**并列**的
+   只在 `.chat-side-job` 里覆盖：`.tag` 在漏洞列表、作业页签那些地方是**并列**的
    标签，那里框起来是对的。 */
 .chat-side-job .tag {
   background: none; border: 0; padding: 0;
@@ -3302,7 +3487,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .chat-detail:not(.is-open) { display: none; }
 /* 栏头：左边一个“这是什么”，中间是标题（可省略），右边一颗关。
    标题 `min-width: 0` 是省略号能生效的前提——flex 项默认 `min-width: auto`，
-   遇到长任务号会把栏头撑破，而不是把它截成省略号。 */
+   遇到长作业号会把栏头撑破，而不是把它截成省略号。 */
 .chat-detail-head {
   display: flex; align-items: center; gap: 6px; padding: 6px var(--sp-2);
   flex: 0 0 auto;
@@ -3374,7 +3559,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .chat-detail-meta { font: var(--fs-caption)/1.6 var(--mono); color: var(--muted); }
 .chat-detail-state { font-size: var(--fs-small); color: var(--text); }
 .chat-detail-state.is-bad { color: var(--text-danger); }
-/* 键 / 值一栏。两列而不是一列：执行节点、任务号这种值短得只能占半行，
+/* 键 / 值一栏。两列而不是一列：执行节点、作业号这种值短得只能占半行，
    堆成两行反而会把一屏能看完的东西推到第二屏。 */
 .chat-detail-facts { display: grid; grid-template-columns: auto minmax(0, 1fr);
   gap: 2px 10px; margin: 0; }
@@ -3743,7 +3928,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 }
 .chat-live-chip.bad { border-color: var(--border-danger); color: var(--text-danger); }
 .chat-live-chip-name { font-weight: 600; }
-.chat-live-chip-time { font: 10px/1.6 var(--mono); color: var(--muted); }
+.chat-live-chip-time { font: 11px/1.6 var(--mono); color: var(--muted); }
 /* 派活类工具那一枚芯片是**按钮**（`subagentNode` 在 `tool.jobId` 存在时把 `span`
    换成 `button`），点一下去右栏看它开出来的那条任务。外观必须与别的芯片一致——
    它们仍是同一种东西（一次工具调用），可点的只是少数；颜色上的差别会让人以为
@@ -3784,7 +3969,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 /* 权限档与工具数：让"这个子智能体到哪为止"在它自己那一行上就看得见 */
 .chat-subagent-policy {
   padding: 0 6px; border-radius: var(--r-pill);
-  background: var(--panel-3); color: var(--muted); font-size: 10px;
+  background: var(--panel-3); color: var(--muted); font-size: 11px;
 }
 .chat-subagent-state { font-size: var(--fs-caption); color: var(--text-dim); }
 .chat-subagent-row.done .chat-subagent-state { color: var(--ok); }
@@ -4192,7 +4377,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    稀缺，截断只会让人为了读完整句去翻 title。`anywhere` 是给一长串路径/URL 用的。 */
 .chat-choice-text {
   flex: 1 1 auto; min-width: 0;
-  font: 400 13px/1.55 var(--sans); color: var(--text);
+  font: 400 var(--fs-body)/1.55 var(--sans); color: var(--text);
   overflow-wrap: anywhere;
 }
 /* 「其他」这一格：上面一行是勾标（与清单里的候选同一套），下面是一个**一行**高的输入框。
@@ -4209,7 +4394,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   padding: 6px var(--sp-2);
   border: 1px solid var(--border); border-radius: var(--r-2);
   background: var(--panel); color: var(--text);
-  font: 400 13px/1.5 var(--sans);
+  font: 400 var(--fs-body)/1.5 var(--sans);
   resize: none;
   /* 一行是**默认高度**，不是硬上限：接着写第二件事时框自己长高（Chrome 123+ 认识
      `field-sizing`）；不认识的浏览器就固定一行、框内滚动。长高只影响面板自己的高度，
@@ -4261,7 +4446,8 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 /* t92：图标与中文标签的**光学**对齐。两者都是 `align-items: center`，盒中心
    完全重合；但 CJK 的墨迹中心比 em 框中心低半个像素（em 框上下不对称），
    于是 14px 的盾牌/图标看着比字"高半格"。这半像素是量出来的，不是眼估：
-   13px 汉字实测墨迹 14.5px 中心、盾牌 14.0px 中心。0.5px 由抗锯齿吸收，
+   汉字实测墨迹中心比 14px 盾牌的盒中心低半格（当年按 13px 量：14.5 对 14.0），
+  字号抬一档后仍是同量级。0.5px 由抗锯齿吸收，
    2x 屏上是精确的半个物理像素。 */
 .dock-tab-ico,
 .chat-policy-ico { transform: translateY(.5px); }
@@ -4270,17 +4456,17 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   height: 28px; padding: 0 var(--sp-2);
   border: 0; border-radius: var(--r-2);
   background: transparent; color: var(--text-dim);
-  /* t78：照官方输入区那一排控件——**无描边、28px 高、13px/500**，靠 hover 的浅底
+  /* t78：照官方输入区那一排控件——**无描边、28px 高、--fs-body / 500**，靠 hover 的浅底
      表示可点。此前是"胶囊 + 1px 描边"，那是把入口读成标签页的样子；官方那一排
-     是扁平的小按钮。 */
-  font: 500 13px/20px var(--sans); cursor: pointer;
+     是扁平的小按钮。字号走令牌，整档抬字时它跟着走。 */
+  font: 500 var(--fs-body)/20px var(--sans); cursor: pointer;
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .dock-tab:hover { color: var(--text); background: var(--panel-3); }
 .dock-tab.on { color: var(--text); background: var(--accent-soft); }
-/* ⚠️ t88（用户原话「数字大小和文字大小不一致」）：计数此前是 `--fs-caption`（11px）
-   等宽字，比紧挨着的 13px 标签小一号——同一颗按钮里两段字一大一小，读起来像两个
-   来源不同的东西。现在 `font: inherit`（跟着 `.dock-tab` 的 500 13px/20px），只留
+/* ⚠️ t88（用户原话「数字大小和文字大小不一致」）：计数此前是 `--fs-caption` 那一档（当年 11px）
+   等宽字，比紧挨着的标签小一号——同一颗按钮里两段字一大一小，读起来像两个
+   来源不同的东西。现在 `font: inherit`（跟着 `.dock-tab` 的 500 `--fs-body`/20px），只留
    `--muted` 表示"这是附带的数"，另外用等宽数字对齐（`tabular-nums`）——数字仍然
    一眼能扫，只是不再小一号。`on` 那一档的墨色仍往下压一档，见下一行。 */
 .dock-count { font: inherit; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -4747,7 +4933,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   height: 28px; padding: 0 4px 0 var(--sp-2);
   border: 0; border-radius: var(--r-1);
   background: transparent; color: var(--text-dim);
-  font: 500 13px/20px var(--sans); cursor: pointer;
+  font: 500 var(--fs-body)/20px var(--sans); cursor: pointer;
   /* 文字淡下去时也要能读，所以只换墨色；底色只为 hover / 展开那一档出现。 */
   transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 }
@@ -4807,14 +4993,14 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
      ⚠️ 控件透明**必须**配上面那三条 `option` 规则：弹出列表的底不能也透明，
      否则选项文字会叠在页面文字上。 */
   background-color: transparent;
-  /* t78：**选择器也照官方那一排**——28px 高、无描边、13px/500、自绘的下拉箭头，
+  /* t78：**选择器也照官方那一排**——28px 高、无描边、`--fs-body`/500、自绘的下拉箭头，
      只靠 hover 的浅底表示可点。此前它保留着通用控件的描边与内边距，和旁边那颗
      圆形发送键不是一套形状；官方那一排里"加号 / 选择器 / 发送"是三件薄薄的控件
      并排，没有一个是带框的。箭头用 background-image 画（`appearance: none` 之后
      原生箭头就没了），颜色取当前墨色的一半高度：`%2381858C` 是官方那份 SVG 里的
      描边色，压在本表的 --text-dim 上仍然读得出来。 */
   height: 28px; border: 0; padding: 0 20px 0 var(--sp-2);
-  font: 500 13px/20px var(--sans); color: var(--text-dim);
+  font: 500 var(--fs-body)/20px var(--sans); color: var(--text-dim);
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 4px center; background-size: 12px 12px;
@@ -4839,7 +5025,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   display: inline-flex; align-items: center; gap: var(--sp-1);
   height: 28px; padding: 0 4px; border: 0; border-radius: var(--r-1);
   background: transparent; color: var(--text-dim);
-  font: 500 13px/20px var(--sans); cursor: pointer;
+  font: 500 var(--fs-body)/20px var(--sans); cursor: pointer;
   /* t82：允许被压窄（`min-width: 0` + 标签省略号）。它与两颗目录入口共用一行，
      那一行的宽度在 360px 视口下只有 256px，而"可用能力 + 技能手册 + 自动继续"
      自然宽 271px —— 不让它缩，它就会折到下一行，卡片因此比 `--chat-field-floor`
@@ -5004,7 +5190,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 }
 .chat-queue-edit:focus { outline: none; border-color: var(--accent-dim); }
 
-/* 权限 chip：28px 高、无框、13px/500，hover 才出浅底 —— 官方
+/* 权限 chip：28px 高、无框、--fs-body / 500，hover 才出浅底 —— 官方
    `.VERcba_select` 那一套。原生 `#chat-policy` 被钉成 1px 的隐形层，只当真相源。 */
 /* `min-width: 0` 两处：动作行被压缩时，chip 里的档名（`.chat-policy-name` 已经
    `text-overflow: ellipsis`）要能跟着缩短，而不是把整行顶宽。 */
@@ -5013,7 +5199,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   display: inline-flex; align-items: center; gap: 4px; min-width: 0;
   height: 28px; padding: 0 4px 0 8px; border: 0; border-radius: var(--r-1);
   background: transparent; color: var(--text-dim);
-  font: 500 13px/20px var(--sans); cursor: pointer;
+  font: 500 var(--fs-body)/20px var(--sans); cursor: pointer;
 }
 .chat-policy-btn:hover,
 .chat-policy-btn[aria-expanded="true"] { background: var(--panel-3); color: var(--text); }
@@ -5064,7 +5250,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .chat-policy-item-label,
 .chat-model-item-label {
   display: flex; align-items: center; gap: 6px;
-  font: 500 13px/18px var(--sans);
+  font: 500 var(--fs-body)/19px var(--sans);
 }
 .chat-policy-item-note,
 .chat-model-item-note {
@@ -5074,7 +5260,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .chat-policy-item-badge {
   padding: 0 4px; border-radius: var(--r-1);
   background: var(--accent-soft); color: var(--text-accent);
-  font: 600 10px/14px var(--sans);
+  font: 600 var(--fs-caption)/15px var(--sans);
 }
 .chat-policy-item-check,
 .chat-model-item-check { margin-left: auto; color: var(--accent); font-weight: 700; }
@@ -5086,7 +5272,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    本平台的 full 档放行的是"应用层利用验证 / 凭据测试 / 任意命令"，同样值得
    一次停顿——但它**不放宽**门禁与审查闸，文案里必须说清，否则会被读成"点了就解锁"。 */
 .chat-policy-confirm { display: flex; flex-direction: column; gap: 8px; padding: 6px; }
-.chat-policy-confirm-title { margin: 0; font: 600 13px/20px var(--sans); }
+.chat-policy-confirm-title { margin: 0; font: 600 var(--fs-body)/20px var(--sans); }
 .chat-policy-confirm-text {
   margin: 0; font: 400 var(--fs-small)/1.6 var(--sans); color: var(--text-dim);
 }
@@ -5133,7 +5319,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   .chat-model { max-width: calc(100cqw - 490px); }
 }
 @container chat-field (max-width: 680px) {
-  /* 模型格缩到 200 以下，13px 的字已经露出省略号：淡一档，别让它看着像坏字。 */
+  /* 模型格缩到 200 以下，这一档的字已经露出省略号：淡一档，别让它看着像坏字。 */
   .chat-model-btn { color: var(--muted); }
 }
 @container chat-field (max-width: 640px) {
@@ -5246,7 +5432,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 /* 目录项里的档位 / 角色标签：让"这一档到哪为止"在能看的能力列表里就看得见 */
 .dock-chip-tag {
   margin-left: 6px; padding: 0 6px; border-radius: var(--r-pill);
-  background: var(--panel-3); color: var(--muted); font-size: 10px;
+  background: var(--panel-3); color: var(--muted); font-size: 11px;
 }
 
 /* 设置分组导航：与页签同一套分段观感（顶到卡片边的那一排），
@@ -5320,9 +5506,9 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 /* 「深色 / 亮色」标签。列表里必须一眼看出哪几套是亮色——否则在亮环境里只能逐个
  * 点开试，而这正是这类功能最容易让人失去耐心的地方。 */
 .theme-mode {
-  padding: 0 5px; border-radius: var(--r-1); line-height: 15px;
+  padding: 0 5px; border-radius: var(--r-1); line-height: 16px;
   background: var(--muted-fill); color: var(--on-muted);
-  font-size: 10px; font-weight: 600;
+  font-size: 11px; font-weight: 600;
 }
 .theme-hint { color: var(--muted); font-size: var(--fs-caption); line-height: 1.6; }
 
@@ -5738,7 +5924,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   border-radius: var(--r-2);
 }
 .dash-stat-label { font-size: var(--fs-small); color: var(--muted); }
-.dash-stat-value { font-size: 22px; font-weight: 600; line-height: 1.35; }
+.dash-stat-value { font-size: 24px; font-weight: 600; line-height: 1.35; }
 .dash-stat-hint { font-size: var(--fs-caption); color: var(--muted); }
 .dash-card {
   padding: var(--sp-3);
@@ -5761,7 +5947,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .dash-row-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-row-meta, .dash-row-time { color: var(--muted); font-size: var(--fs-caption); }
 /* 四种状态各一色，与 `.status-badge` 那一组**同义同色**：同一个任务在仪表盘上
-   是这颗点、在任务页上是那枚徽章，两个颜色对不上，读的人会当成两件事。
+   是这颗点、在作业页上是那枚徽章，两个颜色对不上，读的人会当成两件事。
    `done` 起初漏了这条规则，回落成 `--muted` 的灰——看上去像「没有状态」；
    `running` 起初也是绿，和 `done` 撞色，于是「还在跑」与「已经完了」只差文字。 */
 .dash-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
@@ -5926,7 +6112,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    与 `.orch-row` 的做法（panel-2 底 + 1px 边框），因为它们回答的是同一类问题：
    现在有哪些东西、每一条各自什么状态。这里只补这两页独有的部件。
    状态徽章**不另立颜色**：`running` 用 `--accent`、`paused` 用 `--sev-medium`、
-   `done` 用 `--muted`，与仪表盘那几颗点、任务页那几枚 `.status-badge` 同义同色。 */
+   `done` 用 `--muted`，与仪表盘那几颗点、作业页那几枚 `.status-badge` 同义同色。 */
 .task-filters { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
 /* `.input` 默认 min-width 260px + 等宽字体，那是给「一个地址 / 一条命令」用的；
    搜索框在这里只是一段关键词，不需要那么宽，也不需要等宽。 */

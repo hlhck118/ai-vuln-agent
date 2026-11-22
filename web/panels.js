@@ -1110,7 +1110,7 @@
       if (!compact) {
         // 没拿到响应时状态是 0，而「0」看起来像一个状态码。说清楚。
         tr.append(el('td', 'mono', record.error ? '无响应' : String(record.status)));
-        // 耗时走 `formatDuration`（与任务页、对话里的工具卡同一把尺子）：1200 ms 在这里
+        // 耗时走 `formatDuration`（与作业页、对话里的工具卡同一把尺子）：1200 ms 在这里
         // 写成「1.2 s」。同一个数在两页上有两种写法，读的人会以为其中一个是别的量。
         tr.append(el('td', 'mono', formatDuration(record.durationMs)));
         const actionCell = el('td');

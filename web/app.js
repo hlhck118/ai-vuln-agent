@@ -41,7 +41,9 @@ const CLICK_SLOP_PX = 4;
 const KIND_LABEL = { goal: '目标', intent: '意图', fact: '事实', finding: '漏洞', digest: '摘要', asset: '资产' };
 // 节点的生命周期状态（与 `models.STATE_LABELS` 同一套说法）：它回答「这条记录的进展」，
 // 与 `kind` 回答的「这是什么」分开——摘要有 active / superseded，事实有 origin / confirmed。
-const STATE_LABEL = { origin: '起点', confirmed: '已确认', done: '已完成', exhausted: '已穷尽', met: '已达成', active: '进行中', superseded: '已取代' };
+// `blocked` / `pending` 是编排面新增的两档（意图可以被挂起或判定走进死路）。原先这份表
+// 只有七个词，于是那两档在卡上会退回显示英文原文——状态是给人扫读的，露出原词等于没有。
+const STATE_LABEL = { origin: '起点', confirmed: '已确认', done: '已完成', exhausted: '已穷尽', met: '已达成', active: '进行中', superseded: '已取代', blocked: '已阻塞', pending: '待跟进' };
 const KIND_ORDER = ['goal', 'intent', 'fact', 'finding', 'digest', 'asset'];
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 const SEVERITY_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '信息' };
@@ -265,7 +267,7 @@ const state = {
   findingsByTarget: [], findingsTotals: null,
   allFindingsLoaded: false, allFindingsInflight: null,
   // 报告页当前显示的是哪一份文档：`reportJob` 为空 = 本目标汇总，否则是那次任务。
-  // 只存在内存里，**不进 URL**：刷新回到汇总是一个可预期的结果，而把任务号写进
+  // 只存在内存里，**不进 URL**：刷新回到汇总是一个可预期的结果，而把作业号写进
   // 地址栏会让人以为"这篇报告可以被分享"——它绑定的是这台机器上的一个任务 id。
   // `reportDoc` 是**后端确认过**的那一份（卡头读它，不猜）。
   reportJob: '', reportDoc: null,
@@ -282,7 +284,9 @@ const state = {
   // 当前正在跟随哪条任务的执行过程（null = 没在跟随）。它是**内存态**，
   // 刻意不进 URL：一条 SSE 长连接不该因为有人分享了地址而被别人接过去。
   jobLog: null,
-  kindFilter: { goal: true, intent: true, fact: true, finding: true, asset: true },
+  // 六个类型一个不能少：漏掉哪个，那一类的节点就在启动那一秒被判定成「已关闭」，
+  // 而芯片却是亮着的——图上一整类节点凭空消失，芯片点两下才回来。
+  kindFilter: { goal: true, intent: true, fact: true, finding: true, digest: true, asset: true },
   severityFilter: new Set(SEVERITY_ORDER),
   keyword: '', selectedNodeId: null, selectedAssetId: null,
   loaded: { findings: false, assets: false, report: false }, inflight: {},
@@ -298,7 +302,7 @@ const state = {
   // 加约 90 行正文（版本 / 渠道 / 占用 / 路径 / 用途）。
   // 记的是"哪几组是打开的"，不是"哪几组是关的"：空集正好就是默认值（全收起）。
   toolOpen: new Set(), toolOpsOpen: false,
-  jobsTimer: null, jobsInflight: null,                       // 任务列表自动刷新定时器
+  jobsTimer: null, jobsInflight: null,                       // 作业列表自动刷新定时器
   // 侧边栏两个读数块（目标 / 对话记录）的新鲜度：上一轮的指纹，以及它那个定时器。
   // `pulse` 存的是 `/pulse` 返回的那组字符串——**比对它**才知道要不要重拉列表。
   pulse: null, pulseTimer: null,
@@ -330,7 +334,9 @@ const graphView = { scale: 1, tx: 0, ty: 0, ceiling: BASE_SCALE * BASE_HEADROOM,
                     dragging: false, moved: false, touched: false,
                     pressNodeId: null, lastX: 0, lastY: 0, pressX: 0, pressY: 0,
                     dragScale: { sx: 1, sy: 1 }, frame: 0, zoomText: null, zoomNode: null };
-const graphIndex = { edgeItems: [], neighbors: new Map() };
+// `nodeItems` 与 `edgeItems` 对称：过滤与高亮都靠它遍历，不必每次回 DOM 里
+// 用 `.gnode` 现查——那张图在真实数据上是 350 多个节点，一帧里查三遍够呛。
+const graphIndex = { edgeItems: [], nodeItems: [], neighbors: new Map() };
 
 /* ------------------------------------------------- 5. 错误条与状态栏 ---- */
 let errorTimer = null;
@@ -652,22 +658,95 @@ function renderEdges(layer, layoutEdges, boxes) {
     graphIndex.edgeItems.push({ node: line, source: edge.source, target: edge.target });
   });
 }
-/** 画节点：矩形 + 标题 + 副标题 + 悬浮提示。 */
+/** SVG 里没有布局引擎：`<text>` 不会自动换行、不会自动裁剪，写多长就画多长。
+ *  所以每处文字都要先估宽再截断——估宽按"中日韩字符算一个字号宽、其余算 0.55"，
+ *  与 `pentestd/graph.py` 的 `_text_width` 同一套系数（两边差一点就会出现"后端没截、
+ *  前端溢出去"的错位）。
+ */
+function svgTextWidth(text, size) {
+  let width = 0;
+  for (const ch of String(text || '')) width += ch.codePointAt(0) > 0x2e80 ? size : size * 0.55;
+  return width;
+}
+/** 右对齐小胶囊（优先级 / 状态）。`right` 是右边界，`top` 是上边界。
+ *
+ *  返回值是 `[rect, text]` 两个元素而不是一个 `<g>`：胶囊的底与字各自要不同的
+ *  类名才能在样式表里分别上色（底色跟状态走、字色也要跟），套一层 `<g>` 之后
+ *  选择器就得多写一层后代组合，读的人得先在脑里展开那棵树。
+ */
+function svgPill(right, top, text, size, className) {
+  const padX = 6, height = 15;
+  const width = Math.ceil(svgTextWidth(text, size) + padX * 2);
+  const rect = svgEl('rect', {
+    class: 'gnode-pill', x: right - width, y: top, width, height, rx: String(height / 2),
+  });
+  const label = svgEl('text', {
+    class: 'gnode-pill-text', x: right - width / 2, y: top + 11, 'text-anchor': 'middle',
+  });
+  if (className) { rect.classList.add(className); label.classList.add(className); }
+  label.textContent = text;
+  return [rect, label];
+}
+/** 画节点：一张卡上四层信息。
+ *
+ *  左上角是**类型**（彩色圆点 + 中文名），右上角是**优先级**（P3 这种小胶囊，0 不画），
+ *  中间是标题与副标题，右下角是**生命周期状态**（已确认 / 已穷尽…），左下角是节点 id。
+ *
+ *  类型、优先级、状态是三件互相正交的事，所以各占一个角而不是挤成一行标签：
+ *  挤成一行时，扫读的人分不清"橙色"说的是这是个漏洞，还是它很急，还是它已经做完了。
+ *  颜色只在圆点与两个胶囊上，卡身保持中性——整张图靠"颜色出现在哪"来分区。
+ */
 function renderNodes(layer, nodes, boxes) {
+  graphIndex.nodeItems = [];
   nodes.forEach((node) => {
-    const box = boxes.get(node.id), group = svgEl('g', { class: `gnode kind-${node.kind || 'intent'}`, 'data-id': node.id });
+    const box = boxes.get(node.id), kind = node.kind || 'intent';
+    const group = svgEl('g', { class: `gnode kind-${kind}`, 'data-id': node.id, 'data-kind': kind });
     if (node.severity) group.classList.add('sev-' + severityOf(node.severity));
-    const label = svgEl('text', { class: 'gnode-label', x: box.x + 12, y: box.y + 24 });
-    const sub = svgEl('text', { class: 'gnode-sub', x: box.x + 12, y: box.y + 43 });
     const tip = svgEl('title');
-    label.textContent = truncate(node.label || node.id, 24);
-    // 副标题按节点框宽度估算可用字数（11px 中文 ≈ 1 字宽，ASCII 约 0.55）：框宽由后端 layout
-    // 决定，写死 30 会在窄节点上溢出色块（SVG <text> 不会自动裁剪，会压到相邻节点上）
-    sub.textContent = truncate(node.subtitle || KIND_LABEL[node.kind] || '', Math.max(8, Math.floor((box.w - 24) / 11)));
-    // title 里补上完整副标题：截断之后仍可找回
-    tip.textContent = `${KIND_LABEL[node.kind] || node.kind}｜${node.label || node.id}\n${node.subtitle || ''}\n${node.id}`;
-    group.append(svgEl('rect', { class: 'gnode-box', x: box.x, y: box.y, width: box.w, height: box.h, rx: '8' }), label, sub, tip);
+    const parts = [
+      svgEl('rect', { class: 'gnode-box', x: box.x, y: box.y, width: box.w, height: box.h, rx: '8' }),
+      // 左上角：类型圆点 + 类型名。圆点用 currentColor 上色，颜色由 `.gnode.kind-*`
+      // 写在 `<g>` 上的 `color` 决定——一处声明同时喂给圆点、类型名与胶囊，
+      // 不必为六个类型各写一条 fill 规则。
+      svgEl('circle', { class: 'gnode-dot', cx: box.x + 13, cy: box.y + 14, r: '3.5' }),
+    ];
+    const kindName = svgEl('text', { class: 'gnode-kind', x: box.x + 21, y: box.y + 18 });
+    kindName.textContent = KIND_LABEL[kind] || kind;
+    parts.push(kindName);
+    const priority = Number(node.priority) || 0;
+    if (priority > 0) parts.push(...svgPill(box.x + box.w - 10, box.y + 7, 'P' + priority, 9, 'gnode-priority'));
+    const label = svgEl('text', { class: 'gnode-label', x: box.x + 12, y: box.y + 42 });
+    label.textContent = truncate(node.label || node.id, Math.max(8, Math.floor((box.w - 24) / 12)));
+    parts.push(label);
+    // 副标题按框宽折成两行：单行放不下时截断，而不是让它画到邻居卡上。
+    const perLine = Math.max(8, Math.floor((box.w - 24) / 11));
+    const subtitle = truncate(node.subtitle || '', perLine * 2);
+    for (let i = 0; i < 2; i += 1) {
+      const chunk = subtitle.slice(i * perLine, (i + 1) * perLine);
+      if (!chunk) break;
+      const lineText = svgEl('text', { class: 'gnode-sub', x: box.x + 12, y: box.y + 62 + i * 15 });
+      lineText.textContent = chunk;
+      parts.push(lineText);
+    }
+    // 右下角：状态胶囊。没有状态就不画——空胶囊会读成"状态缺失"，那是另一个意思。
+    const stateText = node.stateLabel || STATE_LABEL[node.state] || '';
+    if (stateText) {
+      const pill = svgPill(box.x + box.w - 10, box.y + box.h - 24, stateText, 9);
+      pill.forEach((piece) => piece.classList.add('gnode-state', 'state-' + (node.state || 'active')));
+      parts.push(...pill);
+    }
+    const idText = svgEl('text', { class: 'gnode-id', x: box.x + 12, y: box.y + box.h - 9 });
+    idText.textContent = node.id;
+    parts.push(idText);
+    // 悬浮提示把四层信息串成一行一句：卡片上的字是截断过的，这里是完整的。
+    tip.textContent = [
+      `${KIND_LABEL[kind] || kind}｜${node.label || node.id}`, node.subtitle || '',
+      stateText, priority > 0 ? 'P' + priority : '', node.id,
+    ].filter(Boolean).join('\n');
+    parts.push(tip);
+    group.append(...parts);
     layer.append(group);
+    graphIndex.nodeItems.push({ node: group, id: node.id, kind });
   });
 }
 /** 「链路已更新」提示：只在**有新数据、而视角被保留**时出现。
@@ -773,11 +852,13 @@ function buildNeighborIndex() {
 /** 类型过滤：隐藏未勾选类型的节点，以及任一端被隐藏的边。 */
 function applyKindFilter() {
   const visible = new Set();
-  $$('.gnode', $('#graph-svg')).forEach((group) => {
-    const entry = state.nodeIndex.get(group.dataset.id);
-    const shown = entry ? state.kindFilter[entry.kind] !== false : true;
-    group.classList.toggle('filtered-out', !shown);
-    if (shown) visible.add(group.dataset.id);
+  // 类型直接读渲染时记下的 `kind`：原来走 `state.nodeIndex` 反查，而索引里**没有**
+  // 那些只在 layout 里出现的节点（`nodeIndex` 是从 view.nodes 建的）。查不到就按
+  // "显示"处理，于是某类芯片关掉之后，恰好只在 layout 里的节点纹丝不动。
+  graphIndex.nodeItems.forEach((item) => {
+    const shown = state.kindFilter[item.kind] !== false;
+    item.node.classList.toggle('filtered-out', !shown);
+    if (shown) visible.add(item.id);
   });
   graphIndex.edgeItems.forEach((item) => item.node.classList.toggle('filtered-out', !(visible.has(item.source) && visible.has(item.target))));
 }
@@ -789,12 +870,15 @@ function highlightNeighborhood(id) {
     item.node.classList.toggle('hl', related);
     item.node.classList.toggle('dim', !related);
   });
-  $$('.gnode', $('#graph-svg')).forEach((group) => {
-    group.classList.toggle('hl', keep.has(group.dataset.id));
-    group.classList.toggle('dim', !keep.has(group.dataset.id));
+  graphIndex.nodeItems.forEach((item) => {
+    item.node.classList.toggle('hl', keep.has(item.id));
+    item.node.classList.toggle('dim', !keep.has(item.id));
   });
 }
-function clearHighlight() { $$('.hl, .dim', $('#graph-svg')).forEach((node) => node.classList.remove('hl', 'dim')); }
+function clearHighlight() {
+  graphIndex.nodeItems.forEach((item) => item.node.classList.remove('hl', 'dim'));
+  graphIndex.edgeItems.forEach((item) => item.node.classList.remove('hl', 'dim'));
+}
 /** 缩放 / 平移只改一个 transform。
  *
  *  **缩放读数只在显示出来的百分比真的变了的时候写。** 平移根本不改缩放，所以拖动
@@ -949,6 +1033,8 @@ function renderNodeDetail(id) {
   if (!entry) { body.append(emptyBlock(`当前数据中找不到节点 ${id}`)); return; }
   const sev = entry.raw.severity ? severityOf(entry.raw.severity) : null, head = el('div', 'detail-title');
   head.append(el('span', 'detail-badge', KIND_LABEL[entry.kind] || entry.kind));
+  // 优先级也贴一颗：卡片上它只是个小胶囊，点开之后要能看到那条记录凭什么排在这。
+  if (Number(entry.raw.priority) > 0) head.append(el('span', 'detail-badge', 'P' + Number(entry.raw.priority)));
   if (entry.raw.state) head.append(el('span', 'detail-badge', STATE_LABEL[entry.raw.state] || entry.raw.state));
   if (sev) head.append(el('span', `sev-badge sev-${sev}`, SEVERITY_LABEL[sev]));
   head.append(el('span', 'detail-id', id));
@@ -1063,7 +1149,7 @@ function loadReport(force) {
       return;
     }
     state.markdown = String(data.markdown || '');
-    // 卡头读**响应里**的那一份，不猜：`state.jobs` 可能还没加载出来（那时按任务号
+    // 卡头读**响应里**的那一份，不猜：`state.jobs` 可能还没加载出来（那时按作业号
     // 找不到 job），而卡头写着「本目标汇总」、正文却是某次任务的报告，是最糟的一种
     // 不一致——两处都言之凿凿，读者只能猜该信哪个。
     state.reportDoc = {jobId: String(data.jobId || ''), eid: String(data.engagementId || state.eid || ''),
@@ -1402,10 +1488,10 @@ async function selectEngagement(eid) {
   setPanelMessage('#asset-detail', emptyBlock('请在左侧选择资产'));
   loadTabData(state.tab);
 }
-/** 按页签按需加载数据；部署与任务页签都与 engagement 无关。
+/** 按页签按需加载数据；部署与作业页签都与 engagement 无关。
  *
- *  任务读数的自动刷新跟着**三个**页签走：任务页签（完整列表）、对话页签（上下文
- *  栏里那一块）、报告页签（左侧的作业报告目录）。后两处都不是任务页签，不接进去
+ *  任务读数的自动刷新跟着**三个**页签走：作业页签（完整列表）、对话页签（上下文
+ *  栏里那一块）、报告页签（左侧的作业报告目录）。后两处都不是作业页签，不接进去
  *  就会停在进入那一刻的内容——而目录里那几行状态正是"这个任务跑完了没有"的唯一
  *  读数。其余页签一律停：多留在后台跑一轮就是一次没人看的请求。
  *
@@ -2116,7 +2202,7 @@ function downloadReport() {
   if (!state.markdown) { showError('暂无可下载的报告内容'); return; }
   const link = el('a');
   link.href = URL.createObjectURL(new Blob([state.markdown], { type: 'text/markdown;charset=utf-8' }));
-  // 文件名带**任务号**：目录里可以同时存着好几篇报告，下载下来全叫
+  // 文件名带**作业号**：目录里可以同时存着好几篇报告，下载下来全叫
   // `pentest-report-E-xxxx.md` 的话，落到下载目录里就再也分不出哪份是哪份——
   // 而它们的目标往往还是同一个（同一个目标跑了很多次）。汇总那篇保留目标号，
   // 因为它是"这个目标的报告"，不是某一次执行的。
@@ -2131,11 +2217,11 @@ function downloadReport() {
 
 /* ----------------------------------------------- 11b. 作业报告目录 ---- */
 /*
- * 每个任务一篇报告：左栏列出**全部任务**（不只当前目标名下那些），点一条读那一次
- * 执行自己的报告。它与「任务」页读的是同一批数据（`state.jobs` 由本模块持有），
- * 但回答的是另一个问题——任务页说"跑到哪了"，这里说"跑出了什么、白纸黑字怎么写的"。
+ * 每个作业一篇报告：左栏列出**全部作业**（不只当前目标名下那些），点一条读那一次
+ * 执行自己的报告。它与「作业」页读的是同一批数据（`state.jobs` 由本模块持有），
+ * 但回答的是另一个问题——作业页说"跑到哪了"，这里说"跑出了什么、白纸黑字怎么写的"。
  *
- * ## 为什么目录要列全部任务，而不是只列当前目标的
+ * ## 为什么目录要列全部作业，而不是只列当前目标的
  *
  * 判断一份报告可信度的第一步，是能一次看到**全部执行记录**：哪几次失败了、
  * 有没有重跑、重跑有没有把结论写脏。而一个目标的报告恰恰常常是"这几次执行合起来
@@ -2143,11 +2229,11 @@ function downloadReport() {
  * 解释"为什么这份报告里有几条资产看着陌生"的答案。
  *
  * 代价是必须让**每一行自己说清是哪个目标**，否则跨目标那几条看起来就像这个目标的
- * 任务。所以行内显示目标末段，`title` 里放完整目标与任务号。
+ * 任务。所以行内显示目标末段，`title` 里放完整目标与作业号。
  *
- * ## 与「任务」页的排序不同，这是有意的
+ * ## 与「作业」页的排序不同，这是有意的
  *
- * 任务页按**状态**分组排（执行中 → 待执行 → 失败 → 已完成）：那是一个队列，问的是
+ * 作业页按**状态**分组排（执行中 → 待执行 → 失败 → 已完成）：那是一个队列，问的是
  * "接下来轮到谁"。这里是**按时间倒序**：那是一个归档，问的是"最近跑过什么"。
  * 同一批数据、两个用途，用同一个排序反而两边都不对。
  */
@@ -2161,7 +2247,7 @@ function downloadReport() {
 const reportPath = (jobId, eid) => `/engagements/${encodeURIComponent(eid || state.eid)}/report`
   + (jobId ? `?job=${encodeURIComponent(jobId)}` : '');
 
-/** 任务号 → 任务对象。任务被删掉之后返回 undefined，调用方要自己兜住。 */
+/** 作业号 → 任务对象。任务被删掉之后返回 undefined，调用方要自己兜住。 */
 const jobOf = (jobId) => state.jobs.find((job) => job.id === jobId) || null;
 /** 目标号 → 目标值；列表还没加载出来时退回目标号本身。 */
 function targetOf(eid) {
@@ -2273,7 +2359,7 @@ function renderReportSide(error) {
     wrap.scrollTop = scrolled;
     return;
   }
-  // 按时间倒序（新 → 旧）。与任务页按状态分组不同，理由见本节文件头注释。
+  // 按时间倒序（新 → 旧）。与作业页按状态分组不同，理由见本节文件头注释。
   const ordered = state.jobs.slice().sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
   wrap.append(el('div', 'rpt-group', `全部作业（${ordered.length}）`));
   ordered.forEach((job) => wrap.append(reportSideRow(job)));
@@ -2298,7 +2384,7 @@ function showReport(jobId) {
 }
 
 /* ------------------------------------------------------ 12. 部署面板 ---- */
-/* 第五个页签：看部署自检、生成节点接入命令、管理节点、下发任务、看基线与任务。
+/* 第五个页签：看部署自检、生成节点接入命令、管理节点、下发作业、看基线与任务。
  * 接口契约：GET /setup、GET /executors、POST /executors/enroll、
  *          POST /executors/{id}/revoke、GET/POST /jobs、GET /baselines。 */
 
@@ -2360,7 +2446,7 @@ const JOB_STATUS_ORDER = ['running', 'pending', 'failed', 'done'];
 const SUMMARY_LABEL = { findings: '漏洞', slices: '切片', files: '文件', scanned: '已扫描',
   skipped: '跳过', changed: '变更', nodes: '节点', bytes: '体积', elapsedMs: '耗时',
   hosts: '地址', alive: '存活', openPorts: '开放端口', chainNodes: '链路节点' };
-// runId / target / kind 属于任务自身（行内已有目标与任务号），摘要里再列一次只是噪声。
+// runId / target / kind 属于任务自身（行内已有目标与作业号），摘要里再列一次只是噪声。
 const SUMMARY_SKIP = ['incremental', 'error', 'runId', 'target', 'kind'];
 // 探测任务没有差分验证与增量这两个概念。这些 0 不是"什么都没查到"，而是"不适用"——
 // 原样列出来会让人以为漏了什么，而这恰恰是摘要最不该造成的误解。
@@ -3031,7 +3117,7 @@ function renderAgentTrace(job) {
   details.append(list);
   return details;
 }
-/** 任务列表：状态徽章 / 目标 basename / 增量标记 / 创建时间 / 耗时 / 摘要。 */
+/** 作业列表：状态徽章 / 目标 basename / 增量标记 / 创建时间 / 耗时 / 摘要。 */
 function renderJobs(error) {
   // 侧栏那一块**先画，而且在下面两个早退之前**。放在早退之后的话，"加载失败"
   // 与"一条任务都没有"这两条路径都不会走到它，于是侧栏会继续显示上一批任务
@@ -3045,7 +3131,7 @@ function renderJobs(error) {
   // 条数——用一个过期的数字去描述"将清空几条"，比直接禁用更误导。
   updateJobsClearButton(error);
   // 导航徽章：**未结束的作业数**挂在左侧导航上。它是从别的页签看得见"还有活在跑"
-  // 的唯一入口——任务页签不打开时，任务列表根本不渲染。
+  // 的唯一入口——作业页签不打开时，作业列表根本不渲染。
   // 加载失败时按 0 处理（隐藏徽章），而不是沿用上一次的条数：拿一个过期的数字
   // 去说"还有 3 个任务在跑"，比不说更误导。
   const badge = $('#badge-jobs');
@@ -3064,7 +3150,7 @@ function renderJobs(error) {
   wrap.append(list);
 }
 
-/** 任务页的分组：一个目标一组。
+/** 作业页的分组：一个目标一组。
  *
  *  三件事按这个顺序定，每一件都有它的理由：
  *
@@ -3189,7 +3275,7 @@ function jobGroupBlock(group) {
  * 由规划提案下发的任务，把"依据哪句话"显示在任务上。
  *
  * 这是规划功能散在审计链上的另一半：提案上写着"为什么这么拆"，任务上写着
- * "从哪份提案来的"。少了它，任务列表里会凭空多出几条没人知道出处的扫描。
+ * "从哪份提案来的"。少了它，作业列表里会凭空多出几条没人知道出处的扫描。
  */
 function renderJobOrigin(job) {
   const payload = job.payload || {};
@@ -3268,7 +3354,7 @@ async function deleteJob(button) {
 const JOB_LOG_LINES = 800;          // 面板里最多留多少行（服务端另有 2000 行上限）
 
 /**
- * 面板的 DOM **每次重画任务列表时重建**，而日志正文存在 `state.jobLog.lines` 里。
+ * 面板的 DOM **每次重画作业列表时重建**，而日志正文存在 `state.jobLog.lines` 里。
  *
  * 这是刻意的分工，不是偷懒：面板必须长在**它那一行里面**。放在列表外面
  * （先前的写法）时，点第一行的「实时日志」，面板出现在整个列表的最下面——
@@ -3416,7 +3502,7 @@ function closeJobLog() {
   refreshJobButtons();          // 「日志中」→「实时日志」
 }
 
-/** 重画任务列表。列表没加载过时什么都不做——重画一个空列表会把"暂无任务"
+/** 重画作业列表。列表没加载过时什么都不做——重画一个空列表会把"暂无任务"
  *  那行换成别的东西，而那与本次操作无关。 */
 function refreshJobButtons() {
   if (state.jobs && state.tab === 'jobs') renderJobs(null);
@@ -3591,7 +3677,7 @@ const TOOL_STATUS = { running: '进行中', queued: '排队中', pending: '排�
   done: '完成', failed: '失败', cancelled: '已取消' };
 /** 还在跑的三种状态：有任意一条就要继续轮询。 */
 const TOOL_LIVE = ['running', 'queued', 'pending'];
-/** 工具操作的轮询节奏。比任务列表（10 秒）快得多，因为安装是**用户刚点下的
+/** 工具操作的轮询节奏。比作业列表（10 秒）快得多，因为安装是**用户刚点下的
  *  那一件事**，而他正盯着那一行看。 */
 const TOOLS_REFRESH_MS = 1500;
 const TOOL_STATE_LABEL = { busy: '进行中…', ok: '已就绪', missing: '未安装',
@@ -3991,7 +4077,7 @@ async function pollTools() {
     state.toolsPolling = false;
   }
 }
-/** 任务列表；quiet 用于自动刷新，避免每次失败都弹全局错误条。 */
+/** 作业列表；quiet 用于自动刷新，避免每次失败都弹全局错误条。 */
 function loadJobs(force, quiet) {
   if (state.jobsLoaded && !force) return Promise.resolve();
   if (state.jobsInflight) return state.jobsInflight;
@@ -4006,7 +4092,7 @@ function loadJobs(force, quiet) {
   return state.jobsInflight;
 }
 /** 进入部署页签：自检 / 部署信息 / 执行节点 / 侵入授权（已加载的不重复请求）。
- *  任务**不在这里**——它跟着「任务」页走了，那是另一个页签的加载路径。 */
+ *  任务**不在这里**——它跟着「作业」页走了，那是另一个页签的加载路径。 */
 function loadSetupTab(force) {
   renderSetupLoading();
   loadSetup(force);
@@ -4014,11 +4100,11 @@ function loadSetupTab(force) {
   loadAuthz(force);
   loadTools(force);
 }
-/** 进入任务页签：只拉任务列表。
+/** 进入作业页签：只拉作业列表。
  *
  *  这里原来还拉基线列表与下发表单要用的 `/setup`（示例、探测作用域）。下发入口与
  *  基线列表撤掉之后，那两条请求在本页没有消费者了——留下的只是每次切入两次白跑
- *  的网络往返，以及"示例加载失败"这种与任务页无关的错误提示。 */
+ *  的网络往返，以及"示例加载失败"这种与作业页无关的错误提示。 */
 function loadJobsTab(force) {
   renderJobsLoading();
   loadJobs(force, false);
@@ -4045,7 +4131,7 @@ function renderSetupLoading() {
     if (toolsSummary) toolsSummary.textContent = '正在加载…';
   }
 }
-/** 任务页的加载态：只有任务列表一块。 */
+/** 作业页的加载态：只有作业列表一块。 */
 function renderJobsLoading() {
   if (!state.jobsLoaded) setPanelMessage('#job-list', emptyBlock('正在加载作业列表…'));
 }
@@ -4069,7 +4155,7 @@ function renderJobList(error) {
   const chat = window.PentestChat;
   if (chat && typeof chat.renderSideJobs === 'function') chat.renderSideJobs(error);
 }
-/** 下发任务可能新建 engagement：静默刷新列表，保持当前选择不变。
+/** 下发作业可能新建 engagement：静默刷新列表，保持当前选择不变。
  *
  *  原来这里还负责重建顶栏那个 `<select>`；选择器撤掉之后这件事没有了，但
  *  **列表本身仍是唯一真相**——侧边栏、顶栏的目标指示、漏洞/资产徽章都读它。
@@ -4089,7 +4175,7 @@ async function refreshEngagementOptions() {
     showError('目标列表刷新失败：' + error.message);
   }
 }
-/** 任务列表自动刷新：任务页签与对话页签内跑（两处都有任务读数），切走立刻停。 */
+/** 作业列表自动刷新：作业页签与对话页签内跑（两处都有作业读数），切走立刻停。 */
 function startJobsAuto() {
   if (state.jobsTimer) return;
   state.jobsTimer = setInterval(() => loadJobs(true, true), JOBS_REFRESH_MS);
@@ -4103,12 +4189,12 @@ function stopJobsAuto() {
 }
 /** 让任务读数保持新鲜：立刻拉一次（走缓存），然后按固定节奏刷新。
  *
- *  这是**一处入口**，给"在任务页签之外也想看见任务读数"的地方用——目前只有对话
+ *  这是**一处入口**，给"在作业页签之外也想看见任务读数"的地方用——目前只有对话
  *  页签的上下文栏。调用方不需要知道"拉一次"与"起定时器"是两件事，也不需要知道
  *  缓存与在途去重：那些都是本模块的事，露出去就一定会在某处漏掉一半。
  *
  *  少了这一句时那一块的表现很安静：它停在登录那一刻的内容（`onSignedOut()` 写下
- *  的"登录后显示"），直到用户切到任务页签再切回来。**看起来像"这个部署没有任务"**。
+ *  的"登录后显示"），直到用户切到作业页签再切回来。**看起来像"这个部署没有任务"**。
  */
 function watchJobs() {
   loadJobs(false, true);
@@ -4265,7 +4351,7 @@ async function pumpPulse() {
  *  scale/tx/ty 与选中项一律保留；新数据落在视野外时由 `#graph-stale` 那条提示把
  *  "要不要重新适配"交回使用者。所以链路这一路是"指纹变了才整图重取"，不是每 3 秒
  *  重算一次布局（`loadGraph(true)` 仍然不便宜，一张几千节点的图要重跑服务端布局）。
- *  报告页仍然不在名单里（左侧目录跟着任务列表走，正文不跟），靠它页头那颗「刷新报告」。
+ *  报告页仍然不在名单里（左侧目录跟着作业列表走，正文不跟），靠它页头那颗「刷新报告」。
  *  两页原先合用栏脚那颗全局「刷新」，那颗已经撤掉了。
  */
 function startPulseAuto() {
@@ -4282,7 +4368,7 @@ function stopPulseAuto() {
   // ——那 3 秒正好是"我切回来了，怎么还是旧的"。
 }
 function switchTab(name) {
-  // 离开任务页就断掉日志流。不断的话，一个被换走的标签页会一直挂着一个
+  // 离开作业页就断掉日志流。不断的话，一个被换走的标签页会一直挂着一个
   // 长连接**直到这条任务跑完**——而定时器与连接都不会因为"页面被换走"
   // 自动消失。这条流的生命周期必须跟着它的可见性。
   if (state.tab === 'jobs' && name !== 'jobs') closeJobLog();
@@ -4290,8 +4376,8 @@ function switchTab(name) {
   // 页面被换走而自己消失，而它每 1.5 秒打一次服务端。
   if (state.tab === 'setup' && name !== 'setup') stopToolsWatch();
   // 左侧导航的「产出 → 报告」是这一页的**入口**，语义是"看这个目标的报告"，
-  // 不是"回到我上次读到的那一篇"。实测（夹具里点一次任务行 → 切任务页 → 从导航
-  // 回报告）：屏幕上还是那一篇作业报告，页头写着它的任务号，而使用者把这一页当
+  // 不是"回到我上次读到的那一篇"。实测（夹具里点一次作业行 → 切作业页 → 从导航
+  // 回报告）：屏幕上还是那一篇作业报告，页头写着它的作业号，而使用者把这一页当
   // 交付物——他要的是汇总那一篇，于是只能自己再去左栏点一次「本目标汇总」。
   // 目录里点一行仍然只换文档（`showReport`），不经过这里，两者语义不同。
   // 刻意**不清** `reportDoc`：此刻正文还是旧那一篇，卡头也跟着它；等新文档落地时
@@ -4475,7 +4561,7 @@ function bindEvents() {
     debounce = setTimeout(() => renderFindings(null), 120);
   });
   // 漏洞页左栏：一次事件委托。列表会被心跳重画（目标增减），逐个绑会随每次重画
-  // 再叠一批监听器——与任务列表、报告目录同一条理由。
+  // 再叠一批监听器——与作业列表、报告目录同一条理由。
   $('#findings-targets').addEventListener('click', (event) => {
     const row = event.target.closest ? event.target.closest('.target-row') : null;
     if (row) selectFindingsScope(row.dataset.targetScope || '');
@@ -4495,12 +4581,12 @@ function bindEvents() {
   // 那两页现在各有一颗自己的（`#graph-refresh`，以及下面这颗）。`refreshAll()`
   // 本身留着：`boot.js` 换用户后、`chat.js` 删掉当前目标后会**直接调它**。
   $('#error-close').addEventListener('click', hideError);
-  // 左侧目录每 10 秒跟着任务列表自己长（`renderReportSide`），但**正文不会**：
+  // 左侧目录每 10 秒跟着作业列表自己长（`renderReportSide`），但**正文不会**：
   // 它按任务取一次就停在那儿，而"这个任务跑完了没有"正是盯着这一页时最想知道的。
   $('#report-refresh').addEventListener('click', () => { hideError(); loadReport(true); });
   $('#report-copy').addEventListener('click', copyReport);
   $('#report-download').addEventListener('click', downloadReport);
-  // 报告目录走事件委托，理由与下面任务列表那条一样：目录每 10 秒重建一次，
+  // 报告目录走事件委托，理由与下面作业列表那条一样：目录每 10 秒重建一次，
   // 在渲染时逐个 addEventListener 会随每次刷新叠加一批监听器。
   // `dataset.jobId` 为空串正是「本目标汇总」那一行，`showReport('')` 会回到汇总。
   $('#report-side').addEventListener('click', (event) => {
@@ -4527,7 +4613,7 @@ function bindEvents() {
     const button = event.target.closest ? event.target.closest('[data-executor-id]') : null;
     if (button) revokeExecutor(button);
   });
-  // 任务列表的三类点击（删除 / 打开日志 / 关闭日志）全部走**同一个**委托，
+  // 作业列表的三类点击（删除 / 打开日志 / 关闭日志）全部走**同一个**委托，
   // 挂在这个**静态**容器上。
   //
   // 日志面板的关闭按钮必须在这里一起处理，**不能**另外 `$('#job-log')` 绑一次。
@@ -4550,7 +4636,7 @@ function bindEvents() {
   });
   $('#jobs-clear-all').addEventListener('click', clearAllJobs);
 }
-/** 整站重载：状态 + 全局链路 + 当前目标（含当前页签数据）；部署与任务页签另刷自己那几块。
+/** 整站重载：状态 + 全局链路 + 当前目标（含当前页签数据）；部署与作业页签另刷自己那几块。
  *
  *  **它不是任何按钮的处理函数。** 栏脚那颗全局「刷新」已经撤掉——手动刷新现在归各页
  *  自己的 `.ph-actions`（部署 `#setup-refresh`、链路 `#graph-refresh`、报告
@@ -4720,7 +4806,7 @@ window.PentestUI = {
   // 让它自己抄一份字面量的失败形态与上面 `jobView` 一模一样：同一个 kind 在两处叫
   // 两个名字，读的人会以为那是两种不同的东西。所以这里给的是同一个函数。
   kindLabel: (kind) => KIND_LABEL[kind] || kind,
-  // 上下文栏那一块任务读数要会自己长。对话页签在加载时调它，**与任务页签共用
+  // 上下文栏那一块任务读数要会自己长。对话页签在加载时调它，**与作业页签共用
   // 同一个定时器**（不是各起一个：两个定时器会让刷新节奏翻倍，而它们拉到的是
   // 同一份数据）。见 watchJobs 的注释。
   watchJobs,

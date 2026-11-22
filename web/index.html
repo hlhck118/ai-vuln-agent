@@ -762,10 +762,10 @@
                 title="数据一变就自动重取（视角保留；你手动缩放 / 拖动过之后，新节点不会把视图拽走）">自动刷新</button>
         <button id="graph-refresh" class="btn sm" type="button"
                 title="立即重新取一次链路数据（自动刷新关掉时这是唯一入口）">刷新链路</button>
-        <button id="zoom-out" class="btn sm" type="button" title="缩小">缩小</button>
-        <button id="zoom-in" class="btn sm" type="button" title="放大">放大</button>
-        <button id="zoom-fit" class="btn sm" type="button" title="适应窗口">适应窗口</button>
-        <span class="zoom-level" id="zoom-level">600%</span>
+        <!-- 三颗缩放按钮与读数**搬到了画布左下角**（见下面的 `.graph-zoom`）：
+             它们操作的是画布里的那张图，挂在页头右端时，手在画布上、眼在页头找，
+             而且页头这一排已经有四颗芯片一颗按钮。页头的动作区留着——「刷新链路」
+             属于「这一页怎么取数」，与「这张图怎么看」不是同一类事。 -->
       </div>
     </header>
 
@@ -782,11 +782,45 @@
              整张图看起来"没有从左上角开始"。左上对齐后布局原点就是画布原点，缩放、
              拖动与「适应窗口」都从同一个角出发；`toUserSpace` 也不再要被裁掉的那段偏移。 -->
         <svg id="graph-svg" class="graph-svg hidden" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet"></svg>
+        <!-- 画布左上角的图例：图上每个符号——圆点颜色、线型、虚线——在这里都有说法。
+             它刻意放在 svg **外面**：放进去就会跟着缩放走，放大到 800% 时最该看的这张
+             说明先跑出屏幕。`pointer-events: none` 让它不抢画布的拖动与悬停。
+             关系那几行与 `EDGE_LABEL` 一一对应，改边的语义时这里要一起改——
+             图例说谎比没有图例更糟。 -->
+        <div class="graph-legend" aria-hidden="true">
+          <div class="legend-cap">节点类型</div>
+          <div class="legend-kinds">
+            <span class="legend-kind kind-goal">目标</span>
+            <span class="legend-kind kind-intent">意图</span>
+            <span class="legend-kind kind-fact">事实</span>
+            <span class="legend-kind kind-finding">漏洞</span>
+            <span class="legend-kind kind-digest">摘要</span>
+            <span class="legend-kind kind-asset">资产</span>
+          </div>
+          <div class="legend-cap">关系</div>
+          <div class="legend-edges">
+            <span class="legend-edge" data-kind="spawns">意图链</span>
+            <span class="legend-edge" data-kind="yields">产出</span>
+            <span class="legend-edge" data-kind="derived_from">推导自</span>
+            <span class="legend-edge" data-kind="proves">证实</span>
+            <span class="legend-edge" data-kind="covers">覆盖</span>
+            <span class="legend-edge" data-kind="parent">归属</span>
+          </div>
+        </div>
         <div class="empty" id="graph-empty">正在加载链路数据…</div>
         <!-- 只在"有变化、而视角被保留"时出现（见 `setGraphStale`）：点它 = 接受一次
              重新适配。它不是刷新按钮——数据已经取回来了，只差"看不见"。 -->
         <button class="graph-stale hidden" id="graph-stale" type="button"
                 title="把视角重新适配到新布局（缩放与平移会重置）">链路已更新 · 点这里适应窗口</button>
+        <!-- 画布左下角的悬浮缩放：手指在图上，控件就该在手边。按钮是 `+ / − / ⛶`，
+             与页头时代同一套 id——`bindGraphEvents` 与 `applyTransform` 都不必改。
+             读数跟在按钮下方，它报的是**当前**缩放（`applyTransform` 每次都写它）。 -->
+        <div class="graph-zoom">
+          <button id="zoom-in" class="gzoom-btn" type="button" title="放大" aria-label="放大">+</button>
+          <button id="zoom-out" class="gzoom-btn" type="button" title="缩小" aria-label="缩小">−</button>
+          <button id="zoom-fit" class="gzoom-btn" type="button" title="适应窗口" aria-label="适应窗口">⛶</button>
+          <span class="zoom-level" id="zoom-level">600%</span>
+        </div>
       </div>
 
       <!-- 分栏线：节点详情栏原先固定 360px，而它装的是一整段原始字段（JSON 可以
@@ -892,7 +926,7 @@
         <span class="muted" id="report-meta"></span>
       </div>
       <div class="ph-actions">
-        <!-- 左侧目录每 10 秒跟着任务列表自己长（`renderReportSide`），但**正文不会**：
+        <!-- 左侧目录每 10 秒跟着作业列表自己长（`renderReportSide`），但**正文不会**：
             它按任务取一次就停在那一刻，而"这个任务跑完了没有、跑出了什么"恰恰是
             盯着这一页时最想知道的。这一颗补的就是那一下，它换掉了原先栏脚那颗
             全局「刷新」（理由见栏脚注释）。 -->
@@ -904,10 +938,10 @@
     </header>
     <div class="split">
       <!-- 作业报告目录：**每个任务一篇**，点一条读那一次执行自己的报告。
-           它与「任务」页读的是同一批数据（`/jobs`，由 app.js 持有），但回答的是
-           另一个问题：任务页说"跑到哪了"，这里说"跑出了什么、白纸黑字是怎么写的"。
+           它与「作业」页读的是同一批数据（`/jobs`，由 app.js 持有），但回答的是
+           另一个问题：作业页说"跑到哪了"，这里说"跑出了什么、白纸黑字是怎么写的"。
 
-           目录列的是**全部任务**，不只当前目标名下那些——一个目标的报告往往是
+           目录列的是**全部作业**，不只当前目标名下那些——一个目标的报告往往是
            "这几次执行合起来说了什么"，而判断一份报告可信度的第一步，恰恰是能一次
            看到全部执行记录（哪几次失败了、有没有重跑、重跑写脏了没有）。所以每一行
            都把目标写在脸上，跨目标的那几条不会看起来像"这个目标的任务"。
@@ -1079,7 +1113,7 @@
     </div>
   </section>
 
-  <!-- 页签 8：设置（分五组：Agent 预设 / 模型配置 / 权限档 / 插件市场 / 用户管理） -->
+  <!-- 页签 8：设置（分十三组：外观 / Agent 预设 / 模型配置 / 权限档 / 运行通道 / 扫描执行 / 工具审批 / 插件市场 / MCP 服务 / 工具拦截 / 消息通知 / Skills / 用户管理） -->
   <section id="panel-settings" class="panel">
     <header class="page-head">
       <div class="ph-title">
@@ -1095,11 +1129,11 @@
     </header>
 
     <!-- 分组导航：一次只显示一组。
-         设置项从三项涨到五组之后，一屏纵向长列表会让"模型配置在哪"变成需要滚动
+         设置项从三项涨到十三组之后，一屏纵向长列表会让"模型配置在哪"变成需要滚动
          寻找的问题；分组把"我改的这项属于哪一类"变成一次点击。
 
-         「外观」排在第一，而且是**默认落在的那一组**：五组里只有它既与作业无关、
-         也与权限无关（它只改本机这一份视图，普通操作员也能改）。排在四组管理项
+         「外观」排在第一，而且是**默认落在的那一组**：十三组里只有它既与作业无关、
+         也与权限无关（它只改本机这一份视图，普通操作员也能改）。排在那些管理项
          之后，会让人以为改外观也需要管理员；而它是使用者会反复回来找的那一项，
          第一次打开设置就看得见才合理。 -->
     <nav class="settings-nav" role="tablist" aria-label="设置分组" id="settings-nav">
@@ -1120,7 +1154,7 @@
 
     <div class="settings-body">
 
-      <!-- 外观：五组里唯一既与作业无关、也与权限无关的一项——它只改本机这一份视图，
+      <!-- 外观：十三组里唯一既与作业无关、也与权限无关的一项——它只改本机这一份视图，
            不写服务端任何配置，所以普通操作员也能改，改完立刻生效、不需要刷新。
            预览卡片用的是各主题自己的三个色值（见 web/theme.js 的 swatch），
            因此**不必先切过去就能看出它长什么样**。 -->
@@ -1640,7 +1674,7 @@
       <!-- 用户管理：仅 role=admin 时显示 -->
       <!-- Skills：平台里的技能手册（插件集成的 + data/skills 下你自己放/导入的）。
            它原先是「演练台」的一部分。那道授权门已经撤了：技能是"读一份 markdown"，
-           不下发任务、不碰目标、也不改变权限档——真正挡住它的是资产与部署两页，
+           不下发作业、不碰目标、也不改变权限档——真正挡住它的是资产与部署两页，
            而那两页本来就有自己的入口。这里只回答三件事：有哪些手册、从哪来、删一份。 -->
       <!-- 消息通知：把「新发现 / 作业收尾 / 待审批」推到外部渠道。
            三条取舍写在界面上：只有 test 与 retry 是同步发送（人正等着结果），

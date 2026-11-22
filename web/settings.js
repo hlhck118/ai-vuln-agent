@@ -32,8 +32,8 @@
     users: [], usersError: null,
     editingId: null, pendingDelete: null, pendingUserDelete: null, pendingPasswordUser: null,
     tests: {}, inflight: null, loaded: false, bound: false,
-    // 设置分组。默认落在「外观」——五组里只有它既与作业无关、也与权限无关，
-    // 是唯一一项使用者会反复回来找、且第一次打开设置就该看见的。四组管理项
+    // 设置分组。默认落在「外观」——十三组里只有它既与作业无关、也与权限无关，
+    // 是唯一一项使用者会反复回来找、且第一次打开设置就该看见的。那些管理项
     // 都是"改了会影响别人"的配置，本来就该是有意去找的。
     group: 'appearance',
     // 权限档 / DSH 集成 / 插件市场
@@ -1333,7 +1333,7 @@
 
   /* -------------------------------------------------------------- 分组 ---- */
 
-  /** 切换设置分组。一次只显示一组：设置项涨到五组后，纵向长列表会让
+  /** 切换设置分组。一次只显示一组：设置项涨到十三组后，纵向长列表会让
    *  "模型配置在哪"变成需要滚动寻找的问题。 */
   function showGroup(name) {
     view.group = name || 'agents';

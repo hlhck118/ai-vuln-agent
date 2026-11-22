@@ -605,7 +605,7 @@ class ThemeContractTestCase(unittest.TestCase):
     def test_appearance_group_is_first_and_is_the_default(self):
         """外观排在第一组，而且设置页默认就落在这里。
 
-        它是五组里唯一与作业和权限都无关的一项（只改本机显示），排在四组管理项之后
+        它是十三组里唯一与作业和权限都无关的一项（只改本机显示），排在那些管理项之后
         会让人以为改外观也要管理员——而它是使用者会反复回来找的那一项。
         """
         nav = self._html[self._html.index('class="settings-nav"'):]

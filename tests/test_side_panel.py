@@ -160,7 +160,7 @@ class GoalRowShowsScanTargetsTestCase(unittest.TestCase):
                       "那样非选中行就完全看不出扫过什么")
 
     def test_scan_targets_come_from_the_console_snapshot_not_a_second_request(self):
-        """数据必须来自 `PentestUI.state.jobs`（与「任务」页同一份快照）。
+        """数据必须来自 `PentestUI.state.jobs`（与「作业」页同一份快照）。
 
         另写一次 `/jobs` 请求的失败形态是：目标行与任务块在某一次刷新之后显示
         不同的任务数，而两处看起来都正常。
@@ -490,9 +490,9 @@ class FourBlockLinkageTestCase(unittest.TestCase):
         self.assertTrue(scope, "找不到 sessionJobs")
         self.assertIn("view.sessionId", scope, "没看开着的是哪一条对话")
         self.assertIn("String(job.sessionId || '') === id", scope,
-                      "没有按对话过滤任务：别的对话的任务会混进来")
+                      "没有按对话过滤作业：别的对话的作业会混进来")
         self.assertIn("jobView.compare", scope,
-                      "没沿用任务页签那套排序：执行中的不再排在最前")
+                      "没沿用作业页签那套排序：执行中的不再排在最前")
         self.assertNotIn("view.sessions", scope,
                          "还在从会话列表里挑「同目标最近一条」：那是跟目标走的旧判据")
         self.assertNotIn("selectedEid()", scope, "任务块又在看选中的目标了")

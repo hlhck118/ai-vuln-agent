@@ -159,7 +159,7 @@ class BridgeWriteTestCase(unittest.TestCase):
         self.assertTrue(data.get("engagementId"))
         self.assertEqual("probe", data.get("kind"))
         listing = self.payload_of(replies, 6)
-        self.assertIn("1 个任务", listing.get("summary", ""))
+        self.assertIn("1 个作业", listing.get("summary", ""))
 
     def test_revoking_takes_it_away_again(self):
         """收回之后模型看不见它 —— 这也是"一个动作一个决定"里的那个"收回"。"""

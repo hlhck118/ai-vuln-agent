@@ -415,7 +415,7 @@ finally）会把它一起收掉；但**强杀**（`taskkill /F`、任务管理�
 | `vulnagent`（默认） | 发掘引擎的七段流水线：切片 → 假设 → 差分验证 | `verified`（差分复现）或 `confirmed_static` |
 | `dsh` | 一条**新建的项目内 DSH 会话**，在目标目录里用原生 `pwsh` / 文件检索工具只读审计 | 一律 `confirmed_static`（method 写「DSH 会话只读分析」），**绝不声称差分验证** |
 
-**为什么不是"二选一之后悄悄换"**：控制面在下发任务时就解析口径，并把 `scanEngine` /
+**为什么不是"二选一之后悄悄换"**：控制面在下发作业时就解析口径，并把 `scanEngine` /
 `dshHome` / `dshProfile` 一起塞进 payload——执行节点可能不在这台机器上，它不读平台库，
 这和 `model` 是同一个理由。DSH 路径不可用（缺 vendor 运行时 / 缺 profile / 缺 node /
 目标目录不存在）时任务直接 `failed` 并给出原因，**不静默回退**到 vulnagent：一个打着
@@ -598,7 +598,7 @@ python tools/install_console_plugin.py --home "$env:USERPROFILE\.dsh" --profile 
 
 ### 边界（都是刻意的）
 
-- **只读**。不建目标、不下发任务、不改配置：那些动作要过权限档与作用域两道闸门，而闸门
+- **只读**。不建目标、不下发作业、不改配置：那些动作要过权限档与作用域两道闸门，而闸门
   住在平台的会话里；在这里另开一条写路径等于绕过它们。**动作仍然走 DSH 的原生对话**——
   平台的工具已经通过 MCP 桥接进 DSH（`mcp__platform__*`）。
 - **报告只走 React 文本节点**：正文里有第三方可控的字符串（目标地址、端口横幅、证据

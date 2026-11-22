@@ -361,7 +361,7 @@ def _looks_like_a_move(diff) -> bool:
 
 
 def render_comparison(diff, prev_path) -> list:
-    """控制台上的比对结果。删失单独成段，理由写在旁边。"""
+    """工作台上的比对结果。删失单独成段，理由写在旁边。"""
     lines = ["跨版本比对（上一版：%s）" % os.path.basename(prev_path),
              "  新增 %d · 内容变更 %d · 删除 %d · 未变 %d"
              % (len(diff["added"]), len(diff["changed"]),
@@ -557,7 +557,7 @@ def build_index(included, skipped, label, counts, diff=None, prev_name=None) -> 
         "## 怎么跑起来",
         "",
         "```bash",
-        "python deploy/start.py      # 起控制台并打开浏览器",
+        "python deploy/start.py      # 起工作台并打开浏览器",
         "```",
         "",
         "包内根目录就是 `%s/`，进去直接跑；工作台、发掘引擎、文档同在根下，"
@@ -584,7 +584,7 @@ def build_index(included, skipped, label, counts, diff=None, prev_name=None) -> 
         "（`d1.py`–`d5.py` 章节内容、`render.py` 渲染器、`base.docx` 模板）、"
         "架构决策记录（ADR）、集成说明。重建 docx 需 `pip install python-docx`，"
         "**不是工作台的运行依赖** |",
-        "| `tools/keep_tunnel.py` | 让外网打开控制台的 SSH 反向隧道守护（默认 serveo 的 443），"
+        "| `tools/keep_tunnel.py` | 让外网打开工作台的 SSH 反向隧道守护（默认 serveo 的 443），"
         "用法见 §4.5.2 |",
         "| `tools/cloudflared.exe` | Cloudflare 隧道客户端（54 MB，随包分发以免接收方另行下载）；"
         "本机链路上快速隧道拿到的地址全程 530，**对外走 keep_tunnel.py** |",

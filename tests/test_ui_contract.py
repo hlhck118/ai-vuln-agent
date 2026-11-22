@@ -385,12 +385,13 @@ class UiContractTestCase(unittest.TestCase):
         self.assertNotIn("integrity=", self.html, "不应引用带 SRI 的外部资源")
 
     def test_all_views_present(self):
-        """十五个视图全在。**这份清单必须和导航段落一一对应**。
+        """十七个视图全在。**这份清单必须和导航栏的顺序一一对应**。
 
         它原先只列了七项——`guide`（使用说明）从头就漏在外面。漏掉一项的代价不是
         "少查一条"，而是**新增页签时没有任何断言看着它**：从部署页拆出「任务」页
         之后，这个清单还停在八个中文标签 / 七个 `data-tab` 上，新页整页无人看守。
-        所以这里把 `rail-nav` 的三个段落（工作 / 产出 / 系统）按实际顺序列全。
+        所以这里把 `rail-nav` 两段（功能 / 系统）按实际顺序列全——顺序也是断言的
+        一部分：**仪表盘排第一并默认打开**（概览在前，会话在后），会话排第二。
 
         **页签名以这里为准**。改名史：先「DSH 控制台」→「控制台」，再「控制台」
         →「会话」（这一页装的是平台里那个完整的 DSH 网页应用，按页里实际的东西命名，
@@ -402,19 +403,30 @@ class UiContractTestCase(unittest.TestCase):
         #
         # 2026-11 的第二轮改版把导航从三段合并成两段（功能 / 系统），并按 artex
         # 补了六页：仪表盘、流量、请求重发、工作空间、审批记录、日志。清单跟着
-        # 从九项变十五项——**这里刻意不写"新增的六项"这种例外**，仍然逐条列全：
+        # 从九项变十七项——**这里刻意不写"新增的六项"这种例外**，仍然逐条列全：
         # 例外条款等于给下一轮开一个豁免口。
-        for label in ("会话", "仪表盘", "任务", "计划任务", "探索链路", "漏洞",
+        for label in ("仪表盘", "会话", "任务", "计划任务", "探索链路", "漏洞",
                       "资产", "流量", "请求重发", "报告", "作业", "部署",
                       "工作空间", "审批记录", "日志", "设置", "使用说明"):
             self.assertIn(label, self.html, "缺少视图：%s" % label)
-        for tab in ("dsh", "dashboard", "tasks", "schedules", "graph", "findings",
-                    "assets", "traffic", "repeater", "report", "jobs", "setup",
-                    "workspace", "approvals", "logs", "settings", "guide"):
+        tabs = ("dashboard", "dsh", "tasks", "schedules", "graph", "findings",
+                "assets", "traffic", "repeater", "report", "jobs", "setup",
+                "workspace", "approvals", "logs", "settings", "guide")
+        for tab in tabs:
             self.assertIn('data-tab="%s"' % tab, self.html,
                           "缺少页签按钮：%s" % tab)
             self.assertIn('id="panel-%s"' % tab, self.html,
                           "缺少页签面板：%s" % tab)
+
+        # 顺序也是契约的一部分：仪表盘必须排在第一位（概览在前、会话在后），
+        # 所以拿**按钮上**的 `role="tab" data-tab=...` 在 HTML 里的下标做单调递增
+        # 校验。只查 `data-tab="x"` 不够——注释里也会提到它（那几处讲改名史）。
+        marks = [self.html.index('role="tab" data-tab="%s"' % tab) for tab in tabs]
+        self.assertEqual(sorted(marks), marks,
+                         "导航顺序变了：期望 %s" % (list(tabs),))
+        # 默认打开的那一页是仪表盘，不是会话。
+        self.assertIn('class="tab active" type="button" role="tab" data-tab="dashboard"',
+                      self.html, "默认页签不是「仪表盘」（`.tab.active` 没落在它上面）")
 
         # 「Skills」是设置页的一组：技能手册的目录、查看、导入与删除。它不再是页签，
         # 也不再是「演练台」——那道授权门已经撤了（读一份 markdown 不需要授权）。
@@ -423,7 +435,7 @@ class UiContractTestCase(unittest.TestCase):
         self.assertIn('id="skills-list"', self.html, "Skills 的列表容器不见了")
 
     def test_chat_console_reads_conversation_contract(self):
-        """「控制台」页签必须真的消费对话接口的字段，而不是画一个静态聊天框。
+        """「会话」页签必须真的消费对话接口的字段，而不是画一个静态聊天框。
 
         这条测试针对的故障很具体：把对话框接成一个"发出去、原样显示"的文本区，
         页面上一切正常，只是模型永远不会调用任何工具。因此这里钉住"轨迹"与
@@ -1479,7 +1491,7 @@ class UiContractTestCase(unittest.TestCase):
         self.assertIn("stopTurn()", bind, "分派到了停止那一支，但没接上 stopTurn()")
 
     def test_coming_back_to_the_console_does_not_end_the_running_turn(self):
-        """切回「控制台」不能顺手把"正在跑"的那一轮收尾。
+        """切回「会话」不能顺手把"正在跑"的那一轮收尾。
 
         使用者报的是"切换控制台页面，最新会话会消失一下"，实测是**主区最新那条**
         （正在生成的气泡）：跑着的时候切走再切回来，它先没了，过一会儿才回来。
@@ -1769,8 +1781,8 @@ class UiContractTestCase(unittest.TestCase):
             要求"去掉内嵌框"之后 `.chat-input` 的边框撤了，那段必须一起去掉——留着
             的话下限比自然高度高 2px，多出来的 2px 变成输入框里的一小段空白（症状
             与下面那两次完全相同）。
-        量出来的自然高度（`--fs-small: 12px`、`--sp-3: 12px`）是
-        `24 + 4×18 = 96px`。**这个算式我少写过两段**，两次的症状一样：
+        量出来的自然高度（`--fs-small` 与 `--sp-3` 同步，2026-11 抬字后是 13px / 12px）
+        是 `24 + 4×19.5 = 102px`。**这个算式我少写过两段**，两次的症状一样：
         手填 118px 时能放文字的高度只剩 68px；算式里漏掉边框时是 120px——
         两次都读到「可显示 3.89 行」，第 4 行被切掉一截，而那就是用户说的「显示不全」。
         只看高度数字看不出来，得看行数（`.scratch/t57/probe_input.py` 会打印）。
@@ -4569,6 +4581,200 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
                           "而这条栏的宽度归分栏令牌管，不归内容管" % pane)
 
 
+    # ------------------------------------------ 节点卡 / 图例 / 缩放（本轮）
+
+    def _graph_fn(self, name):
+        body = _fn_body(self._app, name)
+        self.assertTrue(body, "app.js 里找不到函数 %s" % name)
+        return body
+
+    @staticmethod
+    def _js_list(js, name):
+        """取 app.js 里某个字符串数组常量的元素（如 KIND_ORDER / EDGE_KINDS）。"""
+        found = re.search(r"const %s = \[([^\]]*)\]" % name, js)
+        if not found:
+            return []
+        return re.findall(r"'([a-z_]+)'", found.group(1))
+
+    @staticmethod
+    def _js_map(js, name):
+        """取 app.js 里某个 键→中文 字面量（如 KIND_LABEL / EDGE_LABEL）。"""
+        found = re.search(r"const %s = \{([^}]*)\}" % name, js)
+        if not found:
+            return {}
+        return dict(re.findall(r"([A-Za-z_][A-Za-z0-9_]*):\s*'([^']*)'", found.group(1)))
+
+    @staticmethod
+    def _rule(css, selector):
+        found = re.search(r"(?m)^%s\s*\{([^}]*)\}" % re.escape(selector), css)
+        return found.group(1) if found else ""
+
+    def test_a_node_card_carries_type_priority_state_and_id(self):
+        """一张卡上四样东西，各占一角。
+
+        改回"两行文字加个 id"的那种卡，图就只剩一种读法：从上往下读字。类型、
+        优先级、生命周期是三件互相正交的事，挤进同一行时，扫读的人分不清橙色说的
+        是这个节点的类别、还是它很急、还是它已经做完了。
+
+        每一处都单独断言，因为少掉任何一角都不会报错：卡片照样画出来，只是那一角
+        空着——只有对着参考形态比过的人才知道少的是什么。
+        """
+        body = self._graph_fn("renderNodes")
+
+        # 左上：类型圆点 + 中文类型名。圆点用 currentColor，颜色由 .gnode.kind-* 喂。
+        self.assertIn("class: 'gnode-dot'", body,
+                      "节点卡左上角没有类型圆点：整张图只剩文字，颜色不再分区")
+        self.assertIn("class: 'gnode-kind'", body,
+                      "节点卡左上角没有类型名")
+        self.assertIn("KIND_LABEL[kind]", body,
+                      "类型名没走 KIND_LABEL：卡上会露出英文 kind 原文")
+
+        # 右上：优先级胶囊。0 是"没定优先级"，不是"P0"。
+        self.assertIn("if (priority > 0)", body,
+                      "优先级胶囊没有 0 的判断：P0 会被画成最低优先级，而它其实是没有")
+        self.assertIn("'gnode-priority'", body, "优先级胶囊丢了类名，样式表上不了色")
+
+        # 右下：状态胶囊，底与字**两个元素都**要带 state-<值>。
+        self.assertIn("classList.add('gnode-state', 'state-' +", body,
+                      "状态胶囊没带 state-<值>：九档状态会全部共用一种颜色")
+        self.assertIn("pill.forEach(", body,
+                      "状态类只加在胶囊的底或字其中一半上：另一半还是默认色")
+
+        # 左下：节点 id。它是复制到别处（日志 / 报告）时的抓手。
+        self.assertIn("class: 'gnode-id'", body, "节点卡左下角没有 id")
+
+        # 悬浮提示把被截断的四层信息补全。
+        self.assertIn(".filter(Boolean).join(", body,
+                      "悬浮提示没把四层信息串起来：卡片上的字是截断过的")
+
+        # 老布局的两处遗迹：标题回到 y+24、副标题只有一行。
+        self.assertNotIn("box.y + 24", body,
+                         "标题回到了 y+24：那是 64 高旧卡的位置，现在它压着类型徽标")
+        self.assertIn("i < 2", body, "副标题不再折两行：长说明会画到邻居卡上")
+
+    def test_the_width_estimate_is_the_same_on_both_sides(self):
+        """估宽系数两边必须一致，否则后端没截、前端溢出去。
+
+        SVG 里没有布局引擎：text 不会自动换行也不裁剪。后端 build_layout 会按
+        LABEL_CHARS 截一次，前端再按自己的系数截一次——两套系数差一点，卡片宽度
+        与文字宽度就对不上，表现出来是"某个标题画到了隔壁卡上"。
+        """
+        body = self._graph_fn("svgTextWidth")
+        self.assertIn("0x2e80", body,
+                      "svgTextWidth 不再按码位判中日韩：中文按 0.55 算会窄掉近一半")
+        self.assertIn("0.55", body, "svgTextWidth 的拉丁系数改了，与后端不同步")
+
+        with open(os.path.join(ROOT, "pentestd", "graph.py"), "r", encoding="utf-8") as handle:
+            py = handle.read()
+        start = py.index("def _text_width(")
+        tail = py.find("\ndef ", start + 1)
+        backend = py[start:] if tail < 0 else py[start:tail]
+        self.assertIn("0x2E80", backend, "后端的码位阈值改了，前端还是 0x2e80")
+        self.assertIn("0.55", backend, "后端的拉丁系数改了，前端还是 0.55")
+
+        # 胶囊必须返回 [rect, text] 两个元素：套一层 g 之后，底色与字色要写后代选择器。
+        pill = self._graph_fn("svgPill")
+        self.assertIn("return [rect, label]", pill,
+                      "svgPill 不再返回两个元素：底与字只能共用一套类名，状态色上不去")
+
+    def test_every_state_has_its_own_pill_colour(self):
+        """九档状态各有各的一对颜色，且两个元素分别取。
+
+        状态是这一页的"进展"读法。九档里有五档是"做完了"的不同方式（已达成 /
+        已完成 / 已穷尽 / 已取代 / 已阻塞），共用一个颜色就等于说它们是同一件事。
+        """
+        states = self._js_map(self._app, "STATE_LABEL")
+        self.assertEqual(9, len(states),
+                         "STATE_LABEL 的档数变了（应是九档），配色表要跟着改：%s"
+                         % sorted(states))
+        for name in states:
+            rule = self._rule(self._css, ".state-" + name)
+            self.assertTrue(rule, "样式表里没有 .state-%s，这一档状态没有颜色" % name)
+            self.assertIn("--pill-fg", rule, ".state-%s 少了字色 --pill-fg" % name)
+            self.assertIn("--pill-bg", rule, ".state-%s 少了底色 --pill-bg" % name)
+
+        back = self._rule(self._css, "rect.gnode-pill.gnode-state")
+        fore = self._rule(self._css, "text.gnode-pill-text.gnode-state")
+        self.assertIn("var(--pill-bg", back, "胶囊的底没取 --pill-bg")
+        self.assertIn("var(--pill-fg", fore, "胶囊的字没取 --pill-fg")
+
+    def test_the_legend_speaks_the_same_vocabulary_as_the_graph(self):
+        """图例从源码那两张表生成，不是另抄一份中文。
+
+        图例说谎比没有图例更糟：它教人用错的符号去读图。所以这里不写死六个类型
+        六种关系，而是读 KIND_ORDER / KIND_LABEL / EDGE_KINDS / EDGE_LABEL，再去
+        index.html 里逐条找——新加一种边而忘了改图例，这条就红。
+        """
+        kinds = self._js_list(self._app, "KIND_ORDER")
+        kind_label = self._js_map(self._app, "KIND_LABEL")
+        edges = self._js_list(self._app, "EDGE_KINDS")
+        edge_label = self._js_map(self._app, "EDGE_LABEL")
+        self.assertTrue(kinds and edges, "app.js 里找不到 KIND_ORDER / EDGE_KINDS")
+
+        for kind in kinds:
+            want = '<span class="legend-kind kind-%s">%s</span>' % (kind, kind_label[kind])
+            self.assertIn(want, self._html, "图例里没有「%s」这一行" % kind_label[kind])
+        for edge in edges:
+            want = '<span class="legend-edge" data-kind="%s">%s</span>' % (edge, edge_label[edge])
+            self.assertIn(want, self._html, "图例里没有「%s」这种关系" % edge_label[edge])
+
+        # 虚线是"覆盖"独有的读法：画布上的边与图例里那一小段线必须同时是虚线。
+        self.assertIn('stroke-dasharray',
+                      self._rule(self._css, '.gedge[data-kind="covers"]'),
+                      "画布上的覆盖边不是虚线了")
+        covers = self._rule(self._css, '.legend-edge[data-kind="covers"]::before')
+        self.assertIn('dashed', covers, "图例里的覆盖线不是虚线：图例在教人读错")
+
+    def test_the_legend_and_the_zoom_control_live_on_the_canvas(self):
+        """说明与控件贴着图，而且只有一份。
+
+        缩放按钮原先挂在页头右端：手在画布上、眼要去页头找，而页头那一排已经有
+        四颗芯片一颗按钮。搬到画布左下角之后，两处并存是最可能的回退形态——页头
+        那份没删干净，点哪一颗都"能放大"，但读数只有一份，另一颗就成了哑的。
+        """
+        panel = self._html[self._html.index('id="panel-graph"'):]
+        panel = panel[:panel.index("</section>")]
+
+        for ident in ("zoom-in", "zoom-out", "zoom-fit", "zoom-level"):
+            self.assertEqual(1, panel.count('id="%s"' % ident),
+                             "画布上的 #%s 不是恰好一处：页头那份没删干净" % ident)
+
+        self.assertIn('class="graph-zoom"', panel, "画布上没有缩放控件")
+        self.assertIn('class="graph-legend"', panel, "画布上没有图例")
+
+        # 图例必须在 <svg> **之外**：放进去就跟着缩放走，放到 800% 时它先跑出屏幕。
+        svg = panel.index('id="graph-svg"')
+        self.assertLess(svg, panel.index('class="graph-legend"'),
+                        "图例跑到 svg 前面去了")
+        self.assertIn('preserveAspectRatio="xMinYMin meet"></svg>', panel,
+                      "svg 不再是自闭合的空壳：图例可能被摆进了它里面")
+
+        legend = self._rule(self._css, ".graph-legend")
+        self.assertIn("position: absolute", legend, "图例不悬浮，会在画布上占掉一条布局")
+        self.assertIn("pointer-events: none", legend,
+                      "图例抢鼠标：它盖住的那块画布拖不动")
+        zoom = self._rule(self._css, ".graph-zoom")
+        self.assertIn("position: absolute", zoom, "缩放控件不悬浮")
+        self.assertIn("left:", zoom, "缩放控件不在画布左侧（左下角留给它）")
+        self.assertIn("bottom:", zoom, "缩放控件没贴住画布底边")
+
+    def test_no_kind_ships_with_its_filter_switch_missing(self):
+        """类型芯片与 state.kindFilter 必须是同一组键。
+
+        漏掉一个键的后果很隐蔽：applyKindFilter 判的是
+        state.kindFilter[kind] !== false，于是 undefined 被读成"显示"——芯片是亮的、
+        节点也画着，看起来完全正常；但那一类从此**关不掉**（点它没有反应）。
+        摘要这一档就曾经漏过一次。
+        """
+        kinds = self._js_list(self._app, "KIND_ORDER")
+        found = re.search(r"kindFilter: \{([^}]*)\}", self._app)
+        self.assertTrue(found, "app.js 里找不到 state.kindFilter")
+        switches = re.findall(r"([A-Za-z_][A-Za-z0-9_]*):\s*(?:true|false)", found.group(1))
+        self.assertEqual(sorted(kinds), sorted(switches),
+                         "kindFilter 与 KIND_ORDER 不是同一组类型：漏掉的那个类型"
+                         "在启动那一秒整类被隐藏，而芯片是亮的")
+
+
 class LiveStepBadgeTestCase(unittest.TestCase):
     """气泡上那个步数徽章：报**实际**步数，上限只在它真会拦人时才报。
 
@@ -4954,7 +5160,7 @@ class FoldPanelTestCase(unittest.TestCase):
                          "「查看全部」那颗按钮还在：这一块本来就不截断")
 
     def test_the_sidebar_jobs_block_keeps_itself_fresh(self):
-        """那一块要会自己长——它不在任务页签里，所以不会跟着任务页签的刷新走。
+        """那一块要会自己长——它不在作业页签里，所以不会跟着作业页签的刷新走。
 
         少了这一句的表现很安静：它停在登录那一刻的"登录后显示"，直到用户切到任务
         页签再切回来。**看起来像"这个部署没有任务"**，而它其实只是没被问过。
@@ -4974,13 +5180,13 @@ class FoldPanelTestCase(unittest.TestCase):
         self.assertIn("startJobsAuto(", body, "没有接上定时器，那一块只会刷新一次")
         self.assertNotIn("setInterval", body,
                          "自己又起了一个定时器——两处会各自刷同一份数据")
-        # 任务页签那条路不许被顺手撤掉。
+        # 作业页签那条路不许被顺手撤掉。
         self.assertIn("watchJobs", re.search(
             r"function loadTabData\(tab\) \{.*?\n\}", app, re.S).group(0),
             "对话页签没有接进 loadTabData：靠点击事件之外没有第二条路径")
 
     def test_the_sidebar_jobs_block_shares_the_status_vocabulary(self):
-        """侧栏与任务页签渲染同一批任务，所以**词表、排序、结束与否只能有一份**。
+        """侧栏与作业页签渲染同一批作业，所以**词表、排序、结束与否只能有一份**。
 
         两处各写一份（哪怕只是抄字面量）的失败形态是：「执行中」与「运行中」并存，
         而读的人会以为那是两种不同的状态。所以这里查的是"侧栏从 `jobView` 拿"、
@@ -5350,14 +5556,14 @@ class ReportSidebarTestCase(unittest.TestCase):
     def test_the_archive_is_ordered_by_time_not_by_status(self):
         """目录按时间倒序：它是归档，不是队列。
 
-        任务页按状态分组（执行中 → 待执行 → 失败 → 已完成），那回答的是"接下来轮到
+        作业页按状态分组（执行中 → 待执行 → 失败 → 已完成），那回答的是"接下来轮到
         谁"。归档回答的是"最近跑过什么"。两处用同一个排序，两边都不对——而"顺序
         不对"没人会当成缺陷报上来。
         """
         body = _fn_body(self.js, "renderReportSide")
         self.assertIn("createdAt", body, "目录没有按时间排序")
         self.assertNotIn("compare(", body,
-                         "目录用了任务页那个状态排序：归档应当按时间倒序")
+                         "目录用了作业页那个状态排序：归档应当按时间倒序")
 
     def test_clicking_a_row_switches_the_document_not_the_target(self):
         """点一行只换文档，**不换当前目标**。
@@ -5470,7 +5676,7 @@ class ReportSidebarTestCase(unittest.TestCase):
 
         目录里点一行是"我要读这一篇"，导航点一次是"看这个目标的报告"——后者是这
         一页的入口，而这一页交付的就是汇总那一篇。实测过的缺陷：点开一篇作业报告
-        → 切去任务页 → 从导航回报告，屏幕上还是那一篇，页头写着它的任务号，左栏
+        → 切去作业页 → 从导航回报告，屏幕上还是那一篇，页头写着它的作业号，左栏
         高亮也还压在那条任务上。判据因此落在"进这一页时 `reportJob` 被清掉"，
         而不是"卡头写了一句话"——`/report` 不带 `?job=` 才是汇总。
         """
@@ -5798,7 +6004,7 @@ class AdminToolDeltaTestCase(unittest.TestCase):
     """
 
     # 中文数字只用来核对文案里「多三项」这类写法。改字面就让它红，比放宽正则好。
-    CN_NUM = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五"}
+    CN_NUM = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八"}
 
     @classmethod
     def setUpClass(cls):
@@ -6596,16 +6802,16 @@ class ChatDetailRailTestCase(unittest.TestCase):
                          "旧正文层的规则还留着：它已经没有任何元素可命中")
 
     def test_job_log_is_pulled_incrementally(self):
-        """任务执行过程用 `/jobs/{id}/events` 增量拉，不复用任务页签那套面板。
+        """作业执行过程用 `/jobs/{id}/events` 增量拉，不复用作业页签那套面板。
 
-        详情栏与任务页签是两个页面：复用面板会把 `state.jobLog` 这份“当前跟随
+        详情栏与作业页签是两个页面：复用面板会把 `state.jobLog` 这份“当前跟随
         哪条任务”的状态变成两处共写。而两条 SSE 也不该由这一栏再开一条。
         """
         self.assertIn("/events", self._chat)
         self.assertIn("after=", self._chat)
         self.assertIn("limit=", self._chat)
         self.assertNotIn("jobLogPanel", self._chat,
-                         "详情栏又去借任务页签的面板了——那是另一个页面的状态")
+                         "详情栏又去借作业页签的面板了——那是另一个页面的状态")
 
     # ------------------------------------------------------------- 小工具
 
@@ -6641,17 +6847,21 @@ class RailGroupLabelTestCase(unittest.TestCase):
         return match.group(1).strip() if match else ""
 
     def test_the_label_sits_on_the_small_type_step(self):
-        """字号落在 `--fs-small`（12px）这一档，不再回到 10px。
+        """字号落在 `--fs-small` 这一档，不再回到 10px。
 
-        `.tab` 用 `--fs-body`（13px）。两者贴得太近时，「这是标题 / 这是条目」就只能
-        靠颜色分辨，而颜色恰好是那 10px 版本里最弱的一项（`--muted` 比条目还淡）。
+        `.tab` 用 `--fs-body`。两者贴得太近时，「这是标题 / 这是条目」就只能靠颜色
+        分辨，而颜色恰好是那 10px 版本里最弱的一项（`--muted` 比条目还淡）。
+
+        2026-11 整档抬字：`--fs-small` 12 → 13px、`--fs-body` 13 → 14px。这里钉的是
+        **下限不为 10px**，所以断言跟着令牌一起抬——写死旧值会让人在抬字时以为
+        自己弄坏了什么。
         """
         rule = self._rule(".rail-group-label")
         self.assertTrue(rule, "style.css 里找不到 `.rail-group-label` 规则")
         size = self._decl(rule, "font-size")
         self.assertIn("var(--fs-small)", size,
                       "段标签应落在 `--fs-small` 这一档（条目用 --fs-body）；现在是：%s" % size)
-        self.assertRegex(self._css, r"--fs-small:\s*12px",
+        self.assertRegex(self._css, r"--fs-small:\s*1[23]px",
                          "`--fs-small` 被改小了——段标签会跟着缩回去")
 
     def test_the_label_outweighs_the_tabs(self):
@@ -7639,7 +7849,7 @@ class PanelsWiringTestCase(unittest.TestCase):
         """仪表盘与审批页不许印后端原值。
 
         这两页各漏过一次，症状一样：同一个状态在两条页签上是两个词。仪表盘印
-        `pending` / `done`，任务页印「待执行」/「已完成」；审批页印 `always` /
+        `pending` / `done`，作业页印「待执行」/「已完成」；审批页印 `always` /
         `pending`，对话里的审批卡片印「等待批准」。读的人得自己在脑子里建一张
         对照表，而建错的那次会把「已完成」当成「还在跑」。
 
@@ -7727,7 +7937,7 @@ class PanelsWiringTestCase(unittest.TestCase):
     def test_every_dash_dot_colour_matches_its_badge(self):
         """同一状态在两处的颜色必须同义。
 
-        仪表盘的那颗圆点与任务页的那枚徽章说的是同一件事。`done` 起初根本没有
+        仪表盘的那颗圆点与作业页的那枚徽章说的是同一件事。`done` 起初根本没有
         规则，回落成 `--muted` 的灰——看上去像「没有状态」；`running` 起初也是
         绿，跟 `done` 撞色，于是「还在跑」与「已经完了」只差文字。
 
@@ -7876,7 +8086,7 @@ class PanelsWiringTestCase(unittest.TestCase):
     def test_elapsed_times_go_through_the_shared_duration_format(self):
         """耗时也走共享那把尺子（`PentestUI.formatDuration`）。
 
-        同屏两种写法最容易发生在数字上：任务页把 1200 ms 写成「1.2 s」，而流量列表与
+        同屏两种写法最容易发生在数字上：作业页把 1200 ms 写成「1.2 s」，而流量列表与
         重发结果直接拼 `durationMs + ' ms'`。同一个数在两张表上两种写法，读的人不会
         觉得是格式问题，只会觉得其中一个是别的量。"""
         self.assertIn("formatDuration(record.durationMs)", self._code,

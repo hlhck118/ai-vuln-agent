@@ -13,6 +13,7 @@
 import io
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -364,10 +365,14 @@ class Rendering(unittest.TestCase):
         self.assertIn("✗", text)                  # 不可用的工具不隐藏
         self.assertIn("← 需要 --policy", text)
         self.assertIn("需管理员", text)            # 管理员要求看得见
-        # 每个工具恰好出现一次：重复意味着两个分组都认领了它
-        for tool in chat.TOOLS:
-            self.assertEqual(1, sum(1 for line in lines if tool["name"] in line),
-                             "%s 出现次数不对" % tool["name"])
+        # 每个工具恰好出现一次：重复意味着两个分组都认领了它。
+        # 比对**整词**而不是子串——`record_finding` 是 `record_finding_retest_result`
+        # 的前缀，用 `in line` 数会把后者算到前者头上，工具一多就一直红着。
+        names = [tool["name"] for tool in chat.TOOLS]
+        for name in names:
+            hits = sum(1 for line in lines
+                       if re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(name), line))
+            self.assertEqual(1, hits, "%s 出现次数不对" % name)
 
     def test_show_lists_types_and_an_example(self):
         lines = toolclient.render_show("start_probe", "", "")

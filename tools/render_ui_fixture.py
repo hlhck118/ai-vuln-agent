@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""生成一张「控制台某一屏」的离线夹具（开发 / 评审用）。
+"""生成一张「工作台某一屏」的离线夹具（开发 / 评审用）。
 
-为什么要这个脚本：界面改动"看起来对不对"只有渲染出来才知道，而控制台默认要求
+为什么要这个脚本：界面改动"看起来对不对"只有渲染出来才知道，而工作台默认要求
 登录、还要有一批真实任务数据才看得出布局问题。这个脚本起一个临时控制面、**真跑
 一次网络探测**、把真实接口响应抓下来内联进一份自包含 HTML —— 于是无头浏览器打开
 它就能看到与运行时一致的那一屏，不需要任何账号口令，也不依赖网络。
 
-与 `render_layout_png.py` 的分工：那个画的是链路布局，这个画的是控制台页面。
+与 `render_layout_png.py` 的分工：那个画的是链路布局，这个画的是工作台页面。
 
 用法：
     python tools/render_ui_fixture.py out.html [--tab setup] [--kind probe]
@@ -98,7 +98,7 @@ STREAM_MESSAGE = "扫描 /srv/demo，目标是审计上传逻辑"
 # 而不是同一句话上下各出现一次。
 HISTORY_MESSAGE = "现在有哪些执行节点在线？"
 
-# 夹具里不引 auth.js / boot.js：直接渲染控制台，不需要登录门。
+# 夹具里不引 auth.js / boot.js：直接渲染工作台，不需要登录门。
 #
 # **web/ 下新增脚本时必须加进这张表**。夹具是脱离项目目录打开的（截图产物落在
 # artifacts/ 下），留在 <script src="..."> 里的相对路径会 404，而页面照常渲染——
@@ -427,7 +427,7 @@ window.addEventListener('load', function () {
   setTimeout(function () {
     var gate = document.getElementById('auth-gate');
     if (gate) gate.classList.add('hidden');
-    // 真实运行时由 boot.js 在拿到登录态后揭开控制台；夹具直接揭开。
+    // 真实运行时由 boot.js 在拿到登录态后揭开工作台；夹具直接揭开。
     var shell = document.getElementById('console-shell');
     if (shell) shell.classList.remove('hidden');
     var ui = window.PentestUI;
@@ -801,7 +801,7 @@ window.addEventListener('load', function () {
           hint ? String(hint.classList.contains('hidden')) : 'missing');
       }
     }
-    // 控制台的滚动发生在内部容器里，整页截图看不到下半部分，因此用 focus 把目标
+    // 工作台的滚动发生在内部容器里，整页截图看不到下半部分，因此用 focus 把目标
     // 元素滚进视口（scrollIntoView 会滚动最近的可滚动祖先）。**延后一拍再滚**：
     // 规划是异步的（await 一次回放的 fetch），立刻滚只会滚到一张还没有内容的空列表。
     setTimeout(function () {
@@ -1426,7 +1426,7 @@ def build(out_path: str, data: dict, tab: str = "setup", kind: str = "probe",
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="生成控制台离线渲染夹具")
+    parser = argparse.ArgumentParser(description="生成工作台离线渲染夹具")
     parser.add_argument("out", help="输出 HTML 路径")
     parser.add_argument("--tab", default="setup",
                         choices=["graph", "chat", "findings", "assets", "report",
@@ -1435,7 +1435,7 @@ def main() -> int:
     parser.add_argument("--job-mode", default="manual", choices=["manual", "plan"],
                         help="任务下发方式页签：manual（手动指定）或 plan（AI 规划）")
     parser.add_argument("--focus", default="",
-                        help="渲染后滚到该元素 id（控制台的滚动在内部容器里，"
+                        help="渲染后滚到该元素 id（工作台的滚动在内部容器里，"
                              "整页截图看不到下半部分）")
     parser.add_argument("--group", default="",
                         help="设置页的初始分组：agents / models / policies / plugins / users")
