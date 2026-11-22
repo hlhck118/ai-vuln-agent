@@ -1079,7 +1079,6 @@
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="plugins">插件市场</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="mcp">MCP 服务</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="intercept">工具拦截</button>
-      <button class="settings-nav-btn" type="button" role="tab" data-settings-group="exploration">探索链路</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="notify">消息通知</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="skills">Skills</button>
       <button class="settings-nav-btn" type="button" role="tab" data-settings-group="users">用户管理</button>
@@ -1708,42 +1707,6 @@
         </div>
       </section>
 
-      <section class="setup-card wide" data-settings-group="exploration">
-        <div class="panel-head">探索链路
-          <span class="panel-head-hint">按缺口自动派活</span>
-          <span class="spacer"></span>
-          <span class="muted" id="exploration-meta">尚未加载</span>
-          <button id="exploration-refresh" class="btn sm" type="button">刷新</button>
-        </div>
-        <div class="panel-body">
-          <p class="muted" id="exploration-note">这条链路按「目标 → 意图 → 事实 / 漏洞 / 资产」推导离定稿还差哪一步，
-            默认<strong>关闭</strong>：打开之后后台会按间隔把缺口变成 explore 任务塞进队列。派过的那一条在静默期内不再重复派，
-            同一目标在途超过上限时整轮跳过 —— 排产只负责「该做的还没做」，不负责催。</p>
-          <div id="exploration-message"></div>
-
-          <div class="settings-subhead">排产口径</div>
-          <form id="exploration-settings-form" class="settings-form" autocomplete="off">
-            <div class="form-row">
-              <label class="field-label" for="exploration-enabled">自动排产</label>
-              <select id="exploration-enabled" class="select sm-select">
-                <option value="0">关闭（只推导，不派活）</option>
-                <option value="1">开启</option>
-              </select>
-              <label class="field-label" for="exploration-interval">间隔（秒）</label>
-              <input id="exploration-interval" class="input num-input" type="number" min="60" max="86400" value="900">
-              <label class="field-label" for="exploration-max">在途上限</label>
-              <input id="exploration-max" class="input num-input" type="number" min="1" max="20" value="3">
-              <span class="spacer"></span>
-              <button id="exploration-save" class="btn sm" type="submit">保存</button>
-              <button id="exploration-tick" class="btn sm ghost" type="button">立刻排一轮</button>
-            </div>
-            <div id="exploration-settings-message"></div>
-          </form>
-
-          <div class="settings-subhead">目标与缺口</div>
-          <div id="exploration-engagements" class="list-block"></div>
-        </div>
-      </section>
 
       <section class="setup-card wide" data-settings-group="notify">
         <div class="panel-head">消息通知

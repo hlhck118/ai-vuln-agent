@@ -38,15 +38,18 @@ const BASE_HEADROOM = 5;              // 从基准之上还能再放大五倍（
 // 单位）。用用户坐标定阈值，手抖 1 像素就跨过阈值，于是每一次点选都被判成拖拽、
 // 被 endDrag 吞掉——表现就是"切换节点，节点详情不变"。
 const CLICK_SLOP_PX = 4;
-const KIND_LABEL = { goal: '目标', intent: '意图', fact: '事实', finding: '漏洞', asset: '资产' };
-const KIND_ORDER = ['goal', 'intent', 'fact', 'finding', 'asset'];
+const KIND_LABEL = { goal: '目标', intent: '意图', fact: '事实', finding: '漏洞', digest: '摘要', asset: '资产' };
+// 节点的生命周期状态（与 `models.STATE_LABELS` 同一套说法）：它回答「这条记录的进展」，
+// 与 `kind` 回答的「这是什么」分开——摘要有 active / superseded，事实有 origin / confirmed。
+const STATE_LABEL = { origin: '起点', confirmed: '已确认', done: '已完成', exhausted: '已穷尽', met: '已达成', active: '进行中', superseded: '已取代' };
+const KIND_ORDER = ['goal', 'intent', 'fact', 'finding', 'digest', 'asset'];
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 const SEVERITY_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '信息' };
-const EDGE_LABEL = { spawns: '意图链', yields: '产出', derived_from: '推导自', proves: '证实', parent: '归属' };
+const EDGE_LABEL = { spawns: '意图链', yields: '产出', derived_from: '推导自', proves: '证实', covers: '覆盖', parent: '归属' };
 /** 图谱关系类型。**这里只有类型，没有颜色**——颜色由 CSS 令牌（--edge-*）下发，
  *  见 style.css 的 .gedge 一节。SVG 的表现属性不认 var()，颜色写在这里就等于
  *  整组绕过主题：换主题时节点换了色，边还是深色主题那一套。 */
-const EDGE_KINDS = ['spawns', 'yields', 'derived_from', 'proves', 'parent'];
+const EDGE_KINDS = ['spawns', 'yields', 'derived_from', 'proves', 'covers', 'parent'];
 /** 没见过的 kind 按这个上色。必须与 .gedge 基础规则里的默认令牌一致。 */
 const EDGE_FALLBACK_KIND = 'spawns';
 /* 资产类型的中文说法。**这不是唯一的来源**：权威词表在 `pentestd/models.py` 的
@@ -611,7 +614,7 @@ function buildNodeIndex(view) {
   // 只读 `goal` 的话，合并图里除第一个之外的 goal 点开都是"当前数据中找不到节点"——
   // 22 个目标里有 21 个是这种情况，而它们恰好是整张图最上面那一列。
   goalsOf(view).forEach((raw) => { if (raw && raw.id) index.set(raw.id, { kind: 'goal', raw }); });
-  [['intents', 'intent'], ['facts', 'fact'], ['findings', 'finding'], ['assets', 'asset']].forEach(([key, kind]) =>
+  [['intents', 'intent'], ['facts', 'fact'], ['findings', 'finding'], ['digests', 'digest'], ['assets', 'asset']].forEach(([key, kind]) =>
     asArray(groups[key]).forEach((raw) => { if (raw && raw.id) index.set(raw.id, { kind, raw }); }));
   return index;
 }
@@ -935,6 +938,7 @@ function renderNodeDetail(id) {
   if (!entry) { body.append(emptyBlock(`当前数据中找不到节点 ${id}`)); return; }
   const sev = entry.raw.severity ? severityOf(entry.raw.severity) : null, head = el('div', 'detail-title');
   head.append(el('span', 'detail-badge', KIND_LABEL[entry.kind] || entry.kind));
+  if (entry.raw.state) head.append(el('span', 'detail-badge', STATE_LABEL[entry.raw.state] || entry.raw.state));
   if (sev) head.append(el('span', `sev-badge sev-${sev}`, SEVERITY_LABEL[sev]));
   head.append(el('span', 'detail-id', id));
   body.append(head, kvList(entry.raw));

@@ -422,5 +422,76 @@ class GraphQueryParameterTestCase(unittest.TestCase):
         self.assertGreater(totals["nodes"], 3, "测试数据不够大，这条什么也没验证到")
 
 
+class DigestLayoutTestCase(unittest.TestCase):
+    """摘要节点在图上单独成列，`covers` 不会被当成推进关系。
+
+    摘要（`digest`）是「把一批记录压成一段」的产物：它 `covers` 的是**跨层**的事实与
+    意图。如果它和链路节点共用分层，这批跨层边会把链路的纵深拉长，而「这一层有几条
+    事实」也会被摘要节点污染 —— 症状是图看起来"多了一层"，但没有任何一条记录真的
+    多出来。这里是纯函数级用例：不建库、不起 HTTP，只钉 `build_layout` / `render_svg`
+    对摘要的处理。
+    """
+
+    def _nodes(self):
+        return [
+            {"id": "goal-1", "kind": "goal", "target": "10.10.10.110", "createdAt": 1},
+            {"id": "intent-1", "kind": "intent", "title": "侦察", "createdAt": 2},
+            {"id": "fact-1", "kind": "fact", "detail": "端口 80 开放", "createdAt": 3},
+            {"id": "digest-1", "kind": "digest", "body": "已确认 webapp 的入口",
+             "generation": 1, "createdAt": 4,
+             "memberIds": {"facts": ["fact-1"], "intents": ["intent-1"]}},
+            {"id": "finding-1", "kind": "finding", "title": "SQL 注入", "severity": "high",
+             "reproducibleSteps": ["打开页面"], "createdAt": 5},
+            {"id": "asset-1", "kind": "asset", "type": "app",
+             "value": "10.10.10.110", "createdAt": 6},
+        ]
+
+    def _edges(self):
+        return [
+            {"id": "e1", "kind": "spawns", "sourceId": "goal-1", "targetId": "intent-1"},
+            {"id": "e2", "kind": "yields", "sourceId": "intent-1", "targetId": "fact-1"},
+            {"id": "e3", "kind": "covers", "sourceId": "digest-1", "targetId": "fact-1"},
+            {"id": "e4", "kind": "covers", "sourceId": "digest-1", "targetId": "intent-1"},
+        ]
+
+    def _column(self, layout, kind):
+        column = [node for node in layout["nodes"] if node["kind"] == kind]
+        self.assertTrue(column, "布局里没有 %s 节点" % kind)
+        return column[0]
+
+    def test_digest_gets_its_own_column(self):
+        layout = graph.build_layout(self._nodes(), self._edges())
+        chain_x = max(self._column(layout, kind)["x"] for kind in ("goal", "intent", "fact"))
+        self.assertGreater(self._column(layout, "digest")["x"], chain_x,
+                           "摘要混进了链路列：跨层的 covers 会把链路纵深拉长")
+        self.assertGreater(self._column(layout, "finding")["x"],
+                           self._column(layout, "digest")["x"])
+        self.assertGreater(self._column(layout, "asset")["x"],
+                           self._column(layout, "finding")["x"])
+
+    def test_no_digest_means_no_empty_column(self):
+        """没有摘要时不许凭空多一条空竖带：空库的图会被推到右边。"""
+        nodes = [node for node in self._nodes() if node["kind"] != "digest"]
+        edges = [edge for edge in self._edges() if edge["kind"] != "covers"]
+        without = graph.build_layout(nodes, edges)
+        with_digest = graph.build_layout(self._nodes(), self._edges())
+        self.assertLess(self._column(without, "finding")["x"],
+                        self._column(with_digest, "finding")["x"])
+
+    def test_covers_edge_keeps_its_label(self):
+        layout = graph.build_layout(self._nodes(), self._edges())
+        covers = [edge for edge in layout["edges"] if edge["kind"] == "covers"]
+        self.assertEqual(2, len(covers), "两条 covers 应该都在布局里")
+        self.assertEqual("覆盖", covers[0]["label"])
+        self.assertIn("覆盖", graph.render_svg(layout))
+
+    def test_digest_node_reads_its_body_and_generation(self):
+        layout = graph.build_layout(self._nodes(), self._edges())
+        node = self._column(layout, "digest")
+        self.assertIn("已确认 webapp", node["label"], "摘要的标题应是正文首行")
+        self.assertIn("第 1 代", node["subtitle"])
+        self.assertIn("吸收 2 条", node["subtitle"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

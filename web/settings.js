@@ -64,8 +64,6 @@
     // `interceptEditingId` 为 null 表示表单处于「新建」，否则是在改哪一条。
     intercept: null, interceptError: null, interceptBusy: null,
     interceptEditingId: null,
-    // 探索链路：`GET /exploration` 的原样返回（开关、上下界、每个目标的缺口）。
-    exploration: null, explorationError: null, explorationBusy: null,
   };
 
   let dom = {};
@@ -198,17 +196,6 @@
     interceptTimeoutAction: byId('intercept-timeout-action'),
     interceptSubmit: byId('intercept-submit'), interceptCancel: byId('intercept-cancel'),
     interceptFormMessage: byId('intercept-form-message'),
-    explorationMeta: byId('exploration-meta'),
-    explorationRefresh: byId('exploration-refresh'),
-    explorationMessage: byId('exploration-message'),
-    explorationSettingsForm: byId('exploration-settings-form'),
-    explorationEnabled: byId('exploration-enabled'),
-    explorationInterval: byId('exploration-interval'),
-    explorationMax: byId('exploration-max'),
-    explorationSave: byId('exploration-save'),
-    explorationTick: byId('exploration-tick'),
-    explorationSettingsMessage: byId('exploration-settings-message'),
-    explorationEngagements: byId('exploration-engagements'),
     };
   }
 
@@ -1386,8 +1373,6 @@
       if (view.group === 'notify' && !view.notify) loadNotify();
       // 拦截规则也是会变的（另一个管理员刚加了一条），第一次切进来现拉一次。
       if (view.group === 'intercept' && !view.intercept) loadIntercept();
-      // 探索链路推导的是**当前**的缺口（另一个人刚提交了漏洞就会变），切进来现拉一次。
-      if (view.group === 'exploration' && !view.exploration) loadExploration();
       // DSH 运行时的状态也是会变的（另一台管理员刚打开、DSH 刚被装上），
       // 而设置页的整体加载可能发生在很久之前 —— 第一次切进来时现拉一次。
       // 「扫描执行」与它在同一个响应里，所以两组共用这一次拉取。
@@ -3188,175 +3173,6 @@
     }
   }
 
-  /* ---------------------------------------------------------------- 探索链路 ---- */
-
-  function explorationRow(row) {
-    const card = el("article", "exploration-card");
-    const head = el("div", "mode-head");
-    head.append(el("strong", "mode-name",
-      row.target || row.goalTarget || row.engagementId));
-    const counts = row.counts || {};
-    head.append(el("span", "mode-badge", "意图 " + (counts.intents || 0)));
-    head.append(el("span", "mode-badge", "事实 " + (counts.facts || 0)));
-    head.append(el("span", "mode-badge", "漏洞 " + (counts.findings || 0)));
-    head.append(el("span", "mode-badge", "资产 " + (counts.assets || 0)));
-    // 在途为 0 时不挂徽标：一排都是 0 的徽标会让人以为这里有东西要看。
-    if (row.inFlight) head.append(el("span", "mode-badge", "在途 " + row.inFlight));
-    card.append(head);
-    card.append(el("code", "mode-id", row.engagementId));
-    const intents = row.intents || [];
-    if (!intents.length) {
-      card.append(el("p", "mode-note",
-        "没有可推导的缺口：链路已经完整，或者这个目标还没有目标节点。"));
-      return card;
-    }
-    intents.forEach((item) => {
-      card.append(el("p", "mode-desc", (item.label || item.kind || "") + " · "
-        + (item.title || item.key || "")));
-      if (item.reason) card.append(el("p", "mode-note", item.reason));
-    });
-    return card;
-  }
-
-  function renderExplorationEngagements() {
-    if (!dom.explorationEngagements) return;
-    clear(dom.explorationEngagements);
-    const rows = ((view.exploration || {}).engagements) || [];
-    if (!rows.length) {
-      dom.explorationEngagements.append(ui().emptyBlock(
-        "还没有任何目标：先在对话里立一个目标，这里才会出现缺口。"));
-      return;
-    }
-    rows.forEach((row) => dom.explorationEngagements.append(explorationRow(row)));
-  }
-
-  function renderExploration() {
-    const data = view.exploration || {};
-    const config = data.settings || {};
-    if (dom.explorationMeta) {
-      if (view.explorationError) {
-        dom.explorationMeta.textContent = "不可用：" + view.explorationError;
-      } else if (!view.exploration) {
-        dom.explorationMeta.textContent = "登录后加载探索链路。";
-      } else {
-        const parts = [data.enabled ? "自动排产开启" : "自动排产关闭"];
-        parts.push("间隔 " + (config.intervalSeconds || 0) + " 秒");
-        parts.push("在途上限 " + (config.maxPending || 0));
-        parts.push(((data.engagements || []).length) + " 个目标");
-        dom.explorationMeta.textContent = parts.join(" · ")
-          + (data.admin ? "" : " · 只读（需要管理员）");
-      }
-    }
-    if (!view.exploration) return;
-    // 只在加载完成时回填表单：正在改数字时被服务端值覆盖，是最烦人的一种小毛病。
-    if (dom.explorationEnabled) {
-      dom.explorationEnabled.value = config.enabled ? "1" : "0";
-    }
-    if (dom.explorationInterval) {
-      dom.explorationInterval.value = String(config.intervalSeconds || 900);
-    }
-    if (dom.explorationMax) {
-      dom.explorationMax.value = String(config.maxPending || 3);
-    }
-    // 上下界由服务端给：界面上写死 60/86400 之后，后端一改就会变成"能点但保存不了"。
-    const ranges = data.ranges || {};
-    const intervalRange = ranges.intervalSeconds || [60, 86400];
-    const pendingRange = ranges.maxPending || [1, 20];
-    if (dom.explorationInterval) {
-      dom.explorationInterval.min = String(intervalRange[0]);
-      dom.explorationInterval.max = String(intervalRange[1]);
-    }
-    if (dom.explorationMax) {
-      dom.explorationMax.min = String(pendingRange[0]);
-      dom.explorationMax.max = String(pendingRange[1]);
-    }
-    const admin = !!data.admin;
-    if (dom.explorationSave) dom.explorationSave.disabled = !admin;
-    if (dom.explorationTick) dom.explorationTick.disabled = !admin;
-    renderExplorationEngagements();
-  }
-
-  async function loadExploration(force) {
-    if (view.explorationBusy && !force) return;
-    view.explorationBusy = true;
-    setButtonBusy(dom.explorationRefresh, true, "刷新中");
-    try {
-      const data = await ui().apiGet("/exploration");
-      view.exploration = data;
-      view.explorationError = null;
-    } catch (error) {
-      view.explorationError = error.message;
-    }
-    view.explorationBusy = null;
-    setButtonBusy(dom.explorationRefresh, false, "刷新");
-    renderExploration();
-  }
-
-  async function saveExplorationSettings() {
-    showNotice(dom.explorationSettingsMessage, "");
-    const interval = numberOrNull(dom.explorationInterval && dom.explorationInterval.value);
-    const maxPending = numberOrNull(dom.explorationMax && dom.explorationMax.value);
-    // 先在界面上挡一次：后端也会拒，但那时候用户已经点过一次保存、还不知道为什么没生效。
-    if (interval === null || maxPending === null) {
-      showNotice(dom.explorationSettingsMessage, "间隔与在途上限都要填数字。", "error");
-      return;
-    }
-    setButtonBusy(dom.explorationSave, true, "保存中");
-    try {
-      await ui().apiPost("/exploration/settings", {
-        enabled: dom.explorationEnabled && dom.explorationEnabled.value === "1",
-        intervalSeconds: interval,
-        maxPending: maxPending,
-      });
-      showNotice(dom.explorationSettingsMessage, "已保存。", "ok");
-      await loadExploration(true);
-    } catch (error) {
-      showNotice(dom.explorationSettingsMessage, error.message, "error");
-    }
-    setButtonBusy(dom.explorationSave, false, "保存");
-  }
-
-  async function tickExploration() {
-    showNotice(dom.explorationMessage, "");
-    setButtonBusy(dom.explorationTick, true, "排产中");
-    try {
-      const result = await ui().apiPost("/exploration/tick", { force: true });
-      const created = (result && result.created) || [];
-      const skipped = (result && result.skipped) || [];
-      let text;
-      if (result && result.enabled === false) {
-        text = "总开关关着：这一轮什么都没派。";
-      } else if (!created.length) {
-        text = "没有新的缺口可派（" + skipped.length + " 条被静默期或在途上限挡住）。";
-      } else {
-        text = "派了 " + created.length + " 条："
-          + created.map((item) => item.title || item.intentKey).join("；");
-      }
-      showNotice(dom.explorationMessage, text, "ok");
-      await loadExploration(true);
-    } catch (error) {
-      showNotice(dom.explorationMessage, error.message, "error");
-    }
-    setButtonBusy(dom.explorationTick, false, "立刻排一轮");
-  }
-
-  function bindExplorationEvents() {
-    if (dom.explorationRefresh) {
-      dom.explorationRefresh.addEventListener("click", function () {
-        loadExploration(true);
-      });
-    }
-    if (dom.explorationSettingsForm) {
-      dom.explorationSettingsForm.addEventListener("submit", function (event) {
-        event.preventDefault();
-        saveExplorationSettings();
-      });
-    }
-    if (dom.explorationTick) {
-      dom.explorationTick.addEventListener("click", tickExploration);
-    }
-  }
-
   function bindInterceptEvents() {
     if (dom.interceptRefresh) {
       dom.interceptRefresh.addEventListener("click", () => loadIntercept(true));
@@ -4153,7 +3969,6 @@
     bindNavEvents();
     bindNotifyEvents();
     bindInterceptEvents();
-    bindExplorationEvents();
     bindThemeEvents();
     bindAppearanceEvents();
     bindAgentFormEvents();

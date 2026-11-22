@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
-"""探索链路：意图推导、排产口径与派活（explore 任务）。
+"""探索链路：一张「按记录读」的图（节点元数据 / 摘要 / 覆盖边 / 窗口）。
 
-这里固定的是**判据**：什么状态该派哪一步、派过之后静默期怎么算、在途上限怎么卡。
-具体某一轮派了几条不是契约 —— 换一套排产策略不该让这组测试变红。
+这里固定的是**对外形状**与**写入约束**：节点带 payload 字符串与 state / origin /
+priority / ts，边只有 src / dst / rel，摘要用 covers 声明它覆盖了谁。排产不在这一层
+——谁往里写记录由任务与代理决定，这组测试不假定某一种排产策略。
 """
+import json
+import re
 import unittest
 
 from tests import support
-from pentestd import auth, exploration, models
+from pentestd import models
+from pentestd.store import merged_id
 
 
 def _engagement(store, target="10.10.10.110"):
@@ -19,16 +23,38 @@ def _intent(store, engagement_id, title="侦察端口"):
                           {"title": title, "goalId": "goal-1"})
 
 
-def _finding(store, engagement_id, intent_id, title="SQLi", verified=False):
-    payload = {"intentId": intent_id, "title": title, "severity": "high",
-               "reproducibleSteps": ["curl -s http://10.10.10.110/?id=1%27"]}
-    if verified:
-        payload["verification"] = {"verdict": models.VERDICT_VERIFIED,
-                                   "method": "手工复现"}
-    return store.add_node(engagement_id, "finding", payload)
+def _fact(store, engagement_id, intent_id, detail="80/tcp 开放"):
+    return store.add_node(engagement_id, "fact",
+                          {"intentId": intent_id, "kind": "port",
+                           "target": "10.10.10.110", "detail": detail})
 
 
-class ExplorationStateTests(unittest.TestCase):
+def _finding(store, engagement_id, intent_id, title="SQLi"):
+    return store.add_node(engagement_id, "finding",
+                          {"intentId": intent_id, "title": title,
+                           "severity": "high",
+                           "reproducibleSteps": ["curl -s 'http://10.10.10.110/?id=1%27'"]})
+
+
+def _digest(store, engagement_id, facts=(), intents=(), body="80 端口开放，注入点已确认。"):
+    return store.add_node(engagement_id, "digest",
+                          {"body": body,
+                           "memberIds": {"facts": list(facts),
+                                         "intents": list(intents)}})
+
+
+def _mid(engagement_id, node_id):
+    """合并视图里的 id 带 engagement 前缀（见 `store.merged_id`）。"""
+    return merged_id(engagement_id, node_id)
+
+
+def _nodes_by_type(payload):
+    return {(node.get("type"), node.get("id")): node for node in payload["nodes"]}
+
+
+class ExplorationShapeTests(unittest.TestCase):
+    """接口形状：与对照实现（ARTEX `/api/exploration/graph`）同构。"""
+
     def setUp(self):
         self.directory, self.store = support.temporary_store("exploration.db")
         self.httpd, self.client = support.start(self.store)
@@ -40,193 +66,230 @@ class ExplorationStateTests(unittest.TestCase):
         directory, store = support.temporary_store("exploration-anon.db")
         httpd, client = support.start(store, admin=False)
         try:
-            status, _payload = client.get("/api/v1/exploration")
-            self.assertEqual(status, 401)
+            status, payload = client.get("/api/v1/exploration")
+            self.assertEqual(401, status, payload)
         finally:
             support.stop(httpd, store, directory)
 
-    def test_ships_settings_enum_and_ranges(self):
+    def test_empty_store_is_an_empty_graph(self):
         status, payload = self.client.get("/api/v1/exploration")
-        self.assertEqual(status, 200)
-        # 默认必须是关的：一上来就自动往队列塞活，是行为改变而不是默认值。
-        self.assertFalse(payload["enabled"])
-        self.assertEqual(payload["settings"]["enabled"], False)
-        self.assertEqual(payload["settings"]["intervalSeconds"],
-                         exploration.DEFAULTS["intervalSeconds"])
-        self.assertEqual(payload["settings"]["maxPending"],
-                         exploration.DEFAULTS["maxPending"])
-        self.assertEqual(payload["jobKind"], "explore")
-        self.assertEqual(sorted(payload["kinds"]),
-                         sorted(exploration.INTENT_LABELS))
-        # 上下界要跟后端校验一致：界面上照着 ranges 渲染输入框。
-        self.assertEqual(payload["ranges"]["intervalSeconds"], [60, 86400])
-        self.assertEqual(payload["ranges"]["maxPending"], [1, 20])
-        self.assertEqual(payload["engagements"], [])
+        self.assertEqual(200, status, payload)
+        self.assertEqual([], payload["nodes"])
+        self.assertEqual([], payload["edges"])
+        self.assertEqual(0, payload["counts"]["nodes"])
+        # 各组都在（哪怕是空列表）：调用方按 key 取，缺 key 就是一次 KeyError，
+        # 而「这一类还没有记录」本来是该正常显示为空的状态。
+        for group in models.GROUP_ORDER:
+            self.assertIn(group, payload["counts"])
+            self.assertEqual(0, payload["counts"][group])
 
-    def test_reports_counts_and_in_flight(self):
-        engagement_id = _engagement(self.store)
-        intent = _intent(self.store, engagement_id)
-        _finding(self.store, engagement_id, intent["id"])
-        exploration.tick(self.store, force=True)
+    def test_payload_is_a_json_string_and_meta_is_flattened(self):
+        eid = _engagement(self.store)
+        intent = _intent(self.store, eid)
+        fact = _fact(self.store, eid, intent["id"])
+
+        status, payload = self.client.get("/api/v1/exploration?nodes=all")
+        self.assertEqual(200, status, payload)
+        by_key = _nodes_by_type(payload)
+        node = by_key[("fact", _mid(eid, fact["id"]))]
+
+        # payload 是**字符串**而不是对象：同一个字段在不同类型里含义不同，
+        # 字符串保留"原样存进去的是什么"。
+        self.assertIsInstance(node["payload"], str)
+        decoded = json.loads(node["payload"])
+        self.assertEqual("80/tcp 开放", decoded["detail"])
+        self.assertEqual(_mid(eid, intent["id"]), decoded["intentId"])
+        # 结构字段不进 payload —— 索引与内容分开。
+        for key in ("id", "kind", "createdAt", "state", "origin", "priority"):
+            self.assertNotIn(key, decoded)
+
+        self.assertEqual("fact", node["type"])
+        self.assertEqual("confirmed", node["state"])   # fact 的默认状态
+        self.assertEqual("system", node["origin"])
+        self.assertEqual(0, node["priority"])
+        self.assertRegex(node["ts"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$")
+
+    def test_goal_is_a_node_too(self):
+        eid = _engagement(self.store, target="10.10.10.110")
+        status, payload = self.client.get("/api/v1/exploration")
+        self.assertEqual(200, status, payload)
+        kinds = [node["type"] for node in payload["nodes"]]
+        self.assertEqual(["goal"], kinds)
+        self.assertEqual(_mid(eid, "goal-1"), payload["nodes"][0]["id"])
+        self.assertEqual(1, payload["counts"]["goals"])
+
+    def test_edges_use_src_dst_rel(self):
+        eid = _engagement(self.store)
+        intent = _intent(self.store, eid)
+        fact = _fact(self.store, eid, intent["id"])
+        finding = _finding(self.store, eid, intent["id"])
 
         status, payload = self.client.get("/api/v1/exploration")
-        self.assertEqual(status, 200)
-        row = payload["engagements"][0]
-        self.assertEqual(row["engagementId"], engagement_id)
-        self.assertEqual(row["counts"]["intents"], 1)
-        self.assertEqual(row["counts"]["findings"], 1)
-        # 派出去的那条还没被认领，所以在途是 1；这个数字是界面上"有没有在干活"的唯一依据。
-        self.assertEqual(row["inFlight"], 1)
-        self.assertEqual(len(row["inFlightIds"]), 1)
-        self.assertTrue(row["intents"])
+        self.assertEqual(200, status, payload)
+        triples = {(edge["rel"], edge["src"], edge["dst"]) for edge in payload["edges"]}
+        self.assertIn(("spawns", _mid(eid, "goal-1"), _mid(eid, intent["id"])),
+                      triples)
+        self.assertIn(("yields", _mid(eid, intent["id"]), _mid(eid, fact["id"])),
+                      triples)
+        self.assertIn(("proves", _mid(eid, intent["id"]), _mid(eid, finding["id"])),
+                      triples)
+        # 只有三个字段：画图要的坐标不该混进「按记录读」的接口里。
+        for edge in payload["edges"]:
+            self.assertEqual({"src", "dst", "rel"}, set(edge))
+
+    def test_digest_covers_what_it_absorbed(self):
+        eid = _engagement(self.store)
+        intent = _intent(self.store, eid)
+        fact = _fact(self.store, eid, intent["id"])
+        digest = _digest(self.store, eid, facts=[fact["id"]], intents=[intent["id"]])
+
+        status, payload = self.client.get("/api/v1/exploration")
+        self.assertEqual(200, status, payload)
+        covered = {(edge["src"], edge["dst"]) for edge in payload["edges"]
+                   if edge["rel"] == "covers"}
+        # covers 只由摘要发出，且指向「被覆盖的记录」。
+        self.assertEqual({(_mid(eid, digest["id"]), _mid(eid, fact["id"])),
+                          (_mid(eid, digest["id"]), _mid(eid, intent["id"]))},
+                         covered)
+        node = _nodes_by_type(payload)[("digest", _mid(eid, digest["id"]))]
+        self.assertEqual("active", node["state"])
+        decoded = json.loads(node["payload"])
+        self.assertEqual(1, decoded["generation"])
+        self.assertEqual(64, len(decoded["signature"]))
+
+    def test_window_keeps_anchors_and_reports_drops(self):
+        eid = _engagement(self.store)
+        intent = _intent(self.store, eid)
+        fact = _fact(self.store, eid, intent["id"])
+        finding = _finding(self.store, eid, intent["id"])
+        digest = _digest(self.store, eid, facts=[fact["id"]], intents=[intent["id"]])
+
+        status, payload = self.client.get("/api/v1/exploration?nodes=1")
+        self.assertEqual(200, status, payload)
+        shown = {node["id"] for node in payload["nodes"]}
+        # 窗口只留最后一条，而最后一条是摘要：它覆盖的事实与意图由它代表，不必
+        # 再各占一格 —— 摘要存在的意义就是替掉那些细节。锚点保留（被指向的源头
+        # 必须留下）不在这里重复验证，那是 `/api/v1/graph` 的既有契约。
+        self.assertEqual({_mid(eid, "goal-1"), _mid(eid, digest["id"])}, shown)
+        self.assertNotIn(_mid(eid, finding["id"]), shown)
+        self.assertNotIn(_mid(eid, fact["id"]), shown)
+        self.assertEqual(3, payload["truncated"]["dropped"])
+
+    def test_bad_window_is_a_400_not_a_default(self):
+        status, payload = self.client.get("/api/v1/exploration?nodes=lots")
+        self.assertEqual(400, status, payload)
+        self.assertIn("nodes", payload["error"])
+
+    def test_scheduler_endpoints_are_gone(self):
+        """链路是只读的：上一版的排产开关与「立刻排一轮」不该还挂在上面。"""
+        status, _payload = self.client.post("/api/v1/exploration/settings",
+                                            {"settings": {"enabled": True}})
+        self.assertIn(status, (404, 405))
+        status, _payload = self.client.post("/api/v1/exploration/tick", {"force": True})
+        self.assertIn(status, (404, 405))
 
 
-class ExplorationSettingsTests(unittest.TestCase):
+class NodeMetaTests(unittest.TestCase):
+    """state / origin / priority 的写入约束：非法值一律拒绝，不静默兜底。"""
+
     def setUp(self):
-        self.directory, self.store = support.temporary_store("exploration-set.db")
-        self.httpd, self.client = support.start(self.store)
-        self.store.create_user("operator", auth.hash_password("Operator-Pass1!"),
-                               role="operator")
-
-    def tearDown(self):
-        support.stop(self.httpd, self.store, self.directory)
-
-    def _operator(self):
-        client = support.Client(self.client.base)
-        status, _payload = client.login("operator", "Operator-Pass1!")
-        self.assertEqual(status, 200)
-        return client
-
-    def test_operator_cannot_save(self):
-        client = self._operator()
-        status, payload = client.post("/api/v1/exploration/settings",
-                                      {"enabled": True})
-        self.assertEqual(status, 403)
-        self.assertFalse(exploration.settings(self.store)["enabled"])
-
-    def test_out_of_range_is_rejected(self):
-        status, _payload = self.client.post("/api/v1/exploration/settings",
-                                            {"intervalSeconds": 0})
-        self.assertEqual(status, 400)
-        status, _payload = self.client.post("/api/v1/exploration/settings",
-                                            {"maxPending": 99})
-        self.assertEqual(status, 400)
-        # 被拒的请求不能留下半份配置。
-        config = exploration.settings(self.store)
-        self.assertEqual(config["intervalSeconds"],
-                         exploration.DEFAULTS["intervalSeconds"])
-        self.assertEqual(config["maxPending"],
-                         exploration.DEFAULTS["maxPending"])
-
-    def test_enabled_flag_persists(self):
-        status, payload = self.client.post("/api/v1/exploration/settings",
-                                           {"settings": {"enabled": True,
-                                                         "intervalSeconds": 120,
-                                                         "maxPending": 2}})
-        self.assertEqual(status, 200)
-        self.assertTrue(payload["enabled"])
-        status, current = self.client.get("/api/v1/exploration")
-        self.assertEqual(status, 200)
-        self.assertTrue(current["settings"]["enabled"])
-        self.assertEqual(current["settings"]["intervalSeconds"], 120)
-        self.assertEqual(current["settings"]["maxPending"], 2)
-
-    def test_flat_body_is_accepted(self):
-        status, _payload = self.client.post("/api/v1/exploration/settings",
-                                            {"intervalSeconds": 300})
-        self.assertEqual(status, 200)
-        self.assertEqual(exploration.settings(self.store)["intervalSeconds"], 300)
-
-
-class ExplorationIntentTests(unittest.TestCase):
-    def setUp(self):
-        self.directory, self.store = support.temporary_store("exploration-intent.db")
-        self.engagement_id = _engagement(self.store)
+        self.directory, self.store = support.temporary_store("meta.db")
+        self.eid = _engagement(self.store)
+        self.intent = _intent(self.store, self.eid)
 
     def tearDown(self):
         self.store.close()
         self.directory.cleanup()
 
-    def _keys(self):
-        return [item["key"] for item in
-                exploration.intents(self.store, self.engagement_id)]
+    def test_state_is_closed_per_kind(self):
+        fact = self.store.add_node(self.eid, "fact",
+                                   {"intentId": self.intent["id"], "detail": "80 开放",
+                                    "state": "origin", "origin": "work#1",
+                                    "priority": 7})
+        self.assertEqual("origin", fact["state"])
+        self.assertEqual("work#1", fact["origin"])
+        self.assertEqual(7, fact["priority"])
+        # goal 的状态只有 active / met，`done` 是意图的词。
+        with self.assertRaises(models.ValidationError):
+            self.store.add_node(self.eid, "intent",
+                                {"title": "再看一眼", "goalId": "goal-1",
+                                 "state": "met"})
 
-    def test_empty_target_asks_plan_and_recon(self):
-        keys = self._keys()
-        # 刚立的目标既没有意图，也没有任何事实，两件事都要人做。
-        self.assertIn("plan:goal-1", keys)
-        self.assertIn("recon:goal-1", keys)
+    def test_origin_must_be_a_known_producer(self):
+        with self.assertRaises(models.ValidationError):
+            self.store.add_node(self.eid, "intent",
+                                {"title": "探一下", "goalId": "goal-1",
+                                 "origin": "someone"})
+        # work#N 与 job-xxx 是合法的产物归属。
+        node = self.store.add_node(self.eid, "intent",
+                                   {"title": "探一下", "goalId": "goal-1",
+                                    "origin": "job-abc123"})
+        self.assertEqual("job-abc123", node["origin"])
 
-    def test_intent_without_output_asks_progress(self):
-        intent = _intent(self.store, self.engagement_id)
-        self.assertIn("progress:%s" % intent["id"], self._keys())
-
-    def test_unverified_finding_asks_verify(self):
-        intent = _intent(self.store, self.engagement_id)
-        finding = _finding(self.store, self.engagement_id, intent["id"])
-        items = exploration.intents(self.store, self.engagement_id)
-        self.assertEqual(items[0]["key"], "verify:%s" % finding["id"])
-        self.assertEqual(items[0]["kind"], "verify")
-        self.assertTrue(items[0]["target"])
-
-    def test_verified_finding_drops_verify(self):
-        intent = _intent(self.store, self.engagement_id)
-        _finding(self.store, self.engagement_id, intent["id"], verified=True)
-        keys = self._keys()
-        self.assertFalse([key for key in keys if key.startswith("verify:")])
-
-    def test_vuln_fact_asks_confirm(self):
-        intent = _intent(self.store, self.engagement_id)
-        # 写入口收的是 `kind`（结构类型已由 add_node 固定为 fact），落库后才叫 `factKind`。
-        fact = self.store.add_node(self.engagement_id, "fact",
-                                   {"intentId": intent["id"], "kind": "vuln",
-                                    "detail": "5.1.2 版本存在注入点"})
-        keys = self._keys()
-        self.assertIn("confirm:%s" % fact["id"], keys)
+    def test_priority_range(self):
+        for bad in (-1, 10, "high"):
+            with self.assertRaises(models.ValidationError):
+                self.store.add_node(self.eid, "intent",
+                                    {"title": "x", "goalId": "goal-1",
+                                     "priority": bad})
 
 
-class ExplorationTickTests(unittest.TestCase):
+class DigestValidationTests(unittest.TestCase):
     def setUp(self):
-        self.directory, self.store = support.temporary_store("exploration-tick.db")
-        self.engagement_id = _engagement(self.store)
-        self.intent = _intent(self.store, self.engagement_id)
-        _finding(self.store, self.engagement_id, self.intent["id"])
+        self.directory, self.store = support.temporary_store("digest.db")
+        self.eid = _engagement(self.store)
+        self.intent = _intent(self.store, self.eid)
 
     def tearDown(self):
         self.store.close()
         self.directory.cleanup()
 
-    def test_off_by_default(self):
-        result = exploration.tick(self.store)
-        self.assertTrue(result["ok"])
-        self.assertFalse(result["enabled"])
-        self.assertEqual(result["created"], [])
-        self.assertEqual(self.store.jobs(), [])
+    def test_signature_defaults_to_the_body_hash(self):
+        node = _digest(self.store, self.eid, intents=[self.intent["id"]])
+        expected = models.hashlib.sha256("80 端口开放，注入点已确认。".encode("utf-8")).hexdigest()
+        self.assertEqual(expected, node["signature"])
 
-    def test_force_creates_explore_job(self):
-        result = exploration.tick(self.store, force=True)
-        self.assertEqual(len(result["created"]), 1)
-        entry = result["created"][0]
-        self.assertEqual(entry["engagementId"], self.engagement_id)
-        job = self.store.get_job(entry["jobId"])
-        self.assertEqual(job["kind"], "explore")
-        self.assertEqual(job["engagementId"], self.engagement_id)
-        self.assertEqual(job["payload"]["intentKey"], entry["intentKey"])
-        self.assertTrue(job["payload"]["auto"])
+    def test_signature_must_be_64_hex(self):
+        with self.assertRaises(models.ValidationError):
+            self.store.add_node(self.eid, "digest", {"body": "短正文", "signature": "abc"})
 
-    def test_quiet_window_skips_repeat(self):
-        exploration.tick(self.store, force=True)
-        again = exploration.tick(self.store, force=True)
-        # 派过的那一条在静默期内不再派：否则每一轮都往队列塞同样的活。
-        self.assertEqual(again["created"], [])
-        self.assertTrue(again["skipped"])
+    def test_members_must_exist_and_be_the_right_kind(self):
+        with self.assertRaises(models.ValidationError):
+            _digest(self.store, self.eid, facts=["fact-404"])
+        # 意图 id 塞进 facts 也是错的：类型对不上就等于指向了一条不存在的事实。
+        with self.assertRaises(models.ValidationError):
+            _digest(self.store, self.eid, facts=[self.intent["id"]])
 
-    def test_pending_cap_skips(self):
-        exploration.save_settings(self.store, {"maxPending": 1})
-        self.store.create_job("explore", "10.10.10.110", self.engagement_id)
-        result = exploration.tick(self.store, force=True)
-        self.assertEqual(result["created"], [])
-        self.assertTrue(result["skipped"])
+    def test_generation_must_be_positive(self):
+        with self.assertRaises(models.ValidationError):
+            self.store.add_node(self.eid, "digest", {"body": "正文", "generation": 0})
+
+
+class ViewGroupingTests(unittest.TestCase):
+    """单目标视图与合并视图共用 `models.GROUP_KEYS`，摘要不能只在一边出现。"""
+
+    def setUp(self):
+        self.directory, self.store = support.temporary_store("grouping.db")
+        self.eid = _engagement(self.store)
+        self.intent = _intent(self.store, self.eid)
+
+    def tearDown(self):
+        self.store.close()
+        self.directory.cleanup()
+
+    def test_single_view_has_a_digests_group(self):
+        digest = _digest(self.store, self.eid, intents=[self.intent["id"]])
+        view = self.store.view(self.eid, limit=None)
+        self.assertEqual([digest["id"]],
+                         [node["id"] for node in view["nodes"]["digests"]])
+
+    def test_combined_view_has_a_digests_group(self):
+        digest = _digest(self.store, self.eid, intents=[self.intent["id"]])
+        view = self.store.combined_view(0)
+        self.assertEqual([_mid(self.eid, digest["id"])],
+                         [node["id"] for node in view["nodes"]["digests"]])
+        node = view["nodes"]["digests"][0]
+        self.assertEqual("active", node["state"])
 
 
 if __name__ == "__main__":

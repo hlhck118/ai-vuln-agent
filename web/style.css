@@ -135,6 +135,7 @@
   --kind-fact: #32d74b;
   --kind-finding: #ff9f0a;
   --kind-asset: #64d2ff;      /* 系统青（深色） */
+  --kind-digest: #9aa8ff;     /* 摘要：链路四色之外的第五色 */
 
   /* ---- 图谱边色：按关系类型分。原先这份取值写在 app.js 的 EDGE_COLOR 里，
    * 而 SVG 的表现属性不支持 var()，所以它整组绕过了主题——换个主题，节点变了色、
@@ -144,6 +145,7 @@
   --edge-derived: #b07cff;
   --edge-proves: #e0a13c;
   --edge-parent: #7d8794;
+  --edge-covers: #9aa8ff;
 
   /* ---- 代码正文与内联代码 ---- */
   --code: #cfe3ff;
@@ -343,11 +345,13 @@
   --kind-fact: #147c48;
   --kind-finding: #9e5c1a;
   --kind-asset: #17758d;
+  --kind-digest: #4a56c8;
   --edge-spawns: #1b66de;
   --edge-yields: #167b5c;
   --edge-derived: #9046d1;
   --edge-proves: #a45904;
   --edge-parent: #7c8594;
+  --edge-covers: #4a56c8;
   --code: #2061c7;
   --code-inline: #a8550e;
   --code-bg:           rgba(255, 255, 255, .72);          /* 比 --panel-2 再实一档，代码块才浮得出来 */
@@ -463,6 +467,7 @@
   --kind-fact: #0f6b33;
   --kind-finding: #a35c00;
   --kind-asset: #0b6b86;
+  --kind-digest: #3f4ab0;
 
   /* 亮底上的边色必须整体压暗：`#e0a13c` 那种琥珀在白画布上细到几乎看不见，
    * 而边是**关系**的唯一载体——看不见边，图谱就退化成一堆孤立的方块。 */
@@ -471,6 +476,7 @@
   --edge-derived: #7a2ec4;
   --edge-proves: #8a5a00;
   --edge-parent: #5b6470;
+  --edge-covers: #3f4ab0;
 
   --code: #1d3f6e;
   --code-inline: #8a3a00;
@@ -566,12 +572,14 @@
   --kind-fact: #4ade80;
   --kind-finding: #ffa62b;
   --kind-asset: #63e6da;
+  --kind-digest: #b8c4ff;
 
   --edge-spawns: #46d5c8;
   --edge-yields: #4ade80;
   --edge-derived: #c47af5;
   --edge-proves: #ffa62b;
   --edge-parent: #6a9b76;
+  --edge-covers: #b8c4ff;
 
   --code: #b6f2cd;
   --code-inline: #ffd79b;
@@ -677,12 +685,14 @@
   --kind-fact: #5ceb85;
   --kind-finding: #ffb340;
   --kind-asset: #7fe6ff;
+  --kind-digest: #93a4ff;
 
   --edge-spawns: #8ec5ff;
   --edge-yields: #5ceb85;
   --edge-derived: #e0a6ff;
   --edge-proves: #ffb340;
   --edge-parent: #c8c8c8;
+  --edge-covers: #93a4ff;
 
   --code: #d6e8ff;
   --code-inline: #ffd79b;
@@ -942,7 +952,7 @@
   .setup-card, .finding-card, .model-card, .mode-option, .theme-card,
   .guide-status-card, .notice, .stat, .empty,
   .plan-item, .job-log, .rpt-row, .dock-chip, .chat-quick, .chat-msg,
-  .chat-review-card, .mcp-card, .notify-card, .intercept-card, .exploration-card, .dash-card) {
+  .chat-review-card, .mcp-card, .notify-card, .intercept-card, .dash-card) {
   -webkit-backdrop-filter: blur(var(--glass-card-blur)) saturate(var(--glass-sat));
   backdrop-filter: blur(var(--glass-card-blur)) saturate(var(--glass-sat));
   background-image: linear-gradient(180deg, var(--glass-edge) 0, transparent 1px);
@@ -1740,6 +1750,9 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .gedge[data-kind="derived_from"] { stroke: var(--edge-derived); }
 .gedge[data-kind="proves"] { stroke: var(--edge-proves); }
 .gedge[data-kind="parent"] { stroke: var(--edge-parent); }
+.gedge[data-kind="covers"] { stroke: var(--edge-covers); stroke-dasharray: 5 3; }
+/* 覆盖是"这条摘要吸收了哪些记录"，不是推进关系：虚线把它与 spawns/yields 那几条
+ * 实线区分开，否则一眼看过去摘要像是在给事实发指令。 */
 /* 箭头与边同色。它长在 <defs><marker> 里，但仍然被本文档的样式表命中——
  * 曾经把它当"SVG 内部的东西"而写成 fill 属性，于是主题切换时箭头留在旧配色上。 */
 .garrow { fill: var(--edge-spawns); }
@@ -1747,6 +1760,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .garrow[data-kind="derived_from"] { fill: var(--edge-derived); }
 .garrow[data-kind="proves"] { fill: var(--edge-proves); }
 .garrow[data-kind="parent"] { fill: var(--edge-parent); }
+.garrow[data-kind="covers"] { fill: var(--edge-covers); }
 .gedge-label {
   fill: var(--muted); font: var(--fs-caption) var(--sans);
   paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round;
@@ -1761,6 +1775,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .gnode.kind-fact .gnode-box { stroke: var(--kind-fact); }
 .gnode.kind-finding .gnode-box { stroke: var(--kind-finding); }
 .gnode.kind-asset .gnode-box { stroke: var(--kind-asset); }
+.gnode.kind-digest .gnode-box { stroke: var(--kind-digest); stroke-dasharray: 4 3; }
 .gnode.sev-critical .gnode-box { stroke: var(--sev-critical); stroke-width: 2; }
 .gnode.sev-high .gnode-box { stroke: var(--sev-high); stroke-width: 2; }
 .gnode.sev-medium .gnode-box { stroke: var(--sev-medium); }
@@ -2011,6 +2026,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .chip.kind-fact::before { background: var(--kind-fact); }
 .chip.kind-finding::before { background: var(--kind-finding); }
 .chip.kind-asset::before { background: var(--kind-asset); }
+.chip.kind-digest::before { background: var(--kind-digest); }
 
 /* -------------------------------------------------------------- 资产 --- */
 
@@ -5510,7 +5526,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 }
 .check-row input { margin: 0; }
 .notify-channels { display: flex; flex-direction: column; gap: var(--sp-3); }
-.notify-card, .intercept-card, .exploration-card {
+.notify-card, .intercept-card {
   border: 1px solid var(--border); border-radius: var(--r-2); background: var(--panel-2);
   padding: var(--sp-3); display: flex; flex-direction: column; gap: 6px;
 }
