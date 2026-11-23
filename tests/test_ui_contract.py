@@ -2701,6 +2701,91 @@ class CssLayoutGuardTestCase(unittest.TestCase):
                          % wrong)
 
 
+    def test_no_rule_is_swallowed_by_an_unclosed_comment(self):
+        """注释必须成对：少一个收尾符，后面**整段规则**就成了注释的一部分。
+
+        这一节是真踩出来的：`#graph-surface` 上方那段说明只写了开头的 `/*`、忘了
+        收尾的 `*/`，于是紧跟其后的 `#graph-surface { width: 100%; height: 100% }`
+        与 `#graph-surface.dragging` 两条规则整段被吞掉。CSS 不会为此报错，选择器
+        仍然「存在」于文件里、肉眼扫过去也像在，只是浏览器压根没解析到——症状是
+        `<canvas>` 停在默认的 300x150（一张素颜的替换元素），画出来的卡片小得
+        读不出字。判据只能来自解析器：剥掉注释之后**不该还剩注释记号**。
+
+        反过来的那种（收尾符多写一个）同样吃掉东西：解析器在「期待声明」的位置读到
+        非 ident 记号，会一路吞到下一个 ASCII `;`，历史上吞掉的正是 `--chat-frame`
+        那一行。所以两个方向的残留都要判。
+        """
+        # 判据取自**解析器的视角**，不是正则能不能配对：CSS 注释不嵌套，「下一个收尾符」
+        # 就是这条注释的结尾，所以一个忘写的开头会把后面整段规则一起关进注释；
+        # 多写一个收尾符则让解析器在「期待声明」的位置读到非 ident 记号、一路吞到
+        # 下一个 ASCII 分号。两个方向的共同症状是：**花括号落进了注释里**，或者
+        # 整个文件读完还停在注释中间——这两种才是真缺陷，其余都是无害的配对。
+        text = self._css
+        inside = False
+        opened_at = 0
+        spans = []        # (起点, 终点)：每条注释覆盖的区间
+        stray_close = []  # 没有对应开头的收尾符
+        kept = []
+        i = 0
+        while i < len(text):
+            pair = text[i:i + 2]
+            if not inside and pair == "/*":
+                inside, opened_at = True, i
+                i += 2
+                continue
+            if inside and pair == "*/":
+                inside = False
+                spans.append((opened_at, i))
+                i += 2
+                continue
+            if not inside and pair == "*/":
+                stray_close.append(i)
+                i += 2
+                continue
+            if not inside:
+                kept.append(text[i])
+            i += 1
+        if inside:
+            spans.append((opened_at, len(text)))
+
+        def _line(pos):
+            return text.count(chr(10), 0, pos) + 1
+
+        if inside:
+            self.fail("style.css 第 %d 行开的注释到文件结束都没有收尾：从它之后的第一条"
+                      "规则开始，整段都被当成注释吞掉了。这是纯静态缺陷——所有测试全绿、"
+                      "渲染出来也不报错，只是那几条规则压根没生效。" % _line(opened_at))
+        # 判据收窄到**长得像规则的行**：注释里正常会写 `[hidden]{display:none}` 这类
+        # 例子，把它们算成缺陷等于这条断言永远红。真正被吞掉的规则一定是从行首顶格
+        # 开始写选择器的——保持格式的注释每一行都以 `*` 或空格起头。
+        selector_line = re.compile(r"^[A-Za-z#.\[][^{}]*\{")
+        swallowed = []
+        for began, ended in spans:
+            pos = began
+            while pos < ended:
+                stop = text.find(chr(10), pos)
+                if stop < 0 or stop > ended:
+                    stop = ended
+                line = text[pos:stop].strip()
+                if selector_line.match(line):
+                    swallowed.append((_line(pos), line[:60]))
+                pos = stop + 1
+        if swallowed:
+            first_line, first_text = swallowed[0]
+            self.fail("style.css 第 %d 行起的注释里躺着一条规则（%r），说明前面某条注释"
+                      "少写了收尾符、把后面整段规则关进了注释（共 %d 行）。CSS 不会为此"
+                      "报错：选择器还在文件里、肉眼也像在，只是浏览器压根没解析到，"
+                      "症状是元素退回默认尺寸。"
+                      % (first_line, first_text, len(swallowed)))
+        if stray_close:
+            self.fail("style.css 第 %d 行有一个没有对应开头的收尾符：解析器会在这里"
+                      "按错误恢复一路吞到下一个 ASCII 分号，那一行声明就此消失。"
+                      % _line(stray_close[0]))
+        stripped = "".join(kept)
+        self.assertIn("#graph-surface", stripped,
+                      "#graph-surface 这条规则不在剥离后的样式表里：它又被注释吃掉了——"
+                      "画布会退回默认的 300x150")
+
 class FixtureScriptCoverageTestCase(unittest.TestCase):
     """离线渲染夹具必须知道 web/ 下的**每一个**脚本。
 
