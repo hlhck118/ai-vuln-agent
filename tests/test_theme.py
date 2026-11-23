@@ -627,7 +627,7 @@ class ThemeContractTestCase(unittest.TestCase):
         self.assertNotIn("EDGE_COLOR", self._app, "边色不得再写在 JS 里")
         self.assertNotIn("EDGE_COLOR", self._css)
         for token in ("--edge-spawns", "--edge-yields", "--edge-derived",
-                      "--edge-proves", "--edge-parent"):
+                      "--edge-proves", "--edge-parent", "--edge-link"):
             self.assertIn("%s:" % token, self._css, "%s 未定义" % token)
         self.assertIn("stroke: var(--edge-spawns)", self._css,
                       "基础规则要给出未知类型的兜底色（缺失即不绘制）")

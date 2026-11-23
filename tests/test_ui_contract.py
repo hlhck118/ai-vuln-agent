@@ -2987,8 +2987,14 @@ class GraphClickGuardTestCase(unittest.TestCase):
         self.assertIn("event.clientX", body)
         self.assertIn("graphView.moved = true", body)
         self.assertIn("graphView.dragScale", body, "位移没有用按下时冻结的比例")
-        self.assertLess(body.index("graphView.moved = true"), body.index("graphView.dragScale"),
-                        "必须先按屏幕像素判定拖拽，再按比例换算位移")
+        # 顺序只对**平移/拖卡那一段**成立：拉线分支在它之前就已经读过一次
+        # dragScale（橡皮筋要跟着光标走，而它同样不能逐事件量画布）。所以断言
+        # 从 moved 置真那一行往后看，而不是在整段里比首次出现的位置。
+        tail = body[body.index("graphView.moved = true"):]
+        self.assertIn("graphView.dragScale", tail,
+                      "判定之后就不再读冻结比例：位移又回去逐事件量画布了")
+        self.assertLess(tail.index("graphView.dragScale"), tail.index("scale.sx"),
+                        "先把比例摊进 sx/sy 再判拖拽：判定依据变回了换算后的坐标")
 
     def test_cancelled_gesture_is_not_a_click(self):
         """被系统取消的手势（右键菜单、触摸被打断）不该改选中态。"""
@@ -4934,9 +4940,13 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         比它多出两个——这不是笔误，是「节点在图上怎么读」与「节点在库里怎么存」
         这两件事本来就不同。
 
-        关系只画四条：`covers` 是压缩吸收了谁、`parent` 是资产父子，两条都是结构
+        关系画五条：`covers` 是压缩吸收了谁、`parent` 是资产父子，两条都是结构
         而非推进。画出来会让压缩节点向它吸收的每条记录发散一把线，整张图从一条链
         变成一张网。它们仍在 `EDGE_LABEL` 里（详情面板与离线 SVG 用），只是不上画布。
+
+        第五条 `link` 与前四条不同源：它不由记录推出（`models.edges_for` 从不产它），
+        而是人按住 Shift 从一张卡拉到另一张时写下的。正因为它不在分层输入里，
+        画它不会改变任何一张卡的列位——它只表达「这两件事我放在一起看」。
         """
         kinds = self._js_list(self._app, "KIND_ORDER")
         labels = self._js_map(self._app, "KIND_LABEL")
@@ -4950,8 +4960,8 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         # 「资产 12」这类计数（chat.js、panels.js），删掉会印出英文 asset。
         self.assertEqual(sorted(kinds + ["asset"]), sorted(labels),
                          "KIND_LABEL 与 KIND_ORDER 不是同一组键：少一个的那类卡上会露出英文")
-        self.assertEqual(["spawns", "derived_from", "yields", "proves"], edges,
-                         "画布上画的关系不再是那四条推进关系")
+        self.assertEqual(["spawns", "derived_from", "yields", "proves", "link"], edges,
+                         "画布上画的关系不再是那四条推进关系 + 手工连线")
         self.assertEqual(["covers", "parent"], hidden,
                          "不画的关系表变了：压缩会向每条成员发散虚线")
         self.assertEqual(sorted(edges + hidden), sorted(edge_label),
@@ -4982,6 +4992,99 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         self.assertNotIn("origin", kind_of,
                          "displayKindOf 自己判起了 origin：前后端会有两套规则")
 
+    def test_the_summary_is_clipped_above_the_state_badge(self):
+        """摘要画到状态徽章之前就得停，靠裁剪而不是靠「算得刚好」。
+
+        卡高 140 那会儿，摘要第三行的底边落在 99.65、而底行从 113 起——余量 13px，
+        手算下来「刚好装得下」。但那是**固定字号 + 固定三行**的结果：摘要多一个字、
+        字号跟着设置变大一点、或者主题换了字体，第三行就压到徽章上。压住之后最难
+        受的是徽章，因为它下面有底色，字压字直接糊掉。
+
+        所以这里不守某个高度，守的是**几何上的不可能**：摘要外面必须有一圈裁剪，
+        边界取 footY。裁剪先算边界，所以断言 footY 的赋值出现在 clip 之前——反过来
+        的话裁的是上一张卡的底行，等于没裁。
+        """
+        body = self._graph_fn("drawNodeCard")
+        self.assertIn("footY - 4 - cursorY", body,
+                      "摘要没有裁到状态徽章之前：长摘要会压住底行")
+        clip_at = body.index("ctx.rect(")
+        self.assertIn("ctx.clip()", body[clip_at:], "没有 clip：rect 之后必须真的裁剪")
+        self.assertLess(body.index("const footY ="), clip_at,
+                        "footY 算在裁剪之后：裁到的是上一张卡的底行")
+        wrap_at = body.index("wrapText(ctx, node.subtitle")
+        self.assertLess(clip_at, wrap_at, "摘要画在裁剪之外：clip 要套在绘制之前")
+        # 裁完必须还原，否则同一个 ctx 上后面的卡全被裁在同一个小矩形里。
+        self.assertIn("ctx.restore()", body[wrap_at:],
+                      "裁剪没有成对复位：后面的卡全被切掉")
+
+    def test_shift_drag_from_a_card_draws_a_line(self):
+        """Shift + 从卡上起手 = 拉线；不按 Shift 的老手势一字不改。
+
+        三种手（拖卡、平移、拉线）共用同一套 pointerdown/move/up，所以分岔必须发生在
+        **按下那一刻**：进了连线分支就不能同时是拖卡（dragNodeId 为 null），也不能
+        在抬手时被当成一次点选（moved 直接置真）。这三条少一条，症状都是「按下去
+        图跳了一下」或「拉完线顺带选中了别的东西」。
+        """
+        down = self._handler_for("pointerdown")
+        self.assertIn("event.shiftKey", down, "按下时不再看 Shift：拉线手势没了")
+        branch = down[down.index("event.shiftKey"):]
+        self.assertIn("linkFrom: pressedId", branch, "起手没记下从哪张卡拉起")
+        self.assertIn("dragNodeId: null", branch,
+                      "连线同时还在拖卡：一张卡会被拖走半格")
+        self.assertIn("moved: true", branch,
+                      "拉线没置真 moved：抬手会顺带选中起手那张卡")
+
+        move = self._handler_for("pointermove")
+        self.assertIn("graphView.linkFrom", move, "移动时不再更新落点：橡皮筋不动")
+        # 落点必须是**反查**出来的（`hitNode` / `hitNodeAt` 都算），不能靠记「最后一次
+        # hover 的是谁」——拉线时手可能从空白处滑过，hover 早就被清掉了。
+        self.assertIn("hitNode", move[move.index("graphView.linkFrom"):],
+                      "落点不是反查出来的：框不到目标卡")
+
+        self.assertIn("createLink(from, to)", self._app, "抬手没有把线写下去")
+        self.assertIn("if (!cancelled && to)", self._app,
+                      "被取消的手势也会写库：右键菜单会凭空多出一条线")
+
+    def test_a_manual_line_is_only_drawn_inside_one_target(self):
+        """合并视图里连不了线，而且写成功之后要重取一次。
+
+        合并视图的节点 id 带目标前缀（eid:node-3），边表却只有一个 engagement_id
+        ——两个不同目标的节点之间那条边在数据上无处安放。与其让人画一条松手就消失
+        的线，不如在起手前说清「这里连不了」。
+
+        写成功之后重取而不是本地拼一条：add_edge 会给边分配 seq 与 id，本地造假边
+        出去，下一次刷新就换成另一个 id，选中态与详情面板跟着跳。
+        """
+        body = self._graph_fn("createLink")
+        self.assertIn("graphScope !== 'single'", body,
+                      "合并视图里也允许连线：那条边没有归属")
+        self.assertIn("showError(", body, "连不了的时候不出声：人以为拖坏了")
+        self.assertIn("/edges", body, "没有走 /edges 这条路")
+        self.assertIn("loadGraph(true)", body,
+                      "写完不重取：本地拼的边与库里的 id 会对不上")
+        self.assertIn("_reused", body,
+                      "重复画同一条线没有提示：人不知道它本来就在")
+
+    def test_the_manual_link_colour_comes_from_every_theme(self):
+        """手工连线要在**每一套**主题里都有色，而且与覆盖的线型区分开。
+
+        令牌缺一套的症状是那套主题下这条线直接不画（stroke 取空即无描边），而
+        「线不见了」很难联想到是主题改的。线型也必须不同：虚线已经是「压缩吸收了
+        谁」，两者混用时图例在教人分不清「谁吸收了谁」与「谁被人连着看」。
+        """
+        covers = self._css.count("--edge-covers:")
+        links = self._css.count("--edge-link:")
+        self.assertGreaterEqual(covers, 4, "边色令牌的套数变了，这条守卫的判据要重看")
+        self.assertEqual(
+            covers, links,
+            "有 %d 套主题定义了 --edge-covers，却只有 %d 套有 --edge-link" % (covers, links))
+        link_rule = self._rule(self._css, '.gedge[data-kind="link"]')
+        self.assertIn("var(--edge-link", link_rule, "画布上的连线没取令牌")
+        self.assertIn("stroke-dasharray", link_rule,
+                      "连线与覆盖的线型一样：两种语义分不开")
+        self.assertIn("dotted",
+                      self._rule(self._css, '.legend-edge[data-kind="link"]::before'),
+                      "图例里那一段线没换成点线")
     def test_the_priority_pill_has_three_tones_not_nine(self):
         """优先级只分三档：8 以上红灯、5 以上黄灯、其余中性。
 
@@ -5156,8 +5259,10 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         的列——这也是「这条链从我这儿怎么往下走」的读法。
         """
         order = self._js_list(self._app, "EDGE_SORT_ORDER")
-        self.assertEqual(["spawns", "derived_from", "yields", "proves", "covers", "parent"], order,
-                         "关联边的排列顺序变了")
+        # `link` 排在四条推进关系之后、两条结构关系之前：它也是一条「从我这儿往下走」
+        # 的关系（人手画的），但它不带方向语义意义上的先后，所以不插进前四条中间。
+        self.assertEqual(["spawns", "derived_from", "yields", "proves", "link", "covers", "parent"],
+                         order, "关联边的排列顺序变了")
         body = self._graph_fn("renderNodeDetail")
         self.assertIn("EDGE_SORT_ORDER", body, "renderNodeDetail 没按这张表排")
         self.assertIn(".sort(", body, "关联边没有排序，仍按数据到达顺序")

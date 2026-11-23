@@ -68,7 +68,7 @@ const SEVERITY_LABEL = { critical: '严重', high: '高危', medium: '中危', l
  * 换过一轮：原先 `spawns` 叫「意图链」而它连的是目标→意图，`derived_from` 叫
  * 「推导自」而它连的是两条意图之间的接力，两个词互相顶着。换过来之后边名自己
  * 说清谁派生谁。后端 `pentestd/models.py` 的 `EDGE_LABELS` 是同一份。 */
-const EDGE_LABEL = { spawns: '派生', derived_from: '意图链', yields: '产出', proves: '证明', covers: '覆盖', parent: '归属' };
+const EDGE_LABEL = { spawns: '派生', derived_from: '意图链', yields: '产出', proves: '证明', covers: '覆盖', parent: '归属', link: '连线' };
 /** 图谱关系类型。**这里只有类型，没有颜色**——颜色由 CSS 令牌（--edge-*）下发，
  *  见 style.css 的 .gedge 一节。SVG 的表现属性不认 var()，颜色写在这里就等于
  *  整组绕过主题：换主题时节点换了色，边还是深色主题那一套。 */
@@ -76,7 +76,10 @@ const EDGE_LABEL = { spawns: '派生', derived_from: '意图链', yields: '产�
  *  两条都是**结构**而不是推进：画出来会让压缩节点向它吸收的每条记录发散一把虚线，
  *  整张图立刻从一条链变成一张网。它们仍在 layout 里（详情面板与离线 SVG 用），
  *  只是不上画布——见 `EDGE_HIDDEN_KINDS`。 */
-const EDGE_KINDS = ['spawns', 'derived_from', 'yields', 'proves'];
+/* `link` 是**人手拉的线**（按住 Shift 从一张卡拖到另一张），它和上面四条不是一路：
+ *  那四条由后端 `models.edges_for` 从记录内容推出来，这一条只由 `store.add_edge` 写。
+ *  放在这张表里是因为它同样要**画在画布上**——它不是结构，是两个人看出来的关系。 */
+const EDGE_KINDS = ['spawns', 'derived_from', 'yields', 'proves', 'link'];
 /** 有数据、但不画在画布上的关系。详情面板与导出仍然列它们。 */
 const EDGE_HIDDEN_KINDS = ['covers', 'parent'];
 /** 没见过的 kind 按这个上色。必须与 .gedge 基础规则里的默认令牌一致。 */
@@ -85,7 +88,7 @@ const EDGE_FALLBACK_KIND = 'spawns';
  *  证明 → 覆盖 → 归属），同一种关系再按对端在布局里的列从左到右。
  *  它回答的是「这条链从我这儿怎么往下走」，所以必须有个稳定顺序——
  *  按数据到达顺序列出来，同一条记录两次点开顺序都不一样（作业是并发写的）。 */
-const EDGE_SORT_ORDER = ['spawns', 'derived_from', 'yields', 'proves', 'covers', 'parent'];
+const EDGE_SORT_ORDER = ['spawns', 'derived_from', 'yields', 'proves', 'link', 'covers', 'parent'];
 /* 资产类型的中文说法。**这不是唯一的来源**：权威词表在 `pentestd/models.py` 的
  * `ASSET_TYPE_LABELS`，平台把结果贴成 `asset.typeLabel`（`store.asset_tree()` 里贴）。
  * 留这一份只是兜底——本地缓存的旧快照、或者直接读 `state.assets` 里没经过后端的那几条，
@@ -388,7 +391,12 @@ const graphView = { scale: 1, tx: 0, ty: 0, ceiling: BASE_SCALE * BASE_HEADROOM,
                     dragScale: { sx: 1, sy: 1 }, frame: 0,
                     // 单卡偏移：id → { dx, dy }（用户坐标）。与 scale/tx/ty 同级，都是**视图**
                     // 状态——布局一变就被后端覆盖，所以不能写进 layout 里。
-                    pins: new Map(), dragNodeId: null, dragNode: null };
+                    pins: new Map(), dragNodeId: null, dragNode: null,
+                    // 拉线手势：从哪张卡起手、现在指到哪、光标在哪（用户坐标）。
+                    // `linkTo` 是悬停到的那张卡（合法的落点），`linkPoint` 是没落到卡上时
+                    // 橡皮筋该画到哪——没有它，光标在空白处时那根线会消失，人不知道
+                    // 「这一下到底有没有在连线」。
+                    linkFrom: null, linkTo: null, linkPoint: null };
 // 画布没有 DOM，所以"这一帧要画什么"全部记在这里：`nodes`/`edges` 是折叠之后真正
 // 上画的集合，`boxes` 是它们的框（含 w/h，命中测试与拖卡都用它算几何），
 // `hidden` 是被类型芯片关掉的那些 id，`hoverId` 是光标停在哪张卡上。
@@ -804,7 +812,7 @@ function edgeGeometry(from, to) {
  *  各不相同，所以它够用；只比 `data-theme` 会漏掉"在设置页里改令牌"那种情形。 */
 const GRAPH_STATES = ['origin', 'confirmed', 'done', 'exhausted', 'met', 'active', 'superseded', 'blocked', 'pending'];
 const GRAPH_TONES = ['red', 'amber', 'slate'];
-const EDGE_TOKEN = { spawns: 'spawns', derived_from: 'derived', yields: 'yields', proves: 'proves', parent: 'parent', covers: 'covers' };
+const EDGE_TOKEN = { spawns: 'spawns', derived_from: 'derived', yields: 'yields', proves: 'proves', link: 'link', parent: 'parent', covers: 'covers' };
 let graphPaletteCache = null;
 /** 一张画布需要的全部颜色与字体，按主题缓存。 */
 function graphPalette() {
@@ -888,8 +896,29 @@ function fitScale() {
 function measureDragScale() {
   const metrics = surfaceMetrics();
   if (!metrics || !metrics.k) return null;
-  // 等比缩放下两个方向是同一把尺子。
-  return { sx: 1 / metrics.k, sy: 1 / metrics.k };
+  // 等比缩放下两个方向是同一把尺子。同时把矩形左上角与 k 一起冻住：拉线那根
+  // 橡皮筋要的是"光标在用户坐标里的哪一点"，而它每一帧都算一次——不冻的话，
+  // 它就绕开这里又回去逐事件读矩形了（那正是这套冻结存在的理由）。
+  return { sx: 1 / metrics.k, sy: 1 / metrics.k,
+           left: metrics.rect.left, top: metrics.rect.top, k: metrics.k };
+}
+
+/** 冻结比例之后的客户端 → 用户坐标：**手势路径专用**。
+ *
+ *  算式与 `toUserSpace` 完全相同，区别只有一处：它不读画布矩形，用的是按下那一刻
+ *  量到的 `dragScale`。拖动与拉线每帧都要这个点，而 `getBoundingClientRect()` 紧跟
+ *  在上一次写样式之后，等于每次事件强制一次布局（实测 10.8 ms）。
+ *
+ *  代价：手势期间画布被挪动（分栏拖拽条、窗口缩放）会让这一份偏掉。那种情况下手势
+ *  本来就该重来——人在拖分栏的时候不会同时在画布上拉线。 */
+/** 用 `dragScale` 换算出用户坐标；量不到那份冻结值就退回现量一次。 */
+function frozenUserPoint(scale, clientX, clientY) {
+  if (!scale) return toUserSpace(clientX, clientY);
+  const userScale = graphView.scale || 1;
+  return {
+    x: (clientX - scale.left) / scale.k - graphView.tx / userScale,
+    y: (clientY - scale.top) / scale.k - graphView.ty / userScale,
+  };
 }
 /** 客户端像素 → 用户坐标。滚轮锚点用它，`k` 与拖动同一把尺子。 */
 function toUserSpace(clientX, clientY) {
@@ -901,9 +930,11 @@ function toUserSpace(clientX, clientY) {
     y: (clientY - metrics.rect.top) / metrics.k - graphView.ty / scale,
   };
 }
-/** 命中测试：屏幕点 → 用户坐标 → 落在哪张卡上（后画的在上，所以倒着找）。 */
-function hitNode(clientX, clientY) {
-  const point = toUserSpace(clientX, clientY);
+/** 命中测试（用户坐标版）：落点 → 哪张卡。后画的在上，所以倒着找。
+ *
+ *  与 `hitNode` 拆开是为了手势路径：那一边已经按冻结比例算好了点，不该再为了
+ *  命中一次又回去读画布矩形。 */
+function hitNodeAt(point) {
   const boxes = graphIndex.boxes;
   if (!point || !boxes) return null;
   const nodes = graphIndex.nodes || [], hidden = graphIndex.hidden || new Set();
@@ -915,6 +946,10 @@ function hitNode(clientX, clientY) {
     if (point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h) return node.id;
   }
   return null;
+}
+/** 命中测试：屏幕点 → 用户坐标 → 落在哪张卡上。 */
+function hitNode(clientX, clientY) {
+  return hitNodeAt(toUserSpace(clientX, clientY));
 }
 /** 验收探针用的坐标表：每张可见卡的中心落在**客户端坐标**上。
  *
@@ -973,6 +1008,42 @@ function resetView() {
   // 新节点可以再自动适配一次。保留它的话，点过适应窗口的人反而再也看不到自动跟随。
   graphView.touched = false;
   paintGraph();
+}
+/** 把一次拉线落库：`POST /engagements/{eid}/edges`。
+ *
+ *  三件事值得写下来：
+ *
+ *  一、**只在单目标视图里能连**。合并视图的节点 id 带目标前缀（`eid:node-3`），
+ *     而边存在某个目标的库里、端点必须是一对真记录——把两个不同目标的节点连起来，
+ *     在数据上无处安放（边表只有一个 `engagement_id`）。与其让人画出一条松手就
+ *     消失的线，不如在起手前就说清「这里连不了」。
+ *
+ *  二、**写成功不自己改本地图**，而是重取一次：`store.add_edge` 会给边分配 seq 与
+ *     id，本地拼一条假边出去，下一次刷新就会换成另一个 id，选中态与详情面板都
+ *     跟着跳。图不大，重取一次比维护两套真相源便宜。
+ *
+ *  三、失败**要说话**。这条路径上唯一的失败原因都是可解释的（自环、端点不在、
+ *     kind 不对），而它们都发生在人刚做完一个动作之后——不提示的话，人只会觉得
+ *     「拖了一下，什么都没发生」。
+ */
+async function createLink(from, to) {
+  if (!from || !to || from === to) { paintGraph(); return; }
+  if (state.graphScope !== 'single' || !state.eid) {
+    showError('合起来看的时候不能连线：这里的节点来自不同目标，边得先有归属。切回单个目标再连。');
+    paintGraph();
+    return;
+  }
+  try {
+    const data = await apiPost('/engagements/' + encodeURIComponent(state.eid) + '/edges',
+      { sourceId: from, targetId: to });
+    const edge = (data && data.edge) || null;
+    if (edge && edge._reused) setOrchMessage('这两张卡已经连着了', 'ok');
+    hideError();
+    await loadGraph(true);
+  } catch (error) {
+    showError('连线没画上：' + error.message);
+    paintGraph();
+  }
 }
 /** 首次摆正：把视图的左上角对到布局内容的左上角。
  *
@@ -1185,6 +1256,52 @@ function drawEdges(ctx, palette) {
     ctx.restore();
   });
 }
+/** 拉线时的橡皮筋：从起手那张卡的中心画到光标（或光标下的那张卡）。
+ *
+ *  为什么手画一条线需要这根临时线：连线是**两个点**的手势，而画布上一松手就没
+ *  任何痕迹——没有它，人在拖的整个过程中只能猜「到底连上了没有」。所以这里画两件事：
+ *  一条强调色的曲线，和落点处一圈圈住目标卡的框。框是必要的：线的另一端压在卡片
+ *  上时看不出落点在哪张卡，框一出现就明确了「松手就连这一张」。
+ *
+ *  落点合法性由 `linkTo` 决定（`linkFrom` 自己不算合法落点，见 pointermove）：这里
+ *  只负责把「能不能连」画成两种颜色，判定留在手势那边一处。 */
+function drawLinkBand(ctx, palette) {
+  const from = graphView.linkFrom;
+  if (!from) return;
+  const boxes = graphIndex.boxes;
+  const source = boxes ? boxWithPin(boxes.get(from), from) : null;
+  if (!source) return;
+  const target = graphView.linkTo && boxes ? boxWithPin(boxes.get(graphView.linkTo), graphView.linkTo) : null;
+  const point = graphView.linkPoint || { x: source.cx, y: source.cy };
+  const geo = target
+    ? edgeGeometry(source, target)
+    : { x1: source.x + source.w / 2, y1: source.y + source.h / 2,
+        x2: point.x, y2: point.y,
+        cx1: (source.x + source.w / 2 + point.x) / 2, cy1: source.y + source.h / 2,
+        cx2: (source.x + source.w / 2 + point.x) / 2, cy2: point.y };
+  const ok = !!target;
+  ctx.save();
+  ctx.strokeStyle = ok ? palette.accent : palette.dim;
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = 2.4;
+  ctx.globalAlpha = ok ? 0.95 : 0.7;
+  ctx.setLineDash([7, 5]);
+  ctx.beginPath();
+  ctx.moveTo(geo.x1, geo.y1);
+  ctx.bezierCurveTo(geo.cx1, geo.cy1, geo.cx2, geo.cy2, geo.x2, geo.y2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  drawArrow(ctx, geo);
+  // 落点框：只框住，不改卡片自己的选中/悬停态——那是另一件事，混在一起会让人
+  // 以为「框住的这张已经选中了」。
+  if (target) {
+    roundRectPath(ctx, target.x - 3, target.y - 3, target.w + 6, target.h + 6, 14);
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 /** 画一张卡。四角的位置与改造前的 DOM 卡一一对应：
  *
  *  左上  类型图标块 + 中文类型名 ………………………………………………… 右上 优先级（P7）
@@ -1289,18 +1406,29 @@ function drawNodeCard(ctx, palette, node, box) {
   ctx.fillText(clipText(ctx, node.label || node.id, innerW), x + padX, cursorY + 2);
   cursorY += palette.fsSmall + 6;
 
-  // 摘要：最多三行，行高 1.35。
+  // 底行：状态徽章在左、编号靠右。它钉在卡底，与内容多少无关。先把它的位置算出来，
+  // 因为摘要要**画到它上面为止**：这是「内容重叠」的根治点——不是靠调大字号或调小
+  // 行数让两段刚好不撞，而是让撞不撞在几何上不再是一个选项。
+  const footH = palette.fsCaption + 6;
+  const footY = y + h - padY - footH;
+
+  // 摘要：最多三行，行高 1.35。整段夹在「标题之下、底行之上」的矩形里画：换一套
+  // 主题、换一套字距、编号比预期长、摘要里冒出一个特别宽的拉丁词，越界的部分一律
+  // 被裁掉。三行本身仍由 `wrapText(..., 3)` 限制（多出来的字变成省略号），这道裁剪
+  // 是它的兜底——两道都在，是因为 `wrapText` 只保证「行数」，不保证「行高 × 行数」
+  // 一定装得下（行高跟着 `--fs-small` 变，而卡片高度来自后端常量）。
   if (node.subtitle) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + padX, cursorY, innerW, Math.max(0, footY - 4 - cursorY));
+    ctx.clip();
     ctx.font = palette.fsSmall + 'px ' + palette.fontSans;
     ctx.fillStyle = palette.muted;
     const lineHeight = palette.fsSmall * 1.35;
     const rows = wrapText(ctx, node.subtitle, innerW, 3);
     rows.forEach((row, index) => ctx.fillText(row, x + padX, cursorY + index * lineHeight));
+    ctx.restore();
   }
-
-  // 底行：状态徽章在左、编号靠右。它钉在卡底，与内容多少无关。
-  const footH = palette.fsCaption + 6;
-  const footY = y + h - padY - footH;
   if (stateText) {
     ctx.font = '600 ' + palette.fsCaption + 'px ' + palette.fontSans;
     const badgeW = ctx.measureText(stateText).width + 14;
@@ -1365,6 +1493,7 @@ function paintGraph() {
   ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * fit * graphView.tx, dpr * fit * graphView.ty);
   drawEdges(ctx, palette);
   drawNodes(ctx, palette);
+  drawLinkBand(ctx, palette);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   syncMinimapWindow();
 }
@@ -5084,6 +5213,30 @@ function bindGraphEvents() {
     if (event.button !== 0 || svg.classList.contains('hidden')) return;
     // 画布没有元素可以 `closest`：按下的点落在哪张卡上，要自己用框反查。
     const pressedId = hitNode(event.clientX, event.clientY);
+    // **按住 Shift 从卡上起手 = 拉线**，不是拖卡也不是平移。这个手的动作三种含义
+    // 共用同一套 pointerdown/move/up，所以分岔必须发生在按下这一刻：一旦进了连线
+    // 分支，`dragNodeId` 就是 null（不拖卡）、`moved` 直接置真（抬手不算点选）。
+    // 为什么用 Shift 而不是在卡上画一个把手：画布上没有 DOM，把手要么另外画在
+    // 卡片边缘再自己命中一次，要么用 DOM 浮层——两条都在给一个 350 张卡的画布
+    // 加每张卡一个可交互子元素。Shift 是画图工具和思维导图里的通用约定，而且
+    // 它不改变任何既有手势（不按 Shift 时行为一模一样）。
+    if (event.shiftKey && pressedId) {
+      // 比例与画布矩形在按下这一刻量一次，整条橡皮筋都用它（见 measureDragScale）。
+      const scale = measureDragScale();
+      const point = frozenUserPoint(scale, event.clientX, event.clientY);
+      Object.assign(graphView, {
+        linkFrom: pressedId, linkTo: null, linkPoint: point || null,
+        pressNodeId: pressedId, dragNodeId: null,
+        dragging: true, moved: true,
+        lastX: event.clientX, lastY: event.clientY,
+        pressX: event.clientX, pressY: event.clientY,
+        dragScale: scale,
+      });
+      svg.classList.add('dragging');
+      svg.setPointerCapture(event.pointerId);
+      paintGraph();
+      return;
+    }
     // 按在卡上 = 拖这张卡，按在空白 = 平移画布。两者共用一套手势状态（手抖阈值、
     // 冻结比例、每帧一次写），只在位移的落点上分叉——按在卡上改卡自己的偏移，
     // 按在空白改视角。
@@ -5103,6 +5256,17 @@ function bindGraphEvents() {
   });
   svg.addEventListener('pointermove', (event) => {
     if (!graphView.dragging) return;
+    // 拉线：不判手抖（线本来就是随光标走的），只更新「指到哪」然后重画。
+    // `linkTo` 用 `hitNode` 反查，命中起手那张卡时不算落点——自己连自己在语义上
+    // 没有意义（后端也会拒），所以这里直接置空，让橡皮筋退化成一根跟随光标的线。
+    if (graphView.linkFrom) {
+      const point = frozenUserPoint(graphView.dragScale, event.clientX, event.clientY);
+      const overId = hitNodeAt(point);
+      graphView.linkTo = overId && overId !== graphView.linkFrom ? overId : null;
+      graphView.linkPoint = point || graphView.linkPoint;
+      scheduleTransform();
+      return;
+    }
     // 先按**屏幕像素**判手抖，再决定这是一次拖拽。阈值没跨过就原样返回：
     // 既不平移，也不把 moved 置真——否则鼠标抖半像素，图会被推走一点，
     // 同时抬手的点选还被吞掉。
@@ -5140,6 +5304,16 @@ function bindGraphEvents() {
     graphView.dragging = false;
     svg.classList.remove('dragging');
     if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
+    // 拉线的收尾：落点合法才写库。**被取消的手势照样清状态**——否则那根橡皮筋
+    // 会一直挂在画布上，看起来像一次没结束的拖拽。
+    if (graphView.linkFrom) {
+      const from = graphView.linkFrom, to = graphView.linkTo;
+      graphView.linkFrom = null;
+      graphView.linkTo = null;
+      graphView.linkPoint = null;
+      if (!cancelled && to) createLink(from, to);
+      else paintGraph();
+    }
     // 被系统取消的手势（右键菜单、触摸被打断）不是一次点选，不该改选中态
     if (!cancelled && !graphView.moved && graphView.pressNodeId) selectNode(graphView.pressNodeId);
     graphView.pressNodeId = null;

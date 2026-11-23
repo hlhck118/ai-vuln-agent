@@ -151,6 +151,9 @@
   --edge-proves: #e0a13c;
   --edge-parent: #7d8794;
   --edge-covers: #9aa8ff;
+  /* 手工连线：由人画的关系，不是记录推出来的。色相在所有主题里都落在洋红一侧——
+   * 其余六色已被推进四种 + 覆盖 + 归属占满，再借它们的色会让人读错语义。 */
+  --edge-link: #ff7ab8;
 
   /* ---- 状态胶囊：九种节点状态各自一对「字色 / 底色」 ----
    * 为什么单独成对而不是复用 --kind-*（类型色）：类型与状态是两件事，一张卡上同时
@@ -428,6 +431,9 @@
   --edge-proves: #a45904;
   --edge-parent: #7c8594;
   --edge-covers: #4a56c8;
+  /* 手工连线：由人画的关系，不是记录推出来的。色相在所有主题里都落在洋红一侧——
+   * 其余六色已被推进四种 + 覆盖 + 归属占满，再借它们的色会让人读错语义。 */
+  --edge-link: #c0246e;
   --code: #2061c7;
   --code-inline: #a8550e;
   --code-bg:           rgba(255, 255, 255, .72);          /* 比 --panel-2 再实一档，代码块才浮得出来 */
@@ -582,6 +588,9 @@
   --edge-proves: #8a5a00;
   --edge-parent: #5b6470;
   --edge-covers: #3f4ab0;
+  /* 手工连线：由人画的关系，不是记录推出来的。色相在所有主题里都落在洋红一侧——
+   * 其余六色已被推进四种 + 覆盖 + 归属占满，再借它们的色会让人读错语义。 */
+  --edge-link: #b81a63;
 
   --code: #1d3f6e;
   --code-inline: #8a3a00;
@@ -694,6 +703,9 @@
   --edge-proves: #ffa62b;
   --edge-parent: #6a9b76;
   --edge-covers: #b8c4ff;
+  /* 手工连线：由人画的关系，不是记录推出来的。色相在所有主题里都落在洋红一侧——
+   * 其余六色已被推进四种 + 覆盖 + 归属占满，再借它们的色会让人读错语义。 */
+  --edge-link: #ff8fd0;
 
   --code: #b6f2cd;
   --code-inline: #ffd79b;
@@ -816,6 +828,9 @@
   --edge-proves: #ffb340;
   --edge-parent: #c8c8c8;
   --edge-covers: #93a4ff;
+  /* 手工连线：由人画的关系，不是记录推出来的。色相在所有主题里都落在洋红一侧——
+   * 其余六色已被推进四种 + 覆盖 + 归属占满，再借它们的色会让人读错语义。 */
+  --edge-link: #ff9ad6;
 
   --code: #d6e8ff;
   --code-inline: #ffd79b;
@@ -1918,6 +1933,9 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .legend-edge[data-kind="proves"]::before { border-top-color: var(--edge-proves); }
 .legend-edge[data-kind="parent"]::before { border-top-color: var(--edge-parent); }
 .legend-edge[data-kind="covers"]::before { border-top-style: dashed; border-top-color: var(--edge-covers); }
+/* 手工连线是点线：虚线已经被「覆盖」占住（那条是压缩吸收了谁），两者混用的话
+   图例就在教人分不清「谁吸收了谁」与「谁被人连着看」。 */
+.legend-edge[data-kind="link"]::before { border-top-style: dotted; border-top-color: var(--edge-link); }
 
 /* 缩放控件：画布左下角竖排的 + / − / ⛶。
  *
@@ -2004,6 +2022,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .gedge[data-kind="proves"] { stroke: var(--edge-proves); }
 .gedge[data-kind="parent"] { stroke: var(--edge-parent); }
 .gedge[data-kind="covers"] { stroke: var(--edge-covers); stroke-dasharray: 5 3; }
+.gedge[data-kind="link"] { stroke: var(--edge-link); stroke-dasharray: 2 4; }
 /* 覆盖是"这条压缩吸收了哪些记录"，不是推进关系：虚线把它与 spawns/yields 那几条
  * 实线区分开，否则一眼看过去压缩像是在给事实发指令。 */
 /* 箭头与边同色。它长在 <defs><marker> 里，但仍然被本文档的样式表命中——
@@ -2014,6 +2033,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .garrow[data-kind="proves"] { fill: var(--edge-proves); }
 .garrow[data-kind="parent"] { fill: var(--edge-parent); }
 .garrow[data-kind="covers"] { fill: var(--edge-covers); }
+.garrow[data-kind="link"] { fill: var(--edge-link); }
 .gedge-label {
   fill: var(--muted); font: var(--fs-caption) var(--sans);
   paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round;
