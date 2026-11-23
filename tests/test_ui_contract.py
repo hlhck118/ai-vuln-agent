@@ -4890,6 +4890,23 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         self.assertIn("left:", zoom, "缩放控件不在画布左侧（左下角留给它）")
         self.assertIn("bottom:", zoom, "缩放控件没贴住画布底边")
 
+    def test_the_first_card_yields_only_the_part_of_the_legend_it_actually_hits(self):
+        """图例该让开的只是它真正压住的那一段。
+
+        早期实现只取图例的**底边**当上边距，等于把整幅往下推到图例以下。可图例宽不到
+        200px、贴在左侧，而第一列的顶卡本来就在它右边——于是每次进页面都白扔一整条
+        横带的高度，一屏只看得到一两张卡。正确判据是矩形**求交**：顶卡横向真的与图例
+        相交时才补那一段距离。
+        """
+        body = self._graph_fn('alignViewToStart')
+        self.assertIn("legendBox.right", body, "让开图例只看底边，没判横向是否真压上")
+        self.assertIn("legendBox.bottom", body, "让开图例没用到它的底边")
+        self.assertIn("topBox", body, "没盯住第一列的顶卡，推的就可能是别的卡让出来的空格")
+        self.assertIn("overlapsX", body, "缺横向相交判据")
+        self.assertIn("need / fit", body, "推的距离换算错了：屏幕像素除 fit 才是用户单位")
+        self.assertNotIn("Math.max(padY, cleared)", body,
+                         "又回到整条横带一起下推的老写法")
+
     def test_no_kind_ships_with_its_filter_switch_missing(self):
         """类型芯片与 state.kindFilter 必须是同一组键。
 

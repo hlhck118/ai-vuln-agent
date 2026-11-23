@@ -982,7 +982,9 @@ function resetView() {
  *  顶卡**。
  *
  *  上边距还要让开左上角那块图例：它是一张压在画布上的卡（`pointer-events: none`），
- *  默认 600% 下第一张卡本来就在它右边，但列宽与窗口尺寸一变就可能被压住。 */
+ *  默认 600% 下第一张卡本来就在它右边，但列宽与窗口尺寸一变就可能被压住。
+ *  让开的方式是**求交**：图例偏在左边，若只让它底边以下，整幅就被下推一整条横带，
+ *  白扔一屏高度；所以把顶卡投到屏幕坐标，只在横向真的压上时才补那一段。 */
 function alignViewToStart(boxes) {
   const metrics = surfaceMetrics();
   if (!metrics || !boxes || !boxes.size) return;
@@ -990,14 +992,33 @@ function alignViewToStart(boxes) {
   let minX = Infinity;
   boxes.forEach((box) => { minX = Math.min(minX, box.x); });
   let minY = Infinity;
-  boxes.forEach((box) => { if (Math.abs(box.x - minX) < 1) minY = Math.min(minY, box.y); });
-  if (!isFinite(minX) || !isFinite(minY)) return;
+  let topBox = null;
+  boxes.forEach((box) => {
+    if (Math.abs(box.x - minX) < 1 && box.y < minY) { minY = box.y; topBox = box; }
+  });
+  if (!isFinite(minX) || !isFinite(minY) || !topBox) return;
   const padX = 16, padY = 16;
+  graphView.tx = padX / fit - minX * graphView.scale;
+  graphView.ty = padY / fit - minY * graphView.scale;
+  // 让开图例：**不能只看图例的底边**。图例是左上角一块宽 180 左右的卡，第一列的顶卡
+  // 本来就贴着左边，窗口一窄，卡的左上角就钻到图例右半边底下——只把整幅往下推到图例
+  // 底边以下，等于为一个偏左的遮挡物白扔一整条横带的高度。
+  // 所以按矩形求交：先把顶卡用当前变换投到屏幕坐标，真压上了才推，推的距离正好是压住
+  // 的那一段。判据用屏幕像素，因为这个遮挡物只在屏幕上存在，不在布局坐标里。
   const legend = $('.graph-legend');
   const legendBox = legend ? legend.getBoundingClientRect() : null;
-  const cleared = legendBox && legendBox.height > 0 ? legendBox.bottom - rect.top + 8 : padY;
-  graphView.tx = padX / fit - minX * graphView.scale;
-  graphView.ty = Math.max(padY, cleared) / fit - minY * graphView.scale;
+  if (!legendBox || !legendBox.width || !legendBox.height) return;
+  const scale = graphView.scale;
+  const k = fit * scale;
+  const gap = 8;
+  const cardLeft = rect.left + k * topBox.x + fit * graphView.tx;
+  const cardRight = cardLeft + k * topBox.w;
+  const cardTop = rect.top + k * topBox.y + fit * graphView.ty;
+  const overlapsX = cardLeft < legendBox.right + gap && cardRight > legendBox.left - gap;
+  const need = legendBox.bottom + gap - cardTop;
+  if (!overlapsX || need <= 0) return;
+  // 屏幕像素 → 用户单位：`screen = fit * (scale * u + t)`，所以推 d 像素是 `t += d / fit`。
+  graphView.ty += need / fit;
 }
 /** 初始缩放：**不低于基准 600%**，但可以更大（合并视图常需要 18 倍才看得清一张卡）。
  *
