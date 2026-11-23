@@ -1075,7 +1075,8 @@
   .setup-card, .finding-card, .model-card, .mode-option, .theme-card,
   .guide-status-card, .notice, .stat, .empty,
   .plan-item, .job-log, .rpt-row, .dock-chip, .chat-quick, .chat-msg,
-  .chat-review-card, .mcp-card, .notify-card, .intercept-card, .dash-card) {
+  .chat-review-card, .mcp-card, .notify-card, .intercept-card, .dash-card,
+  .gnode-card) {
   -webkit-backdrop-filter: blur(var(--glass-card-blur)) saturate(var(--glass-sat));
   backdrop-filter: blur(var(--glass-card-blur)) saturate(var(--glass-sat));
   background-image: linear-gradient(180deg, var(--glass-edge) 0, transparent 1px);
@@ -1841,10 +1842,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
  * 比页面亮一档，而这正是卡片式的意思：每一块都浮在画布之上。 */
 .graph-canvas { position: relative; flex: 1 1 auto; min-width: 0;
   border: 1px solid var(--border); border-radius: var(--r-3); box-shadow: var(--shadow-1);
-  background:
-  linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 100% 32px,
-  linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 32px 100%,
-  var(--bg); }
+  background: radial-gradient(var(--grid-line) 1.1px, transparent 1.1px) 0 0 / 16px 16px, var(--bg); }
 /* 「链路已更新」提示：绝对定位在画布右上角，压在图上而不是占一行高度。
  * 它出现的唯一场景是"人已经把视角调过、而新数据落在视野外"，所以位置要显眼但
  * 不能盖住节点——工具栏正下方、图的首列在左上，右上角是空白。
@@ -1893,7 +1891,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .legend-edges { border-top: 1px solid var(--border); padding-top: 5px; }
 .legend-kind, .legend-edge { display: inline-flex; align-items: center; gap: 4px; color: var(--text-dim); }
 .legend-kind::before {
-  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  content: ""; width: 9px; height: 9px; border-radius: 3px;
   background: var(--muted); flex: 0 0 auto;
 }
 /* 类型圆点与节点卡左上角的图标方块同一个令牌源，一处改两处跟。
@@ -1946,6 +1944,48 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
   min-width: 0; text-align: center; padding: 1px 0 2px;
   font: var(--fs-caption)/1.2 var(--mono); color: var(--muted);
 }
+/* 缩略图：画布**右下角**一张小卡，照 ARTEX 的 <MiniMap>。
+ *
+ *  它回答的问题是「我现在看的是整张图的哪一块」——布局动辄 2000 x 50000 单位，
+ *  放大到 600% 之后视野只覆盖其中很小一块，没有这张图就会迷路。
+ *
+ *  只读：不接受点击与拖动。这一页的视角是「工作位置」，误触一下就把人从正在读的
+ *  那一列甩开；真要看别处，滚轮与拖动画布本来就在手边。
+ *
+ *  尺寸上限 180x120：它是一张索引卡，不该与内容抢面积。缩略图内的节点画成小方块，
+ *  按类型上色（与卡片图标同一个令牌源），看不见字——这个尺度上文字只会糊成一片噪点。 */
+.graph-minimap {
+  position: absolute; right: 10px; bottom: 10px; z-index: 3; pointer-events: none;
+  width: 180px; height: 120px;
+  border: 1px solid var(--border); border-radius: var(--r-2);
+  /* 底取**画布色**而不是 panel/panel-3：磨砂主题的那两档都是半透明的（.58 / .92），
+     画布上的边与虚线会从这张索引卡里透出来，缩略图上的方块就分不清是节点还是边。
+     `--bg` 在五档主题里都是实色，且它就是画布自己的颜色——这张卡于是像画布上
+     抠出的一个索引窗，而不是叠在上面的一层玻璃。 */
+  background: var(--bg); box-shadow: var(--shadow-1);
+}
+/* 缩略图画布铺满这张卡的内侧，四周留 4px 白边——**用 inset 而不是 padding**：
+   「现在看的是这一块」那个矩形是绝对定位在卡上的，它要按 svg 的实际像素位置换算，
+   如果留白交给 padding，矩形的参照系就与 svg 差一圈，永远对不齐。 */
+/* svg 是"替换元素"：inset 四边都钉住 + width/height auto 时，箱子的高宽会退回到
+   内在比例，而不是被四边夹住（实测 180x120 的面板里长成 170x174，节点溢到面板外）。
+   所以高宽都按面板减内边距显式算。 */
+.minimap-svg { position: absolute; top: 4px; left: 4px; display: block; width: calc(100% - 8px); height: calc(100% - 8px); }
+.minimap-node { fill: var(--muted); opacity: .55; }
+.minimap-node.kind-begin { fill: var(--kind-begin); }
+.minimap-node.kind-goal { fill: var(--kind-goal); }
+.minimap-node.kind-hint { fill: var(--kind-hint); }
+.minimap-node.kind-intent { fill: var(--kind-intent); }
+.minimap-node.kind-fact { fill: var(--kind-fact); }
+.minimap-node.kind-finding { fill: var(--kind-finding); }
+.minimap-node.kind-digest { fill: var(--kind-digest); }
+/* 「现在看的是这一块」：一个半透明矩形，边框用强调色。它由 applyTransform 每次
+   缩放平移后重算——那是唯一知道视野在哪的地方。 */
+.minimap-window {
+  position: absolute; display: block; pointer-events: none;
+  border: 1px solid var(--accent); border-radius: 2px;
+  background: var(--accent-soft);
+}
 
 
 /* 图谱边色：**由 CSS 下发，不在 JS 里**。
@@ -1957,7 +1997,11 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
  * 基础规则承担"未知类型"的兜底：JS 那边对没见过的 kind 一律按 spawns 上色，这里给出
  * 同一个默认，两处必须一致——不一致的症状是**某条边直接不画**（stroke 不继承，
  * 缺失即不绘制），而"线不见了"很难联想到是主题改的。 */
-.gedge { stroke-width: 1.4; opacity: .55; stroke: var(--edge-spawns); }
+/* 边：2px 实线、颜色按关系、55% 不透明度——三个数字都照 ARTEX 的 relColor 那组
+ *  样式（strokeWidth 2 / strokeOpacity .55 / ArrowClosed 14x14）。加粗到 2px 是因为
+ *  画布默认落在 600%，1.4px 在深色底上细得像发丝；55% 是为了让节点卡始终压在
+ *  边之上——边是结构，卡才是内容。 */
+.gedge { stroke-width: 2; opacity: .55; stroke: var(--edge-spawns); }
 .gedge[data-kind="yields"] { stroke: var(--edge-yields); }
 .gedge[data-kind="derived_from"] { stroke: var(--edge-derived); }
 .gedge[data-kind="proves"] { stroke: var(--edge-proves); }
@@ -1978,47 +2022,76 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
   paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round;
   pointer-events: none;
 }
-.gnode text { pointer-events: none; }
-.gnode-box { fill: var(--panel-2); stroke: var(--border-strong); stroke-width: 1.2; }
-/* 节点卡：三行，照 ARTEX 的卡片结构。
+/* 节点卡：**真的 DOM**，装在 `<foreignObject>` 里。
  *
- *  第一行  类型方块图标 + 中文类型名 ………………………………… 优先级胶囊（P7）
- *  第二行  标题
- *  第三行  两行副标题
- *  第四行  状态胶囊（已确认） ……………………………………………………… #编号
+ *  第一行  类型图标块 + 中文类型名 …………………………………………… 优先级（P7）
+ *  第二行  标题（单行，超出用省略号）
+ *  第三~五行  摘要（line-clamp 三行；完整文字在 title 里）
+ *  底行    状态徽章 ………………………………………………………………………………… #编号
  *
- *  与旧版的区别有两处是有理由的：
+ *  换掉原来那十几支 `<rect>` / `<text>` 的理由只有一个：卡内排版本该交给排版引擎。
+ *  旧卡的字号、行高、折行位置、胶囊宽度全靠手算系数（`svgTextWidth` 与后端
+ *  `_text_width` 两套系数必须同步，否则就是「后端没截、前端溢出去」），改一个像素
+ *  就要回来重新对一遍。DOM 卡之后这些数字全部由 CSS 决定，与页面其它地方同一套
+ *  字号令牌。
  *
- *  * 图标做成**实心方块 + 白点**而不是空心圆点：一张图上十几个节点，方块在密排的
- *    卡片列里比圆点更容易一眼扫出「这一列的卡片都是同一类」；
- *  * 状态胶囊从左下角挪到正文下面一行、id 从「左下角小字」改成「右下角带井号」，
- *    两者同一基线上分居两端——中间那段空出来的是拖动画布的地方，压在卡上的手势
- *    不该被文字挡掉。
+ *  颜色只落在类型图标块、类型名与优先级、状态两枚小徽章上，卡身保持中性：七种
+ *  类型各有一整套配色，卡身也上色就变成一大片互不相让的色块，谁也读不出谁。
  *
- *  颜色只出现在图标方块、类型名、优先级胶囊、状态胶囊四处，卡身保持中性：八个类型
- *  各有一整套配色，卡身也上色就变成一大片互不相让的色块，谁也读不出谁。
- *
- *  八个显示类型共用一个 `color`：图标方块用 currentColor 的淡色、类型名也继承，
- *  所以一条 `.gnode.kind-*` 规则就够，不必给每种类型各写两处 fill。 */
-.gnode-dot { fill: currentColor; }
-.gnode-icon { fill: currentColor; opacity: .22; }
-.gnode-kind { fill: currentColor; font: 600 var(--fs-caption)/1 var(--sans); letter-spacing: .02em; }
-.gnode-id { fill: var(--muted); font: var(--fs-caption)/1 var(--mono); opacity: .7; }
-/* 优先级胶囊：三档语气。它说的是「多急」，与类型色、状态色都不是一回事
+ *  `color` 由 `.gnode.kind-*` 写在 `<g>` 上，图标块与类型名继承它——一条规则
+ *  同时喂两处，不必给每种类型各写两遍。 */
+.gnode-frame { overflow: visible; }
+.gnode-card {
+  box-sizing: border-box; width: 100%; height: 100%;
+  display: flex; flex-direction: column; gap: 3px; padding: 9px 11px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-3);
+  background: var(--panel-2); box-shadow: var(--shadow-1);
+  /* 注意这里**不写** color：卡的正文色由各段自己声明（标题 --text、摘要 --muted、
+     徽章各用令牌），卡本身留着继承 `<g>` 上的类型色，图标块与类型名才有得可取。 */
+  font: var(--fs-small)/1.35 var(--sans);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.gnode-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.gnode-glyph {
+  flex: 0 0 auto; width: 16px; height: 16px; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+.gnode-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.gnode-kind {
+  min-width: 0; color: currentColor; white-space: nowrap;
+  font: 600 var(--fs-caption)/1 var(--sans); letter-spacing: .02em;
+}
+/* 优先级徽章：三档语气。它说的是「多急」，与类型色、状态色都不是一回事
    （一条橙色的 P7 会被读成「这是个高危漏洞」），所以自己占一组令牌：
    8 以上红、5 以上黄、其余中性——照 ARTEX 的 prioTone，不做九个色阶的插值。 */
-rect.gnode-pill { fill: var(--panel-3); }
-text.gnode-pill-text { fill: var(--text-dim); font: var(--fs-caption)/1 var(--mono); }
-rect.gnode-pill.gnode-priority { fill: var(--prio-slate-bg, var(--panel-2)); }
-text.gnode-pill-text.gnode-priority { fill: var(--prio-slate-fg, var(--text-dim)); }
-rect.gnode-pill.gnode-priority.tone-red { fill: var(--prio-red-bg, var(--panel-2)); }
-text.gnode-pill-text.gnode-priority.tone-red { fill: var(--prio-red-fg, var(--text-dim)); }
-rect.gnode-pill.gnode-priority.tone-amber { fill: var(--prio-amber-bg, var(--panel-2)); }
-text.gnode-pill-text.gnode-priority.tone-amber { fill: var(--prio-amber-fg, var(--text-dim)); }
-rect.gnode-pill.gnode-priority.tone-slate { fill: var(--prio-slate-bg, var(--panel-2)); }
-text.gnode-pill-text.gnode-priority.tone-slate { fill: var(--prio-slate-fg, var(--text-dim)); }
-rect.gnode-pill.gnode-state { fill: var(--pill-bg, var(--panel-3)); }
-text.gnode-pill-text.gnode-state { fill: var(--pill-fg, var(--text-dim)); font-family: var(--sans); }
+.gnode-priority {
+  margin-left: auto; flex: 0 0 auto; padding: 1px 6px; border-radius: var(--r-1);
+  font: 600 var(--fs-caption)/1.4 var(--mono);
+  background: var(--prio-slate-bg, var(--panel-3)); color: var(--prio-slate-fg, var(--text-dim));
+}
+.gnode-priority.tone-red { background: var(--prio-red-bg, var(--panel-3)); color: var(--prio-red-fg, var(--text-dim)); }
+.gnode-priority.tone-amber { background: var(--prio-amber-bg, var(--panel-3)); color: var(--prio-amber-fg, var(--text-dim)); }
+.gnode-priority.tone-slate { background: var(--prio-slate-bg, var(--panel-3)); color: var(--prio-slate-fg, var(--text-dim)); }
+.gnode-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gnode-title {
+  color: var(--text); font: 600 var(--fs-small)/1.35 var(--sans);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 摘要三行封顶：卡片高度是**布局算出来的**（后端 NODE_H），文字折出去就会画到
+   邻居卡上。三行是 ARTEX `line-clamp-3` 的同一条规矩，完整文字一律进 title。 */
+.gnode-sub {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden; overflow-wrap: anywhere;
+  font: var(--fs-caption)/1.45 var(--sans); color: var(--muted);
+}
+.gnode-foot { margin-top: auto; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.gnode-state {
+  flex: 0 0 auto; padding: 1px 7px; border-radius: 999px;
+  font: 600 var(--fs-caption)/1.5 var(--sans);
+  background: var(--pill-bg, var(--panel-3)); color: var(--pill-fg, var(--text-dim));
+}
+.gnode-id { margin-left: auto; font: var(--fs-caption)/1 var(--mono); color: var(--muted); }
 /* 九种状态各取自己那一对令牌（定义在 :root，玻璃与纸感各自覆盖一套浅色）。
    这里只做「状态类 → 令牌对」的映射，具体颜色一律不进规则区。 */
 .state-origin { --pill-fg: var(--state-origin-fg); --pill-bg: var(--state-origin-bg); }
@@ -2039,27 +2112,58 @@ text.gnode-pill-text.gnode-state { fill: var(--pill-fg, var(--text-dim)); font-f
 .gnode.kind-finding { color: var(--kind-finding); }
 .gnode.kind-digest { color: var(--kind-digest); }
 .gnode.kind-asset { color: var(--kind-asset); }
-.gnode-label { fill: var(--text); font: 600 var(--fs-small) var(--sans); }
-.gnode-sub { fill: var(--muted); font: var(--fs-caption) var(--mono); }
-.gnode.kind-begin .gnode-box { stroke: var(--kind-begin); stroke-dasharray: 4 3; }
-.gnode.kind-goal .gnode-box { stroke: var(--kind-goal); }
-.gnode.kind-hint .gnode-box { stroke: var(--kind-hint); stroke-dasharray: 4 3; }
-.gnode.kind-intent .gnode-box { stroke: var(--kind-intent); }
-.gnode.kind-fact .gnode-box { stroke: var(--kind-fact); }
-.gnode.kind-finding .gnode-box { stroke: var(--kind-finding); }
-.gnode.kind-asset .gnode-box { stroke: var(--kind-asset); }
-.gnode.kind-digest .gnode-box { stroke: var(--kind-digest); stroke-dasharray: 4 3; }
-.gnode.sev-critical .gnode-box { stroke: var(--sev-critical); stroke-width: 2; }
-.gnode.sev-high .gnode-box { stroke: var(--sev-high); stroke-width: 2; }
-.gnode.sev-medium .gnode-box { stroke: var(--sev-medium); }
-.gnode.sev-low .gnode-box { stroke: var(--sev-low); }
-.gnode.sev-info .gnode-box { stroke: var(--sev-info); }
+/* 类型色落在**卡的边框**上（原来是 SVG 描边）：卡身中性、边框取类型令牌，
+   一张图上「这几张是漏洞」由边框颜色分区，而不必让卡本身变成色块。
+   起点 / 提示 / 压缩三种用虚线边框——它们都不是「往前推进了一步」的东西：
+   起点是任务根，提示是别人给的方向，压缩是一段结论。 */
+.gnode.kind-begin .gnode-card { border-style: dashed; border-color: var(--kind-begin); }
+.gnode.kind-goal .gnode-card { border-color: var(--kind-goal); }
+.gnode.kind-hint .gnode-card { border-style: dashed; border-color: var(--kind-hint); }
+.gnode.kind-intent .gnode-card { border-color: var(--kind-intent); }
+.gnode.kind-fact .gnode-card { border-color: var(--kind-fact); }
+.gnode.kind-finding .gnode-card { border-color: var(--kind-finding); }
+.gnode.kind-asset .gnode-card { border-color: var(--kind-asset); }
+.gnode.kind-digest .gnode-card { border-style: dashed; border-color: var(--kind-digest); }
+/* 严重度压过类型色：一条 critical 漏洞的卡必须第一眼就被认出来，那时"它是什么类型"
+   已经退居第二（类型仍在图标块与类型名上写着）。 */
+.gnode.sev-critical .gnode-card { border-color: var(--sev-critical); border-width: 2px; }
+.gnode.sev-high .gnode-card { border-color: var(--sev-high); border-width: 2px; }
+.gnode.sev-medium .gnode-card { border-color: var(--sev-medium); }
+.gnode.sev-low .gnode-card { border-color: var(--sev-low); }
+.gnode.sev-info .gnode-card { border-color: var(--sev-info); }
 .gnode { cursor: pointer; }
-.gnode.hl .gnode-box { stroke-width: 2.4; filter: var(--hl-filter); }
+/* 悬停：连着的卡加一圈光，卡本身抬起来一档阴影——DOM 卡才做得到这件事，
+   旧版靠给描边加粗 + brightness 滤镜，放大之后会糊。 */
+/* 悬停也同理：滤镜落在图标块与类型名上，卡身只加阴影与一圈细边。 */
+.gnode.hl .gnode-card { box-shadow: var(--shadow-2), 0 0 0 2px var(--accent-soft); }
+.gnode.hl .gnode-glyph, .gnode.hl .gnode-kind { filter: var(--hl-filter); }
 .gnode.dim { opacity: .16; }
-/* 选中态与"goal 类型描边"共用 --accent：靠更粗的描边 + 提亮表达"我选中了它"，
-   避免与 kind-goal 的静态描边混淆（.hl 已在用同一个手法） */
-.gnode.selected .gnode-box { stroke: var(--accent); stroke-width: 3.2; filter: var(--hl-filter-strong); }
+/* 选中态与"goal 类型边框"共用 --accent：靠更粗的边框 + 一圈软光环表达"我选中了它"，
+   避免与 kind-goal 的静态边框混淆（.hl 已在用同一个手法）。
+
+   **整卡滤镜不给选中态**：旧版是 SVG 描边，`--hl-filter-strong` 压深只影响线条；
+   现在压的是整张卡（含正文与徽章），亮色主题下那张卡会变成一块深灰——看着像
+   "这张卡被禁用了"，而不是"这张卡被选中了"。滤镜只落在图标块与类型名上（那里
+   正是类型色的所在），正文保持原样。 */
+.gnode.selected .gnode-card { border-color: var(--accent); border-width: 2px; box-shadow: var(--shadow-2), 0 0 0 3px var(--accent-soft); }
+.gnode.selected .gnode-glyph, .gnode.selected .gnode-kind { filter: var(--hl-filter-strong); }
+/* 连向**进行中的意图**的边：虚线往前跑，照 ARTEX 的 `animated: true`。
+ *
+ *  `stroke-dashoffset` 从 0 走到 -12（一段虚线的长度），循环起来就是"在流"。
+ *  `prefers-reduced-motion` 那边已经把 animation-duration 压到 0.001ms，所以
+ *  关掉动效的人看到的是一条静止的虚线——"这一步在跑"这件事仍然读得出来。 */
+.gedge.is-live {
+  stroke-dasharray: 6 6; opacity: .9;
+  animation: gedge-flow 1.2s linear infinite;
+}
+@keyframes gedge-flow { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -12; } }
+/* 卡上的"正在跑"：图标块外一圈呼吸的光环。用 box-shadow 而不是改尺寸，
+   布局不动，也不会把卡里的字挤走。 */
+.gnode-card.is-live .gnode-glyph { animation: gnode-pulse 1.6s ease-in-out infinite; }
+@keyframes gnode-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 0%, transparent); }
+}
 .gedge.hl { opacity: 1; stroke-width: 2.4; }
 .gedge.dim { opacity: .07; }
 .gnode.filtered-out, .gedge.filtered-out { display: none; }
@@ -2099,6 +2203,36 @@ text.gnode-pill-text.gnode-state { fill: var(--pill-fg, var(--text-dim)); font-f
 }
 
 .detail-title { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); flex-wrap: wrap; }
+/* 节点详情抽屉的卡头：一枚类型图标块 + 两行（类型名 / 编号）。
+ *
+ *  形状照 ARTEX 的 NodeDetailSheet —— 左边一个 32px 的圆角色块、右边标题与等宽编号。
+ *  旧版是四颗并排小胶囊（类型/优先级/状态/严重度），字号一样、颜色各异，扫一眼分不出
+ *  哪个才是"它是什么"；结论挪进下面「基本」的四行，卡头只留身份。
+ *
+ *  图标块的颜色来自 .detail-glyph.kind-*（与画布卡片同一组令牌），所以点开一张紫色的
+ *  提示卡，抽屉左上角也是紫色的那一块——两处的颜色是同一句话。 */
+.detail-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.detail-glyph {
+  flex: 0 0 auto; width: 32px; height: 32px; border-radius: var(--r-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, currentColor 18%, transparent); color: var(--muted);
+}
+.detail-glyph.kind-begin { color: var(--kind-begin); }
+.detail-glyph.kind-goal { color: var(--kind-goal); }
+.detail-glyph.kind-hint { color: var(--kind-hint); }
+.detail-glyph.kind-intent { color: var(--kind-intent); }
+.detail-glyph.kind-fact { color: var(--kind-fact); }
+.detail-glyph.kind-finding { color: var(--kind-finding); }
+.detail-glyph.kind-digest { color: var(--kind-digest); }
+.detail-glyph.kind-asset { color: var(--kind-asset); }
+.detail-dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
+.detail-names { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.detail-name { font: 600 var(--fs-body)/1.3 var(--sans); color: var(--text); }
+/* 分节：一个标题 + 一块内容。字段多的时候（一条事实十几个键）靠它把"结论"和"原始
+   记录"分开，而不是让人在一条长列表里自己找界线。 */
+.detail-group { margin-top: var(--sp-3); }
+.detail-group > .detail-section { margin-top: 0; }
+.detail-body { display: flex; flex-direction: column; gap: var(--sp-1); }
 /* 标识符档：11px 等宽 + --text-dim（比 --muted 说明文字亮一档），且单击即整段选中便于抄录 */
 .detail-id { font: var(--fs-caption)/1.6 var(--mono); color: var(--text-dim); word-break: break-all; user-select: all; }
 .detail-badge {
@@ -6275,3 +6409,24 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
    「上一次操作的结论」位，名字跟着这两页走，别人一眼能看出它属于哪一块。 */
 .task-note { margin: var(--sp-2) 0 0; font-size: var(--fs-small); color: var(--text-dim); }
 .task-note.bad { color: var(--sev-critical); }
+/* 分类徽章与归档态：分类是**归属**不是状态，所以用虚线框而不是实色底——一眼能
+   与 `.task-state` 那几颗状态徽章分开，两者常在同一行里并排出现。归档态刻意只降
+   对比度不换色：归档是一条记录的**位置**，不是它的健康度。 */
+.task-cat { font-size: var(--fs-caption); padding: 1px 7px; border-radius: 999px; border: 1px dashed var(--border); color: var(--text-dim); }
+.task-state.state-archived { color: var(--muted); border-style: dashed; }
+/* 详情里那五块（情报 / 覆盖度 / 拦截规则 / 模型 / 意图）各自是一个 `--panel-2` 的
+   小盒：它们回答的是同一层的五个不同问题，用同一种盒子装，切换时视线不用重新定位。
+   块与块之间只隔一条虚线，不加重底色——一层里再套一层实色底会让「哪块是块」变糊。 */
+.task-block { margin-top: var(--sp-2); padding-top: var(--sp-2); border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 6px; }
+.task-block-head { font-size: var(--fs-small); font-weight: 600; color: var(--text); }
+/* 块内的一句话：空态、口径说明、读取失败共用。失败时由调用方带上原因正文，
+   这里不另设 `.bad`——同一块里既有「还没有资产」又有「读取失败」时，颜色区分
+   帮不上忙，倒是把两种灰色并排会让人以为它们同一性质。 */
+.task-block-note { margin: 0; font-size: var(--fs-caption); color: var(--muted); }
+.task-form { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.task-form .input, .task-form .select { min-width: 0; font-family: var(--sans); }
+.task-form-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+/* 一条意图：标题在左、状态与动作在右，窄屏换行。用 grid 的两列是为了让同一块里
+   多条意图的状态词**对齐**——它们参差时最难读的正是「哪条还没跑」。 */
+.task-intent-row { display: grid; grid-template-columns: 1fr auto; gap: 4px var(--sp-2); align-items: center; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.task-intent-row:last-child { border-bottom: 0; }

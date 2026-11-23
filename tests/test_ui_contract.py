@@ -2366,6 +2366,12 @@ class CssLayoutGuardTestCase(unittest.TestCase):
                     ".chat-sessions-goal-name", ".chat-side-block",
                     ".cmd-block", ".dash-row-main", ".data-table td.clip",
                     ".dock-chip .muted", ".dock-chip-fill", ".finding-desc",
+                    #   .gnode-title / .gnode-sub   —— 节点卡上的标题与摘要。**声明式
+                    #                                截断**：标题单行 ellipsis，摘要
+                    #                                line-clamp 三行，完整文字都在卡的
+                    #                                title 里。卡宽是后端布局算的，
+                    #                                不裁就会画到邻居卡上。
+                    ".gnode-sub", ".gnode-title",
                     ".kv-table td.clip",
                     ".panel-head > .doc-name", ".ph-sub",
                     ".rail-user-name", ".rpt-target", ".side-panel", ".target-name",
@@ -4641,36 +4647,42 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         """
         body = self._graph_fn("renderNodes")
 
-        # 左上：类型圆点 + 中文类型名。圆点用 currentColor，颜色由 .gnode.kind-* 喂。
-        self.assertIn("class: 'gnode-dot'", body,
+        # 卡是 **DOM**（装在 <foreignObject> 里），四角的位置改由 CSS 决定；这里只钉
+        # "四样东西都在、都带得上类名"。换成 DOM 卡的理由写在 renderNodes 的注释里：
+        # 卡内排版本该交给排版引擎，而旧版手算的系数（字号 / 行高 / 折行位置）与后端
+        # _text_width 双份维护，改一个像素就要回来对一遍。
+        self.assertIn("'foreignObject'", body,
+                      "节点卡不再装进 foreignObject：DOM 卡是这一版形态的全部意义")
+        # 左上：类型图标块 + 中文类型名。圆点用 currentColor，颜色由 .gnode.kind-* 喂。
+        self.assertIn("'gnode-dot'", body,
                       "节点卡左上角没有类型圆点：整张图只剩文字，颜色不再分区")
-        self.assertIn("class: 'gnode-kind'", body,
+        self.assertIn("'gnode-kind'", body,
                       "节点卡左上角没有类型名")
         self.assertIn("KIND_LABEL[kind]", body,
                       "类型名没走 KIND_LABEL：卡上会露出英文 kind 原文")
 
-        # 右上：优先级胶囊。0 是"没定优先级"，不是"P0"。
+        # 右上：优先级徽章。0 是"没定优先级"，不是"P0"。
         self.assertIn("if (priority > 0)", body,
-                      "优先级胶囊没有 0 的判断：P0 会被画成最低优先级，而它其实是没有")
-        self.assertIn("'gnode-priority'", body, "优先级胶囊丢了类名，样式表上不了色")
+                      "优先级徽章没有 0 的判断：P0 会被画成最低优先级，而它其实是没有")
+        self.assertIn("'gnode-priority'", body, "优先级徽章丢了类名，样式表上不了色")
+        self.assertIn("tone-' + priorityTone(priority)", body,
+                      "优先级徽章没带三档语气的类名：P7 与 P5 看起来一样")
 
-        # 右下：状态胶囊，底与字**两个元素都**要带 state-<值>。
-        self.assertIn("classList.add('gnode-state', 'state-' +", body,
-                      "状态胶囊没带 state-<值>：九档状态会全部共用一种颜色")
-        self.assertIn("pill.forEach(", body,
-                      "状态类只加在胶囊的底或字其中一半上：另一半还是默认色")
+        # 底行：状态徽章。九档状态各自一对颜色，靠 state-<值> 这个类名分发。
+        self.assertIn("'state-' + (node.state || 'active')", body,
+                      "状态徽章没带 state-<值>：九档状态会全部共用一种颜色")
 
-        # 左下：节点 id。它是复制到别处（日志 / 报告）时的抓手。
-        self.assertIn("class: 'gnode-id'", body, "节点卡左下角没有 id")
+        # 右下：节点 id。它是复制到别处（日志 / 报告）时的抓手。
+        self.assertIn("'gnode-id'", body, "节点卡上没有 id")
 
         # 悬浮提示把被截断的四层信息补全。
         self.assertIn(".filter(Boolean).join(", body,
                       "悬浮提示没把四层信息串起来：卡片上的字是截断过的")
 
-        # 老布局的两处遗迹：标题回到 y+24、副标题只有一行。
+        # 摘要交给 CSS 的 line-clamp：前端不再自己按字宽折行。
         self.assertNotIn("box.y + 24", body,
-                         "标题回到了 y+24：那是 64 高旧卡的位置，现在它压着类型徽标")
-        self.assertIn("i < 2", body, "副标题不再折两行：长说明会画到邻居卡上")
+                         "标题回到了 y+24：那是旧 SVG 卡的坐标，DOM 卡里没有这种东西")
+        self.assertIn("'gnode-sub'", body, "摘要没了类名：line-clamp 上不去")
 
     def test_the_width_estimate_is_the_same_on_both_sides(self):
         """估宽系数两边必须一致，否则后端没截、前端溢出去。
@@ -4679,10 +4691,10 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         LABEL_CHARS 截一次，前端再按自己的系数截一次——两套系数差一点，卡片宽度
         与文字宽度就对不上，表现出来是"某个标题画到了隔壁卡上"。
         """
-        body = self._graph_fn("svgTextWidth")
-        self.assertIn("0x2e80", body,
-                      "svgTextWidth 不再按码位判中日韩：中文按 0.55 算会窄掉近一半")
-        self.assertIn("0.55", body, "svgTextWidth 的拉丁系数改了，与后端不同步")
+        # 前端**不再**自己量字宽：卡是 DOM，换行与省略号由排版引擎做。系数只剩后端
+        # 一份（离线 SVG 导出用），两边因此不可能再分叉。
+        self.assertNotIn("function svgTextWidth", self._app,
+                         "前端又开始自己量字宽了：两份系数迟早分叉")
 
         with open(os.path.join(ROOT, "pentestd", "graph.py"), "r", encoding="utf-8") as handle:
             py = handle.read()
@@ -4692,10 +4704,9 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         self.assertIn("0x2E80", backend, "后端的码位阈值改了，前端还是 0x2e80")
         self.assertIn("0.55", backend, "后端的拉丁系数改了，前端还是 0.55")
 
-        # 胶囊必须返回 [rect, text] 两个元素：套一层 g 之后，底色与字色要写后代选择器。
-        pill = self._graph_fn("svgPill")
-        self.assertIn("return [rect, label]", pill,
-                      "svgPill 不再返回两个元素：底与字只能共用一套类名，状态色上不去")
+        # 胶囊那套 svgPill 也一并退役：徽章是 DOM 元素，底色与字色由同一条规则下发。
+        self.assertNotIn("function svgPill", self._app,
+                         "svgPill 又回来了：SVG 胶囊已经换成 DOM 徽章")
 
     def test_every_state_has_its_own_pill_colour(self):
         """九档状态各有各的一对颜色，且两个元素分别取。
@@ -4713,10 +4724,10 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
             self.assertIn("--pill-fg", rule, ".state-%s 少了字色 --pill-fg" % name)
             self.assertIn("--pill-bg", rule, ".state-%s 少了底色 --pill-bg" % name)
 
-        back = self._rule(self._css, "rect.gnode-pill.gnode-state")
-        fore = self._rule(self._css, "text.gnode-pill-text.gnode-state")
-        self.assertIn("var(--pill-bg", back, "胶囊的底没取 --pill-bg")
-        self.assertIn("var(--pill-fg", fore, "胶囊的字没取 --pill-fg")
+        # 底与字现在是**同一个 DOM 元素**的两条属性，同一条规则里下发。
+        badge = self._rule(self._css, ".gnode-state")
+        self.assertIn("var(--pill-bg", badge, "状态徽章的底没取 --pill-bg")
+        self.assertIn("var(--pill-fg", badge, "状态徽章的字没取 --pill-fg")
 
     def test_the_legend_speaks_the_same_vocabulary_as_the_graph(self):
         """图例从源码那两张表生成，不是另抄一份中文。
@@ -4872,13 +4883,16 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         for name in ("red", "amber", "slate"):
             self.assertIn("'%s'" % name, tone, "优先级少了 %s 这一档" % name)
 
-        back = self._rule(self._css, "rect.gnode-pill.gnode-priority")
-        fore = self._rule(self._css, "text.gnode-pill-text.gnode-priority")
-        self.assertIn("var(--prio-slate-bg", back, "优先级胶囊的底没取令牌")
-        self.assertIn("var(--prio-slate-fg", fore, "优先级胶囊的字没取令牌")
+        badge = self._rule(self._css, ".gnode-priority")
+        self.assertIn("var(--prio-slate-bg", badge, "优先级徽章的底没取令牌")
+        self.assertIn("var(--prio-slate-fg", badge, "优先级徽章的字没取令牌")
         for tone_name in ("red", "amber", "slate"):
-            self.assertTrue(self._rule(self._css, "rect.gnode-pill.gnode-priority.tone-%s" % tone_name),
-                            "没有 .tone-%s 的优先级底色：P7 与 P5 看起来一样" % tone_name)
+            rule = self._rule(self._css, ".gnode-priority.tone-%s" % tone_name)
+            self.assertTrue(rule, "没有 .tone-%s 的优先级底色：P7 与 P5 看起来一样" % tone_name)
+            self.assertIn("var(--prio-%s-bg" % tone_name, rule,
+                          "tone-%s 的底没取自己的令牌：三档会退化成同一色" % tone_name)
+            self.assertIn("var(--prio-%s-fg" % tone_name, rule,
+                          "tone-%s 的字没取自己的令牌" % tone_name)
 
     def test_a_collapsed_digest_takes_its_members_off_the_canvas(self):
         """被压缩吸收的记录不再单画，边改挂到那张压缩卡上。

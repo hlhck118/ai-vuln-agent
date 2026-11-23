@@ -789,6 +789,11 @@
              （`test_the_legend_speaks_the_same_vocabulary_as_the_graph` 会逐字比对）——
              图例说谎比没有图例更糟。
 
+             形状照 ARTEX 的 `<Panel position="top-left">`：类型是**彩色小方块 + 名字**，
+             关系是**一段 16px 的色条**，两组之间一条细线分开。圆点换成方块，是因为
+             卡片左上角那个类型图标就是方块——图例与卡片用同一个形状，读者不必在
+             两套符号之间翻译一次。
+
              只有四条关系：`covers` 与 `parent` 在画布上不画。它们读的是「归属」
              而不是「这条链往哪走」，画出来会把一条链变成一张网；那两条边仍在布局
              与右侧详情里，想知道某条压缩吸收了谁，点开它就行。
@@ -824,12 +829,22 @@
                 title="把视角重新适配到新布局（缩放与平移会重置）">链路已更新 · 点这里适应窗口</button>
         <!-- 画布左下角的悬浮缩放：手指在图上，控件就该在手边。按钮是 `+ / − / ⛶`，
              与页头时代同一套 id——`bindGraphEvents` 与 `applyTransform` 都不必改。
-             读数跟在按钮下方，它报的是**当前**缩放（`applyTransform` 每次都写它）。 -->
+             读数跟在按钮下方，它报的是**当前**缩放（`applyTransform` 每次都写它）。
+             这一列的形状照 ARTEX 的 `<Controls showInteractive={false}>`：竖排、细边、
+             悬浮在图上，互不抢位。 -->
         <div class="graph-zoom">
           <button id="zoom-in" class="gzoom-btn" type="button" title="放大" aria-label="放大">+</button>
           <button id="zoom-out" class="gzoom-btn" type="button" title="缩小" aria-label="缩小">−</button>
           <button id="zoom-fit" class="gzoom-btn" type="button" title="适应窗口" aria-label="适应窗口">⛶</button>
           <span class="zoom-level" id="zoom-level">600%</span>
+        </div>
+        <!-- 画布右下角的缩略图（照 ARTEX 的 `<MiniMap>`）：整张布局压成一张小图，
+             一个矩形框出「现在看的是哪一块」。它只读——点它不跳转，因为这一页的
+             视角是「工作位置」，误触一下就把人从正在读的那一列甩开。
+             图由 `renderMinimap` 在每次重画后同步，不含交互逻辑。 -->
+        <div class="graph-minimap" id="graph-minimap" aria-hidden="true">
+          <svg class="minimap-svg" id="minimap-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+          <span class="minimap-window" id="minimap-window"></span>
         </div>
       </div>
 

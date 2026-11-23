@@ -84,24 +84,14 @@ PROBE = r"""
       // 夹具里会有多个 engagement（每次下发任务建一个），而下拉框默认停在
       // `list[0]`——它未必是最有内容的那个：夹具跑的三次任务里有一次没执行过，
       // 那个 engagement 只有一个 goal 节点。所以先扫一遍，挑节点最多的那个。
-      var sel = document.getElementById('engagement-select');
-      var options = Array.prototype.map.call(sel.options, function (o) { return o.value; })
-        .filter(Boolean);
-      var best = 0, bestCount = -1;
-      for (var i = 0; i < options.length; i++) {
-        sel.value = options[i];
-        sel.dispatchEvent(new Event('change'));
-        await sleep(420);
-        var count = document.querySelectorAll('#graph-svg .gnode').length;
-        if (count > bestCount) { bestCount = count; best = i; }
-      }
-      if (options.length > 1) {
-        sel.value = options[best];
-        sel.dispatchEvent(new Event('change'));
-        await sleep(420);
-      }
-      out.engagements = options.length;
-      out.richestOption = options[best] || '';
+      // 顶栏那个 `#engagement-select` 已经撤掉（选择搬进了「会话」侧边栏），现在
+      // 取「最多节点」的方式是切到**全部目标**：那正是合并视图，节点最全。
+      // 原来那段扫下拉框的代码留着只会抛 `Cannot read properties of null`，
+      // 于是探针永远判 PROBE_THREW——一条永远红的探针等于没有探针。
+      var scopeAll = document.getElementById('graph-scope-all');
+      if (scopeAll) { scopeAll.click(); await sleep(600); }
+      out.scope = scopeAll ? 'all' : 'single';
+      out.engagements = document.querySelectorAll('#graph-svg .gnode').length;
 
       var ids = Array.prototype.map.call(
         document.querySelectorAll('#graph-svg .gnode'),

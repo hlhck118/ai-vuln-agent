@@ -304,7 +304,7 @@ const state = {
   // 上一次算初始缩放时**画布量到尺寸了没有**。0×0 的画布算出来的那个值不可信
   // （见 `BASE_SCALE` 那段），所以第一次量到尺寸时要再算一次——用状态记着它做过，
   // 而不是每次渲染都重算（那会把使用者刚调好的缩放丢掉）。
-  graphScaleMeasured: false,
+  graphScaleMeasured: false, graphMeasureRetry: 0, graphMeasureRect: null,
   nodeIndex: new Map(),                            // id → { kind, raw }，详情面板据此展示全部字段
   findings: [], findingGroups: [], assets: [], markdown: '',
   // 漏洞页的范围：空串 = 「全部目标」（跨目标分组看板），否则就是某个目标的 id。
@@ -390,7 +390,7 @@ const graphView = { scale: 1, tx: 0, ty: 0, ceiling: BASE_SCALE * BASE_HEADROOM,
 // `nodeItems` 与 `edgeItems` 对称：过滤与高亮都靠它遍历，不必每次回 DOM 里
 // 用 `.gnode` 现查——那张图在真实数据上是 350 多个节点，一帧里查三遍够呛。
 // `boxes` 是最近一次渲染的节点框（含 w/h），拖卡时重画边要按它算几何。
-const graphIndex = { edgeItems: [], nodeItems: [], neighbors: new Map(), boxes: null };
+const graphIndex = { edgeItems: [], nodeItems: [], neighbors: new Map(), boxes: null, liveIds: null, minimapWindow: null, minimapSize: null };
 
 /* ------------------------------------------------- 5. 错误条与状态栏 ---- */
 let errorTimer = null;
@@ -843,6 +843,9 @@ function renderEdges(layer, layoutEdges, boxes) {
     const tip = svgEl("title"), text = svgEl("text", {
       class: "gedge-label", "data-kind": kind, x: geo.mx, y: geo.my - 4, "text-anchor": "middle",
     });
+    // 连向**进行中的意图**的边：虚线流动，照 ARTEX 的 `animated: liveTargets.has(dst)`。
+    // 它回答的是「这一步正在跑」，而那是一张链路图里唯一会变的读数。
+    if (graphIndex.liveIds && graphIndex.liveIds.has(edge.target)) path.classList.add('is-live');
     tip.textContent = (EDGE_LABEL[edge.kind] || edge.kind || "关系") + "：" + edge.source + " → " + edge.target;
     text.textContent = edge.label || EDGE_LABEL[edge.kind] || edge.kind;
     path.append(tip);
@@ -850,45 +853,25 @@ function renderEdges(layer, layoutEdges, boxes) {
     graphIndex.edgeItems.push({ node: path, label: text, source: edge.source, target: edge.target });
   });
 }
-/** SVG 里没有布局引擎：`<text>` 不会自动换行、不会自动裁剪，写多长就画多长。
- *  所以每处文字都要先估宽再截断——估宽按"中日韩字符算一个字号宽、其余算 0.55"，
- *  与 `pentestd/graph.py` 的 `_text_width` 同一套系数（两边差一点就会出现"后端没截、
- *  前端溢出去"的错位）。
+/** 估宽只剩后端一处：`pentestd/graph.py::_text_width`（离线 `render_svg` 用它排版）。
+ *
+ *  画布上的卡已经是 **DOM**（装在 `<foreignObject>` 里），换行、三行截断、省略号
+ *  全交给浏览器的排版引擎，前端不必再自己量一遍字宽——原来那套 `svgTextWidth` /
+ *  `svgPill` 因此退役：两份系数只要有一天不同步，就会出现"后端没截、前端溢出去"。
  */
-function svgTextWidth(text, size) {
-  let width = 0;
-  for (const ch of String(text || '')) width += ch.codePointAt(0) > 0x2e80 ? size : size * 0.55;
-  return width;
-}
-/** 右对齐小胶囊（优先级 / 状态）。`right` 是右边界，`top` 是上边界。
+/** 画节点：一张卡照 ARTEX 的 Dify 卡排。
  *
- *  返回值是 `[rect, text]` 两个元素而不是一个 `<g>`：胶囊的底与字各自要不同的
- *  类名才能在样式表里分别上色（底色跟状态走、字色也要跟），套一层 `<g>` 之后
- *  选择器就得多写一层后代组合，读的人得先在脑里展开那棵树。
- */
-function svgPill(right, top, text, size, className) {
-  const padX = 6, height = 15;
-  const width = Math.ceil(svgTextWidth(text, size) + padX * 2);
-  const rect = svgEl('rect', {
-    class: 'gnode-pill', x: right - width, y: top, width, height, rx: String(height / 2),
-  });
-  const label = svgEl('text', {
-    class: 'gnode-pill-text', x: right - width / 2, y: top + 11, 'text-anchor': 'middle',
-  });
-  if (className) { rect.classList.add(className); label.classList.add(className); }
-  label.textContent = text;
-  return [rect, label];
-}
-/** 画节点：一张卡按 ARTEX 的三行排。
+ *  卡是**真的 DOM**：装在 `<foreignObject>` 里，圆角、阴影、三行截断、悬停抬升
+ *  全交给浏览器的排版引擎。这是本轮最大的一处替换——原来那张卡是十几支
+ *  `<rect>` / `<text>` 拼的，字号、行高、胶囊宽度全要自己算，改一个像素就得回来
+ *  调一遍系数。换成 DOM 之后，卡内布局与页面其它地方是同一套 CSS。
  *
- *  第一行是**这是什么**——彩色图标块 + 中文类型名，右端挂优先级（`P3`；0 是「没定级」，
- *  不是「P0」，所以不画）。第二行是**说了什么**——标题一行、说明两行，多的截断，
- *  全文留在悬浮提示里。第三行是**走到哪一步**——左端状态胶囊，右端节点 id。
+ *  `foreignObject` 与 `<g>` 在同一个坐标系里，`#graph-viewport` 上的缩放平移照样
+ *  作用在它身上，所以 `applyTransform` / `fitScale` / `zoomAt` 一行没改。
  *
- *  为什么不是四角布局：优先级与状态原先各占右上、右下两个角，中间被标题与副标题
- *  横穿，扫读时眼睛要走 Z 字。三行之后每一行只说一件事，从上往下读两遍就够。
- *
- *  颜色只在图标块、类型名与两颗胶囊上，卡身保持中性——七种类型各有全套配色，
+ *  三行：**这是什么**（图标块 + 类型名 + 右上优先级）、**说了什么**（标题一行 +
+ *  摘要三行，多的截断、全文在悬浮提示里）、**走到哪一步**（状态徽章 + 编号）。
+ *  颜色只落在图标块、类型名与两颗小徽章上，卡身保持中性——七种类型各有全套配色，
  *  卡身也上色的话整张图就成了一片互不相让的色块。
  */
 function renderNodes(layer, nodes, boxes) {
@@ -897,67 +880,49 @@ function renderNodes(layer, nodes, boxes) {
     const box = boxes.get(node.id), kind = displayKindOf(node);
     const group = svgEl('g', { class: 'gnode kind-' + kind, 'data-id': node.id, 'data-kind': kind });
     if (node.severity) group.classList.add('sev-' + severityOf(node.severity));
-    const tip = svgEl('title');
-    const parts = [
-      svgEl('rect', { class: 'gnode-box', x: box.x, y: box.y, width: box.w, height: box.h, rx: '10' }),
-      // 第一行左端：图标块 + 圆点 + 中文类型名。图标块是 `currentColor` 的淡底
-      // （`.gnode-icon`）、圆点是实的 `currentColor`，颜色由 `.gnode.kind-*` 写在
-      // `<g>` 上的 `color` 决定——一处声明同时喂给图标、圆点、类型名与胶囊。
-      svgEl('rect', { class: 'gnode-icon', x: box.x + 12, y: box.y + 11, width: 16, height: 16, rx: '4' }),
-      svgEl('circle', { class: 'gnode-dot', cx: box.x + 20, cy: box.y + 19, r: '3.2' }),
-    ];
-    const kindName = svgEl('text', { class: 'gnode-kind', x: box.x + 35, y: box.y + 23 });
-    kindName.textContent = KIND_LABEL[kind] || kind;
-    parts.push(kindName);
-    // 第一行右端：优先级。0 是「没定级」而不是「最低优先级」，所以不画 P0。
-    // 三档色（red / amber / slate）照 ARTEX 的 prioTone：8 以上是红灯，5 以上是黄灯。
     const priority = Number(node.priority) || 0;
-    if (priority > 0) {
-      const tone = priorityTone(priority);
-      const pill = svgPill(box.x + box.w - 12, box.y + 9, 'P' + priority, 9, 'gnode-priority');
-      pill.forEach((piece) => piece.classList.add('tone-' + tone));
-      parts.push(...pill);
-    }
-    // 第二行：标题。它承担「这条记录一句话说完了吗」，所以比副标题重一档。
-    const label = svgEl('text', { class: 'gnode-label', x: box.x + 12, y: box.y + 50 });
-    label.textContent = truncate(node.label || node.id, Math.max(8, Math.floor((box.w - 24) / 12)));
-    parts.push(label);
-    // 说明按框宽折成两行（ARTEX 的正文是 line-clamp-3，本地标题占掉第一行，所以剩下两行）：
-    // 单行放不下时截断，而不是让它画到邻居卡上。
-    const perLine = Math.max(8, Math.floor((box.w - 24) / 11));
-    const subtitle = truncate(node.subtitle || '', perLine * 2);
-    for (let i = 0; i < 2; i += 1) {
-      const chunk = subtitle.slice(i * perLine, (i + 1) * perLine);
-      if (!chunk) break;
-      const lineText = svgEl('text', { class: 'gnode-sub', x: box.x + 12, y: box.y + 68 + i * 15 });
-      lineText.textContent = chunk;
-      parts.push(lineText);
-    }
-    // 第三行左端：状态胶囊。没有状态就不画——空胶囊会读成"状态缺失"，那是另一个意思。
-    // 它左对齐（`svgPill` 收的是右边界，所以先按字宽算出右边界），id 靠右，两个读数
-    // 分占两端：中间空出来的是拖动画布的地方，压在卡上的手势不该被文字挡掉。
     const stateText = node.stateLabel || STATE_LABEL[node.state] || '';
-    if (stateText) {
-      const pillWidth = Math.ceil(svgTextWidth(stateText, 9) + 12);
-      const pill = svgPill(box.x + 12 + pillWidth, box.y + box.h - 24, stateText, 9);
-      pill.forEach((piece) => piece.classList.add('gnode-state', 'state-' + (node.state || 'active')));
-      parts.push(...pill);
+    // 进行中的意图：卡上挂一颗呼吸的圆点，连向它的边走流动虚线（照 ARTEX 的 animated）。
+    const live = kind === 'intent' && node.state === 'active';
+    const card = el('div', 'gnode-card' + (live ? ' is-live' : ''));
+    const head = el('div', 'gnode-head');
+    const glyph = el('span', 'gnode-glyph');
+    glyph.append(el('span', 'gnode-dot'));
+    head.append(glyph, el('span', 'gnode-kind', KIND_LABEL[kind] || kind));
+    // 右上：优先级。0 是「没定级」而不是「最低优先级」，所以不画 P0。
+    // 三档色（red / amber / slate）照 ARTEX 的 prioTone：8 以上是红灯，5 以上是黄灯。
+    if (priority > 0) {
+      const chip = el('span', 'gnode-priority', 'P' + priority);
+      chip.classList.add('tone-' + priorityTone(priority));
+      head.append(chip);
     }
-    const idText = svgEl('text', {
-      class: 'gnode-id', x: box.x + box.w - 12, y: box.y + box.h - 13, 'text-anchor': 'end',
-    });
-    idText.textContent = '#' + node.id;
-    parts.push(idText);
-    // 悬浮提示把被截断的内容补全：卡片上的字是截断过的，这里是完整的。
-    tip.textContent = [
+    card.append(head);
+    const text = el('div', 'gnode-body');
+    text.append(el('div', 'gnode-title', node.label || node.id));
+    if (node.subtitle) text.append(el('div', 'gnode-sub', node.subtitle));
+    card.append(text);
+    const foot = el('div', 'gnode-foot');
+    // 没有状态就不画徽章——空徽章会读成"状态缺失"，那是另一个意思。
+    if (stateText) {
+      const badge = el('span', 'gnode-state', stateText);
+      badge.classList.add('state-' + (node.state || 'active'));
+      foot.append(badge);
+    }
+    foot.append(el('span', 'gnode-id', '#' + node.id));
+    card.append(foot);
+    // 悬浮提示把被截断的内容补全：卡上是三行截断，这里是完整的。
+    card.title = [
       (KIND_LABEL[kind] || kind) + '｜' + (node.label || node.id), node.subtitle || '',
       stateText, priority > 0 ? 'P' + priority : '', node.id,
     ].filter(Boolean).join('\n');
-    parts.push(tip);
+    const frame = svgEl('foreignObject', {
+      class: 'gnode-frame', x: box.x, y: box.y, width: box.w, height: box.h,
+    });
+    frame.append(card);
+    group.append(frame);
     // 拖开的卡整组平移（`transform` 只作用于这一组，布局本身不动）。
     const pin = pinOffset(node.id);
     if (pin.dx || pin.dy) group.setAttribute("transform", "translate(" + pin.dx + " " + pin.dy + ")");
-    group.append(...parts);
     layer.append(group);
     graphIndex.nodeItems.push({ node: group, id: node.id, kind });
   });
@@ -995,9 +960,10 @@ function renderGraph() {
   const defs = svgEl('defs');                             // 每种关系一个箭头，颜色与边一致
   EDGE_KINDS.forEach((kind) => {
     const marker = svgEl('marker', {
-      // 箭头尺寸与离线 SVG（`pentestd/graph.py::render_svg`）一致：7×7、refX 9；
-      // 画布上放大到 600% 时箭头随之变大，所以这里只需要"同一比例"，不必猜屏幕像素。
-      id: `arrow-${kind}`, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7',
+      // 箭头 14×14（viewBox 0 0 10 10 里的三角形铺满 10 单位），照 ARTEX 的
+      // `MarkerType.ArrowClosed, width: 14, height: 14`；refX 9 让箭尖正好落在线的端点上。
+      // 画布默认落在 600%，14 单位在屏幕上约 84px 的卡旁边是相称的。
+      id: `arrow-${kind}`, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '14', markerHeight: '14',
       orient: 'auto-start-reverse',
     });
     marker.append(svgEl('path', { class: 'garrow', 'data-kind': kind, d: 'M 0 0 L 10 5 L 0 10 z' }));
@@ -1015,8 +981,15 @@ function renderGraph() {
   Array.from(graphView.pins.keys()).forEach((id) => { if (!boxes.has(id)) graphView.pins.delete(id); });
   viewport.append(edgeLayer, nodeLayer);
   svg.append(defs, viewport);
+  // 进行中的意图：边与卡都要知道这一批里谁在跑，所以先算一次集合，
+  // 两个渲染函数各自去查（不必互相传参，也不会各自算一份而分歧）。
+  graphIndex.liveIds = new Set();
+  view.nodes.forEach((node) => {
+    if (displayKindOf(node) === 'intent' && (node.state || 'active') === 'active') graphIndex.liveIds.add(node.id);
+  });
   renderEdges(edgeLayer, view.edges, boxes);
   renderNodes(nodeLayer, view.nodes, boxes);
+  renderMinimap(view.nodes, boxes, width, height);
   buildNeighborIndex();
   applyKindFilter();
   // **视图与选中项一律跨重画保留**，只在"画布还没量到尺寸"时摆正一次。
@@ -1047,8 +1020,10 @@ function renderGraph() {
     graphView.tx = 0;
     graphView.ty = 0;
     graphView.touched = false;
+    alignViewToStart(boxes);
   } else if (layoutChanged && !graphView.touched) {
     graphView.scale = clamp(initial, MIN_SCALE, graphView.ceiling);
+    alignViewToStart(boxes);
   }
   state.graphLayoutKey = layoutKey;
   setGraphStale(layoutChanged && graphView.touched);
@@ -1060,6 +1035,90 @@ function renderGraph() {
     if (current) { current.classList.add('selected'); renderNodeDetail(state.selectedNodeId); }
     else { state.selectedNodeId = null; renderNodeDetail(null); }
   }
+  // 这一次没量到画布（页签还没露出来、分栏还没排完），上面算出的缩放与摆正都不可信。
+  // 不能等「画布尺寸变化」来救：`ResizeObserver` 只在**尺寸真的变了**时回调，而这里
+  // 的典型情形是画布一上来就有尺寸、只是那一刻 `state.graphLoaded` 还是假——首次回调
+  // 撞在数据到达之前，之后再也不响。所以自己排一次下一帧的重试（带上限，避免在
+  // 永远看不到这一页的情形下空转）。
+  if (!state.graphScaleMeasured) retryMeasureGraph();
+}
+/** 缩略图：整张布局压成一张小图，节点画成小方块。
+ *
+ *  为什么要有：布局按列铺开，合并视图实测 1820 x 7974 用户单位；放大到 600% 之后
+ *  视野只覆盖其中一小块，而这一页的读法是「顺着一条链往下走」——没有这张索引卡，
+ *  走三步就不知道自己在整张图的哪个位置了。
+ *
+ *  只读，不绑定点击：这一页的视角是**工作位置**，误触一下会把人从正在读的那一列
+ *  甩开；要看别处，滚轮与拖动本来就在手边（与 ARTEX 的 MiniMap 不同，那里能点——
+ *  但那边没有「拖动卡片」这件事，误触的代价也小）。
+ *
+ *  节点按类型上色（令牌与卡片图标同源），不写字：180px 宽的缩略图上，文字只会
+ *  糊成一片噪点。比例取 `min` 而不是各算各的，缩略图不拉伸布局的形状。
+ */
+function renderMinimap(nodes, boxes, width, height) {
+  const svg = $('#minimap-svg');
+  if (!svg) return;
+  clear(svg);
+  if (!nodes.length || !width || !height) { graphIndex.minimapSize = null; return; }
+  // 只写 viewBox，不自己算缩放：缩略图的实际像素尺寸由 CSS 决定（那张 180x120 的卡
+  // 去掉 4px 白边），比例交给 `preserveAspectRatio="xMidYMid meet"` 去等比重排。
+  // 这里算一份是没用的——量不到真实尺寸，且窗口矩形的参照系必须与 svg 完全同一。
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  // 缩略图上的卡按布局框等比缩小（`rx: 6` 是用户坐标里的圆角，缩到 1/40 之后
+  // 仍是圆角小方块），这个尺度上它既不会糊成一片，也不会把密集处连成实心色块。
+  nodes.forEach((node) => {
+    const box = boxes.get(node.id);
+    if (!box) return;
+    const dot = svgEl('rect', {
+      class: 'minimap-node kind-' + displayKindOf(node),
+      x: box.x, y: box.y, width: box.w, height: box.h, rx: '6',
+    });
+    svg.append(dot);
+  });
+  graphIndex.minimapSize = { width, height };
+}
+/** 「现在看的是这一块」：把 `graphView` 的平移缩放换算成缩略图上的一个矩形。
+ *
+ *  视野在**用户坐标**里的范围：屏幕左上角对应的用户点，以及它的宽高除以缩放。
+ *  屏幕尺寸从画布量——缩略图只是它的索引，不该自己猜画布多大。
+ *
+ *  每次 `applyTransform` 之后跟着跑一次（缩放平移是唯一改变它的动作）。量不到画布
+ *  （页签还没露出来）时把框藏起来，而不是留一个错位的矩形。
+ */
+function syncMinimapWindow() {
+  const mask = $('#minimap-window'), canvas = $('#graph-canvas'), svg = $('#minimap-svg');
+  const main = $('#graph-svg');
+  const size = graphIndex.minimapSize;
+  if (!mask) return;
+  const host = mask.parentElement;
+  const cRect = canvas ? canvas.getBoundingClientRect() : null;
+  const sRect = svg ? svg.getBoundingClientRect() : null;
+  const hRect = host ? host.getBoundingClientRect() : null;
+  const gRect = main ? main.getBoundingClientRect() : null;
+  // 页签没露出来时三者都量到 0：此时把框藏起来，而不是留一个错位的矩形。
+  if (!size || !cRect || !sRect || !hRect) { mask.classList.add('hidden'); return; }
+  if (!cRect.width || !cRect.height || !sRect.width || !sRect.height) { mask.classList.add('hidden'); return; }
+  mask.classList.remove('hidden');
+  // 缩略图把整张布局等比塞进 svg（xMidYMid meet）：先取缩比，再算居中留白。
+  const fit = Math.min(sRect.width / size.width, sRect.height / size.height);
+  const ox = sRect.left - hRect.left + (sRect.width - size.width * fit) / 2;
+  const oy = sRect.top - hRect.top + (sRect.height - size.height * fit) / 2;
+  // **还有一层**：`#graph-svg` 的 viewBox 是整张布局、`preserveAspectRatio="xMinYMin
+  // meet"`，所以浏览器先把用户坐标等比缩到元素框里（缩放系数 base），`graphView` 的
+  // 缩放平移是在这之上再叠一次。只按 `graphView.scale` 换算会漏掉 base，视野框会小
+  // 掉一个 base（实测 0.4 左右，框只有真实视野的四成，看着像「只圈住了一块」）。
+  const base = gRect && size.width && size.height
+    ? Math.min(gRect.width / size.width, gRect.height / size.height) : 0;
+  if (!base) { mask.classList.add('hidden'); return; }
+  // 视野在用户坐标里的左上角与尺寸：屏幕像素 = (用户坐标 * 缩放 + 平移) * base，
+  // 所以屏幕左上角对应的用户点是 -tx/scale，宽度是画布像素 ÷ (缩放 * base)。
+  const left = -graphView.tx / graphView.scale, top = -graphView.ty / graphView.scale;
+  const viewW = cRect.width / (graphView.scale * base), viewH = cRect.height / (graphView.scale * base);
+  mask.style.left = `${ox + left * fit}px`;
+  mask.style.top = `${oy + top * fit}px`;
+  mask.style.width = `${viewW * fit}px`;
+  mask.style.height = `${viewH * fit}px`;
 }
 /** 邻接索引：供 hover 高亮使用。 */
 function buildNeighborIndex() {
@@ -1113,6 +1172,10 @@ function applyTransform() {
   const viewport = $('#graph-viewport');
   if (!viewport) return;
   viewport.setAttribute('transform', `translate(${graphView.tx} ${graphView.ty}) scale(${graphView.scale})`);
+  // 缩略图上的视野框**必须在下面那个提前返回之前**同步：平移不改变缩放读数，
+  // 而「只平移、不缩放」正是这一页最常见的动作（拖动找位置）。写在返回之后的话，
+  // 框只会在缩放变化时动，拖动时原地不动——看着像框坏了。
+  syncMinimapWindow();
   const text = Math.round(graphView.scale * 100) + '%';
   if (graphView.zoomText === text) return;
   graphView.zoomText = text;
@@ -1186,6 +1249,47 @@ function resetView() {
   graphView.touched = false;
   applyTransform();
 }
+/** 首次摆正：把视图的左上角对到布局内容的左上角。
+ *
+ *  为什么不能只管 `tx = ty = 0`：单位变换下的原点是**布局的**原点，而卡片不在原点
+ *  上——`MARGIN` 让每列都从 40 起画，同一层的卡片又按列居中排（`build_layout` 的
+ *  `offset`），于是最上面那张卡可能离原点几百个用户单位。600% 下视野只有
+ *  300 来个用户单位宽，对着原点看就是**一片空画布**：图已经画好了，只是没在框里。
+ *
+ *  量不到画布（页签还没露出来）时什么都不做，等 `state.graphScaleMeasured` 那次
+ *  重算再来摆——两次都算一遍比"猜一个值"便宜。
+ */
+function alignViewToStart(boxes) {
+  const canvas = $('#graph-canvas');
+  if (!canvas || !boxes || !boxes.size) return;
+  const rect = canvas.getBoundingClientRect();
+  const fit = fitScale();
+  if (!rect.width || !rect.height || !fit) return;
+  // 对齐的是**第一列的顶卡**，不是「所有卡的最小 x」配「所有卡的最小 y」。
+  // 那两个最小值常常来自不同节点：布局按列居中（`build_layout` 的 `offset`），
+  // 最高的一列从 `MARGIN` 起画、最短的一列要从几百往下，而第一列（目标）恰恰
+  // 可能是最短的那一列。取 (minX, minY) 这个角就落在**空格**上——图已经画好，
+  // 视角却对着第一列上方的空白，看到的还是一片网格。实测（32 节点的合并视图）：
+  // minX=40 来自目标列、minY=40 来自事实列，摆正后视野里一张卡都没有。
+  // 读图顺序是从左往右，所以先定列（最小 x），再在这一列里取最上面那张。
+  let minX = Infinity;
+  boxes.forEach((box) => { minX = Math.min(minX, box.x); });
+  let minY = Infinity;
+  boxes.forEach((box) => {
+    if (Math.abs(box.x - minX) < 1) minY = Math.min(minY, box.y);
+  });
+  if (!isFinite(minX) || !isFinite(minY)) return;
+  // `pad` 是**屏幕**像素：换回用户单位要除以适配比例（`translate` 在 `scale` 之前，
+  // 所以平移量本身就是用户单位，与 `zoomAt` 那套锚点公式同一个坐标系）。
+  // 上边距还要让开左上角那块图例：它与卡是同一层浮层，压在卡上就是「读数被挡住了」。
+  // 图例的高度按它自己的 rect 量，量不到（被 CSS 藏了）就退回一个空白边距。
+  const padX = 16, padY = 16;
+  const legend = $('.graph-legend');
+  const legendBox = legend ? legend.getBoundingClientRect() : null;
+  const cleared = legendBox && legendBox.height > 0 ? legendBox.bottom - rect.top + 8 : padY;
+  graphView.tx = padX / fit - minX * graphView.scale;
+  graphView.ty = Math.max(padY, cleared) / fit - minY * graphView.scale;
+}
 /** 画布相对整图的适配比例。viewBox 即整图，所以它就是单位变换下的等效缩放。 */
 function fitScale() {
   const svg = $('#graph-svg'), canvas = $('#graph-canvas');
@@ -1194,6 +1298,45 @@ function fitScale() {
   const rect = canvas.getBoundingClientRect();
   if (!width || !height || !rect.width || !rect.height) return 0;
   return Math.min(rect.width / width, rect.height / height);
+}
+/** 下一帧再量一次画布，量到了就重画一遍（只为把视角摆正）。
+ *
+ *  为什么需要它：`init()` 无条件取一次链路，而那一刻页签可能还没露出来，
+ *  `#graph-canvas` 的 rect 是 0x0 → `fitScale()` 返回 0 → `initialGraphScale()` 退回基准
+ *  600%，`alignViewToStart()` 也算不出该往哪挪。落点于是是**布局原点的左上角**，
+ *  而卡片从 `MARGIN` 起画、同层还按列居中，画面上就是一片空网格——看着像没数据。
+ *
+ *  光靠 `ResizeObserver` 补不上：它只在**尺寸变化**时回调，而这里多数情形是画布一上来
+ *  就有尺寸（页签是默认页、分栏还没动），变化的只是数据到达的那一刻。所以按帧重试，
+ *  量到就停；`MAX_MEASURE_RETRY` 帧还没量到就放弃（有人把窗口缩到看不见、或者干脆
+ *  不是这一页），不在后台空转。
+ */
+const MAX_MEASURE_RETRY = 60;
+function retryMeasureGraph() {
+  if (state.graphScaleMeasured) return;
+  if (state.graphMeasureRetry >= MAX_MEASURE_RETRY) return;
+  state.graphMeasureRetry += 1;
+  const canvas = $('#graph-canvas');
+  const again = () => {
+    if (state.graphScaleMeasured) return;
+    const rect = canvas ? canvas.getBoundingClientRect() : null;
+    const w = rect ? Math.round(rect.width) : 0, h = rect ? Math.round(rect.height) : 0;
+    // 量到**稳定**的尺寸再落定，不是量到非零就落定。首帧的 rect 常常是过渡值
+    // （侧栏还在收、分栏还没排、字体还没换），拿它算出的适配比例会偏小一个数量级，
+    // 于是 `initialGraphScale()` 给出一个过大的缩放——而画布随后长到正常尺寸时，
+    // 那个缩放就只剩**几十分之一的图**在视野里，看起来还是一片空网格。
+    // 所以要求连续两帧同一个尺寸：布局定下来之后它才为真。
+    const last = state.graphMeasureRect;
+    state.graphMeasureRect = { width: w, height: h };
+    if (!w || !h || !last || last.width !== w || last.height !== h) { retryMeasureGraph(); return; }
+    renderGraph();                   // 这一趟里 `measurable` 为真，视角与摆正都会落定
+  };
+  // 两条路都排上：`requestAnimationFrame` 让真实浏览器在**下一帧之前**就摆正（看不到
+  // 那一帧空网格）；`setTimeout` 是兜底——无头浏览器的虚拟时钟下 rAF 不一定会响，
+  // 而只靠 rAF 的那种写法在截图上就是「永远停在空网格」。`again` 自己是幂等的
+  // （`state.graphScaleMeasured` 一置真，两条路都立刻返回）。
+  if (window.requestAnimationFrame) window.requestAnimationFrame(again);
+  window.setTimeout(again, 80);
 }
 /** 新图载入时的缩放：**不低于 600% 这个基准**，放不下时取"可读"那一档。
  *
@@ -1249,6 +1392,17 @@ function kvList(raw) {
   });
   return list;
 }
+/** 详情抽屉的一节：一个标题 + 一块内容。
+ *
+ *  分节是 ARTEX 那个 Sheet 的形状：卡头说「这是什么」，往下依次是基本、原始字段、
+ *  压缩成员、关联边。旧版把标题、原始字段、关联边直接摊在同一列里，靠留白分界，
+ *  字段一多（一条 fact 有十几个键）就分不清哪一行还算「结论」。
+ */
+function detailGroup(title, node) {
+  const group = el('section', 'detail-group');
+  group.append(el('div', 'detail-section', title), node);
+  return group;
+}
 /** 详情面板：该节点的全部原始字段 + 关联边。 */
 function renderNodeDetail(id) {
   const body = $('#node-detail-body'), entry = id ? state.nodeIndex.get(id) : null;
@@ -1262,14 +1416,30 @@ function renderNodeDetail(id) {
   const layoutNode = asArray(state.graph && state.graph.layout && state.graph.layout.nodes)
     .find((node) => node.id === id);
   const kind = displayKindOf(layoutNode || { kind: entry.kind });
-  const sev = entry.raw.severity ? severityOf(entry.raw.severity) : null, head = el('div', 'detail-title');
-  head.append(el('span', 'detail-badge', KIND_LABEL[kind] || kind));
-  // 优先级也贴一颗：卡片上它只是个小胶囊，点开之后要能看到那条记录凭什么排在这。
-  if (Number(entry.raw.priority) > 0) head.append(el('span', 'detail-badge', 'P' + Number(entry.raw.priority)));
-  if (entry.raw.state) head.append(el('span', 'detail-badge', STATE_LABEL[entry.raw.state] || entry.raw.state));
-  if (sev) head.append(el('span', `sev-badge sev-${sev}`, SEVERITY_LABEL[sev]));
-  head.append(el('span', 'detail-id', id));
-  body.append(head, kvList(entry.raw));
+  const sev = entry.raw.severity ? severityOf(entry.raw.severity) : null;
+  // 卡头：图标块与卡片左上角那枚同源（由 kind-* 上色），右边两行——类型名与编号。
+  // 旧版把类型/优先级/状态/严重度做成四颗并排的小胶囊，字号一样、颜色各异，扫一眼
+  // 分不出哪个是"它是什么"；换成卡头之后，结论部分归到下面「基本」的四行里。
+  const head = el('div', 'detail-head');
+  const glyph = el('span', 'detail-glyph');
+  glyph.classList.add('kind-' + kind);
+  glyph.append(el('span', 'detail-dot'));
+  const names = el('div', 'detail-names');
+  names.append(el('div', 'detail-name', KIND_LABEL[kind] || kind), el('div', 'detail-id', id));
+  head.append(glyph, names);
+  body.append(head);
+  // 「基本」：四行结论。它们都能在下面的原始字段里找到，但那要读十几个键——
+  // 而点开一张卡时想问的正是「这是什么、走到哪一步、多急、多严重」。
+  const basic = el('dl', 'kv');
+  const row = (label, value) => {
+    if (!value) return;
+    basic.append(el('dt', 'kv-key', label), el('dd', 'kv-val', value));
+  };
+  row('类型', KIND_LABEL[kind] || kind);
+  row('状态', STATE_LABEL[entry.raw.state] || entry.raw.state || '');
+  row('优先级', Number(entry.raw.priority) > 0 ? 'P' + Number(entry.raw.priority) : '');
+  row('严重度', sev ? SEVERITY_LABEL[sev] : '');
+  body.append(detailGroup('基本', basic), detailGroup('原始字段', kvList(entry.raw)));
   // 压缩的成员清单。画布上被吸收的记录已经不单画了，这里就是它们唯一的入口——
   // 折叠是为了「先读结论」，不是「看不见细节」。成员按 id 回查索引，点一下就地
   // 换成那一条的详情（它不在画布上，所以不会高亮任何卡片，但字段一个不少）。
@@ -1292,14 +1462,14 @@ function renderNodeDetail(id) {
     });
   if (!related.length) return;
   const list = el('ul', 'edge-list');
-  body.append(el('div', 'detail-section', `关联边（${related.length}）`));
+  const section = detailGroup(`关联边（${related.length}）`, list);
   related.forEach((edge) => {
     const outgoing = edge.sourceId === id, item = el('li', 'edge-item');
     item.append(el('span', 'edge-kind', EDGE_LABEL[edge.kind] || edge.kind || '关系'));
     item.append(el('span', 'edge-dir', `${outgoing ? '→' : '←'} ${outgoing ? edge.targetId : edge.sourceId}`));
     list.append(item);
   });
-  body.append(list);
+  body.append(section);
 }
 /** 压缩的成员清单：它吸收了哪些记录，逐条列出来并可以点进去。
  *
@@ -1310,11 +1480,11 @@ function renderNodeDetail(id) {
  *  找不到的那条也要列：压缩记的是写入当时的 id 集合，而节点可能已被窗口截掉。
  *  悄悄跳过会让人以为压缩吸收了 3 条，而它写着 5 条。 */
 function digestMembers(raw) {
-  const box = el('div', 'detail-section'), ids = [];
+  const ids = [];
   const members = (raw && raw.memberIds) || {};
   ['facts', 'intents'].forEach((key) => asArray(members[key]).forEach((id) => ids.push(String(id))));
-  box.append(el('div', 'detail-section-head', `成员 ${ids.length} 条`));
-  if (!ids.length) { box.append(emptyBlock('这一代压缩没有吸收任何记录')); return box; }
+  const box = el('div', 'detail-body'), title = `压缩成员（${ids.length}）`;
+  if (!ids.length) { box.append(emptyBlock('这一代压缩没有吸收任何记录')); return detailGroup(title, box); }
   const list = el('ul', 'member-list');
   ids.forEach((id) => {
     const hit = state.nodeIndex.get(id), item = el('li', 'member-row');
@@ -1328,7 +1498,7 @@ function digestMembers(raw) {
     item.append(button); list.append(item);
   });
   box.append(list);
-  return box;
+  return detailGroup(title, box);
 }
 function selectNode(id) {
   state.selectedNodeId = id;
@@ -4847,6 +5017,23 @@ function bindGraphEvents() {
   // 「链路已更新」提示：点它 = 接受一次重新适配（`resetView`），然后提示消失。
   const stale = $('#graph-stale');
   if (stale) stale.addEventListener('click', () => { hideError(); resetView(); setGraphStale(false); });
+  // 画布第一次量到尺寸时补上那次没算准的视角。
+  //
+  //   `init()` 无条件取一次链路，而那时页签常常还没露出来（`#graph-canvas` 是 0x0），
+  //   `fitScale()` 返回 0，`initialGraphScale()` 只能退回基准 600%，摆正也算不出该
+  //   往哪挪——于是落点是**布局原点的左上角**，而卡片从 `MARGIN` 起画、同层的还按列
+  //   居中，画面上就是一片空网格。这条观察器让「量到了」这件事自己触发一次重画：
+  //   `state.graphScaleMeasured` 在那一趟里被置真，之后画布再变宽变窄都不再替他动视角
+  //   （那是分栏拖拽的人为操作，不是「第一次看见」）。
+  const canvasEl = $('#graph-canvas');
+  if (canvasEl && window.ResizeObserver) {
+    const canvasObserver = new ResizeObserver(() => {
+      if (state.graphScaleMeasured || !state.graphLoaded) return;
+      const rect = canvasEl.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) renderGraph();
+    });
+    canvasObserver.observe(canvasEl);
+  }
   renderKindChips();
 }
 /** 页签、搜索、资产树、顶栏的绑定。 */
