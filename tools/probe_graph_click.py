@@ -57,30 +57,32 @@ PROBE = r"""
     var n = document.getElementById('node-detail-body');
     return (n ? n.textContent : '').replace(/\s+/g, ' ').trim();
   };
+  // 画布上没有"某张卡"这个元素：选中态读 state，位置由 PentestUI.graphNodePoints()
+  // 给（换算与 toUserSpace 互逆，只此一份）。
   var selected = function () {
-    return Array.prototype.map.call(
-      document.querySelectorAll('#graph-svg .gnode.selected'),
-      function (g) { return g.dataset.id; }).join();
+    var ui = window.PentestUI;
+    return (ui && ui.state && ui.state.selectedNodeId) || '';
+  };
+  var points = function () {
+    var ui = window.PentestUI;
+    return (ui && ui.graphNodePoints && ui.graphNodePoints()) || [];
   };
 
-  function gesture(svg, fromId, dx) {
-    var g = document.querySelector('#graph-svg .gnode[data-id="' + fromId + '"]');
-    var rect = svg.getBoundingClientRect();
-    var x = Number(rect.left) + Math.min(200, Math.max(20, rect.width / 3));
-    var y = Number(rect.top) + Math.min(160, Math.max(20, rect.height / 3));
+  function gesture(surface, point, dx) {
     var base = { bubbles: true, cancelable: true, button: 0, pointerId: 1,
-                 pointerType: 'mouse', clientX: x, clientY: y };
+                 pointerType: 'mouse', clientX: point.x, clientY: point.y };
     var moved = {}; Object.keys(base).forEach(function (k) { moved[k] = base[k]; });
-    moved.clientX = x + dx;
-    g.dispatchEvent(new PointerEvent('pointerdown', base));
-    if (dx) svg.dispatchEvent(new PointerEvent('pointermove', moved));
-    svg.dispatchEvent(new PointerEvent('pointerup', moved));
+    moved.clientX = point.x + dx;
+    // 合成 PointerEvent 没有活跃指针，真实捕获会抛 NotFoundError——那是手段的限制。
+    surface.dispatchEvent(new PointerEvent('pointerdown', base));
+    if (dx) surface.dispatchEvent(new PointerEvent('pointermove', moved));
+    surface.dispatchEvent(new PointerEvent('pointerup', moved));
   }
 
   async function run() {
     var out = {};
     try {
-      var svg = document.getElementById('graph-svg');
+      var svg = document.getElementById('graph-surface');   // 绘制面是 canvas
       // 夹具里会有多个 engagement（每次下发任务建一个），而下拉框默认停在
       // `list[0]`——它未必是最有内容的那个：夹具跑的三次任务里有一次没执行过，
       // 那个 engagement 只有一个 goal 节点。所以先扫一遍，挑节点最多的那个。
@@ -91,11 +93,9 @@ PROBE = r"""
       var scopeAll = document.getElementById('graph-scope-all');
       if (scopeAll) { scopeAll.click(); await sleep(600); }
       out.scope = scopeAll ? 'all' : 'single';
-      out.engagements = document.querySelectorAll('#graph-svg .gnode').length;
-
-      var ids = Array.prototype.map.call(
-        document.querySelectorAll('#graph-svg .gnode'),
-        function (g) { return g.dataset.id; });
+      var list = points();                              // [{id, x, y}]，可见卡的中心
+      out.engagements = list.length;
+      var ids = list.map(function (p) { return p.id; });
       out.nodeCount = ids.length;
       if (ids.length < 2) { out.verdict = 'NOT_ENOUGH_NODES'; return out; }
 
@@ -110,9 +110,9 @@ PROBE = r"""
       var cases = [];
       [[0, true], [1, true], [2, true], [3, true], [30, false]].forEach(function (pair) {
         var dx = pair[0], expectSwap = pair[1];
-        gesture(svg, ids[0], 0);              // 先把选中态停在第一个节点
+        gesture(svg, list[0], 0);             // 先把选中态停在第一个节点
         var before = detail(), beforeSel = selected();
-        gesture(svg, ids[1], dx);
+        gesture(svg, list[1], dx);
         var after = detail(), afterSel = selected();
         cases.push({
           jitterPx: dx,
@@ -154,13 +154,29 @@ def _browser():
 
 
 def _dump(browser, path, profile):
-    cmd = [browser, "--headless=new", "--disable-gpu", "--no-first-run",
-           "--user-data-dir=" + profile,
-           "--virtual-time-budget=20000", "--dump-dom",
-           "file:///" + path.replace("\\", "/")]
-    done = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=300)
-    return done.stdout or ""
+    """把页面跑成 DOM 文本。profile 用临时目录，且**失败要重试一次**。
+
+    这台机器上同时挂着几十个 msedge 进程时，新起的无头实例偶尔会直接以 0 退出、
+    一个字节都不吐（不是崩溃，也不是超时）。探针那次 `--dump-dom` 因此拿到空串，
+    于是报「页面没跑到探针」——而同一份文件手工再 dump 一次就正常。所以这里不把
+    空输出当成结论：换一个全新的 profile 再跑一遍，两次都空才认。
+    """
+    # 必须是绝对路径：headless 的 file:// 不认相对路径（会 ERR_FILE_NOT_FOUND），
+    # 而 out_dir 来自 argv，可能是相对 cwd 的。
+    url = "file:///" + os.path.abspath(path).replace("\\", "/")
+    err = ""
+    for attempt in range(2):
+        cmd = [browser, "--headless=new", "--disable-gpu", "--no-first-run",
+               "--user-data-dir=" + (profile if attempt == 0 else profile + "-retry"),
+               "--virtual-time-budget=20000", "--dump-dom", url]
+        done = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=300)
+        if done.stdout:
+            return done.stdout
+        err = (done.stderr or "").strip()[-400:]
+    if err:
+        print("（两次 dump 都是空的；浏览器 stderr 末尾：%s）" % err)
+    return ""
 
 
 def main() -> int:

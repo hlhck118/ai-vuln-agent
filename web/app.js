@@ -376,21 +376,25 @@ const state = {
  *  上面那段：常数会把合并视图那种"初始就该到 18 倍"的图夹在 600%，而 600% 是
  *  **基准**——一进来的落点，不是能到多远。
  *
- *  `dragScale` 与 `frame`、`zoomText` 都是**拖动的代价**留下的（见
- *  `measureDragScale` / `scheduleTransform`）：一次拖动只量一次比例、每帧只写一次
- *  transform、缩放读数只在真的变了的时候写。
+ *  `dragScale` 与 `frame` 都是**拖动的代价**留下的（见 `measureDragScale` /
+ *  `scheduleTransform`）：一次拖动只量一次比例、每帧只重画一次。
+ *
+ *  这里没有"缩放读数"了：百分比撤掉之后，`scale` 只在内部用来换算，不再有人把它
+ *  写成字。
  */
 const graphView = { scale: 1, tx: 0, ty: 0, ceiling: BASE_SCALE * BASE_HEADROOM,
                     dragging: false, moved: false, touched: false,
                     pressNodeId: null, lastX: 0, lastY: 0, pressX: 0, pressY: 0,
-                    dragScale: { sx: 1, sy: 1 }, frame: 0, zoomText: null, zoomNode: null,
+                    dragScale: { sx: 1, sy: 1 }, frame: 0,
                     // 单卡偏移：id → { dx, dy }（用户坐标）。与 scale/tx/ty 同级，都是**视图**
                     // 状态——布局一变就被后端覆盖，所以不能写进 layout 里。
                     pins: new Map(), dragNodeId: null, dragNode: null };
-// `nodeItems` 与 `edgeItems` 对称：过滤与高亮都靠它遍历，不必每次回 DOM 里
-// 用 `.gnode` 现查——那张图在真实数据上是 350 多个节点，一帧里查三遍够呛。
-// `boxes` 是最近一次渲染的节点框（含 w/h），拖卡时重画边要按它算几何。
-const graphIndex = { edgeItems: [], nodeItems: [], neighbors: new Map(), boxes: null, liveIds: null, minimapWindow: null, minimapSize: null };
+// 画布没有 DOM，所以"这一帧要画什么"全部记在这里：`nodes`/`edges` 是折叠之后真正
+// 上画的集合，`boxes` 是它们的框（含 w/h，命中测试与拖卡都用它算几何），
+// `hidden` 是被类型芯片关掉的那些 id，`hoverId` 是光标停在哪张卡上。
+// 原来那些 `*-Items` 是 SVG 元素句柄，画布上一并不存在。
+const graphIndex = { nodes: [], edges: [], boxes: null, neighbors: new Map(), liveIds: null,
+                     hidden: new Set(), hoverId: null, keep: null, minimapSize: null };
 
 /* ------------------------------------------------- 5. 错误条与状态栏 ---- */
 let errorTimer = null;
@@ -740,200 +744,620 @@ function collapseDigests(nodes, edges) {
       && produced.has(edge.source + '|' + edge.target))),
   };
 }
+/** 单卡偏移（用户坐标）。拖开的卡不该在心跳重画之后自己弹回去。 */
+function pinOffset(id) {
+  const pin = graphView.pins.get(id);
+  return pin ? { dx: Number(pin.dx) || 0, dy: Number(pin.dy) || 0 } : { dx: 0, dy: 0 };
+}
+function boxWithPin(box, id) {
+  if (!box) return null;
+  const pin = pinOffset(id);
+  const x = box.x + pin.dx, y = box.y + pin.dy;
+  return { x, y, w: box.w, h: box.h, cx: x + box.w / 2, cy: y + box.h / 2 };
+}
+/** 拖卡：偏移已经由 pointermove 写进 `graphView.pins`，这里只负责把画面跟上。
+ *
+ *  旧版按 id 找到那个 `<g>` 改 `transform`、再只重画它那几条边（350 张卡时整张
+ *  重绘约 40 ms）。画布没有"某个节点"这个对象可改——它是每帧现画的一层像素——
+ *  所以这里退回整张重绘。代价由 `scheduleTransform` 那一层兜住：一帧最多一次。 */
+function applyPin(id) {
+  if (!id) return;
+  paintGraph();
+}
+function clearPins() {
+  graphView.pins.clear();
+  paintGraph();
+}
 /** 画边：坐标全部来自后端 layout。
  *
  *  只画 `EDGE_KINDS` 里那四种推进关系。`covers` / `parent` 有数据但不画：压缩节点
  *  吸收了十几条记录，每条一条虚线，画布就从一条链变成一张网，而这两条关系在详情
- *  面板里读得比在图上清楚（它们是「归属」，不是「推进到哪一步」）。 */
-/** 一条边从哪画到哪：与 `pentestd/graph.py` 的 `render_svg` 同一套几何。
+ *  面板里读得比在图上清楚（它们是「归属」，不是「推进到哪一步」）。
  *
- *  正向（目标卡在源卡右边）：从源卡右缘中点出发，落到目标卡左缘中点；
- *  回边（目标卡在源卡左边，意图互相接力时会出现）：改从两张卡的下缘中点走，
- *  否则线要从卡片上方绕一大圈穿过别人的卡。
- *
- *  曲线用三次贝塞尔、两个控制点水平拉开半个列距——看起来是「从右边出来、往右边进去」
- *  的 S 形，而不是一条斜线。这条几何在离线 SVG 里已经用了很久（导出图与画布要长得一样，
- *  用户拿导出的图对截图时不会觉得是两张图）。 */
-/** 单卡拖动：每张卡自己记一个偏移量，不改布局。
- *
- *  为什么偏移记在 `graphView.pins` 而不是改 layout：layout 是后端算的，前端改它下一次
- *  心跳（每 3 秒）就把它覆盖回去，拖到一半的卡会自己弹回原处。偏移是**视图状态**，
- *  与缩放/平移同级；`resetView()`（适应窗口）清掉它，重画时按 id 重新贴上去。
- *
- *  偏移的单位是用户坐标（viewBox 里那个），所以拖动时要用按下那一刻冻结的比例把
- *  屏幕像素换算过来——和画布平移同一把尺子（`measureDragScale`）。
- */
-function pinOffset(id) {
-  const pin = graphView.pins.get(id);
-  return pin ? { dx: pin.dx, dy: pin.dy } : { dx: 0, dy: 0 };
-}
-function boxWithPin(box, id) {
-  if (!box) return box;
-  const off = pinOffset(id);
-  if (!off.dx && !off.dy) return box;
-  const moved = { x: box.x + off.dx, y: box.y + off.dy, w: box.w, h: box.h };
-  moved.cx = moved.x + moved.w / 2;
-  moved.cy = moved.y + moved.h / 2;
-  return moved;
-}
-/** 把一张卡贴回它当前的偏移上，并重画与它相连的线。
- *  线要跟着走：卡片离位而线还连着老地方，读起来是"这条关系断了"。 */
-function applyPin(id) {
-  const off = pinOffset(id);
-  graphIndex.nodeItems.forEach((item) => {
-    if (item.id !== id) return;
-    if (off.dx || off.dy) item.node.setAttribute("transform", "translate(" + off.dx + " " + off.dy + ")");
-    else item.node.removeAttribute("transform");
-  });
-  repaintEdges([id]);
-}
-/** 重画与这些 id 有关的边（不传就全画）。几何与 `edgeGeometry` 同一套，
- *  只是取框时叠上当前的卡片偏移。 */
-function repaintEdges(ids) {
-  const boxes = graphIndex.boxes;
-  if (!boxes) return;
-  const only = ids ? new Set(ids) : null;
-  graphIndex.edgeItems.forEach((item) => {
-    if (only && !(only.has(item.source) || only.has(item.target))) return;
-    const from = boxWithPin(boxes.get(item.source), item.source);
-    const to = boxWithPin(boxes.get(item.target), item.target);
-    if (!from || !to) return;
-    const geo = edgeGeometry(from, to);
-    item.node.setAttribute("d", geo.d);
-    if (item.label) {
-      item.label.setAttribute("x", String(geo.mx));
-      item.label.setAttribute("y", String(geo.my - 4));
-    }
-  });
-}
-/** 清掉全部卡片偏移（适应窗口时用）：DOM 就地还原，不必整张重画。 */
-function clearPins() {
-  if (!graphView.pins.size) return;
-  const ids = Array.from(graphView.pins.keys());
-  graphView.pins.clear();
-  ids.forEach((id) => applyPin(id));
-}
+ *  几何与离线导出的 SVG 是**同一份**：都是从源卡右缘中点连到目标卡左缘中点的三次
+ *  贝塞尔，回边（目标在源左边）改走两张卡的下缘中点。`d` 字段留给那段字符串对照，
+ *  画布这边用拆开的四个端点与两个控制点。 */
 function edgeGeometry(from, to) {
   const back = to.x + to.w / 2 < from.x + from.w / 2;
-  const x1 = back ? from.x + from.w / 2 : from.x + from.w;
-  const y1 = back ? from.y + from.h : from.y + from.h / 2;
-  const x2 = back ? to.x + to.w / 2 : to.x;
-  const y2 = back ? to.y + to.h : to.y + to.h / 2;
+  let x1, y1, x2, y2;
+  if (back) {
+    x1 = from.x + from.w / 2; y1 = from.y + from.h;
+    x2 = to.x + to.w / 2; y2 = to.y + to.h;
+  } else {
+    x1 = from.x + from.w; y1 = from.y + from.h / 2;
+    x2 = to.x; y2 = to.y + to.h / 2;
+  }
   const mid = back ? (x1 + x2) / 2 : x1 + (x2 - x1) / 2;
   return {
+    x1, y1, x2, y2, cx1: mid, cy1: y1, cx2: mid, cy2: y2,
     d: "M " + x1 + " " + y1 + " C " + mid + " " + y1 + ", " + mid + " " + y2 + ", " + x2 + " " + y2,
     mx: mid, my: (y1 + y2) / 2,
   };
 }
-function renderEdges(layer, layoutEdges, boxes) {
-  graphIndex.edgeItems = [];
-  asArray(layoutEdges).forEach((edge) => {
+/* ---- 画布取色：主题令牌是唯一色源 ----------------------------------------
+ *
+ *  画布没法"继承样式"：`ctx.strokeStyle` 只吃字符串。所以每次重画先把需要的令牌
+ *  读成一份快照（`graphPalette`），绘制函数只认快照里的名字，不再碰 CSS。
+ *
+ *  快照带一个 probe：`--kind-goal` 的取值 + 当前 `data-theme`。主题一换，probe 就变，
+ *  下一次重画自动重建——不必让主题脚本反过来通知画布。`--kind-goal` 在五套主题里
+ *  各不相同，所以它够用；只比 `data-theme` 会漏掉"在设置页里改令牌"那种情形。 */
+const GRAPH_STATES = ['origin', 'confirmed', 'done', 'exhausted', 'met', 'active', 'superseded', 'blocked', 'pending'];
+const GRAPH_TONES = ['red', 'amber', 'slate'];
+const EDGE_TOKEN = { spawns: 'spawns', derived_from: 'derived', yields: 'yields', proves: 'proves', parent: 'parent', covers: 'covers' };
+let graphPaletteCache = null;
+/** 一张画布需要的全部颜色与字体，按主题缓存。 */
+function graphPalette() {
+  const root = document.documentElement, styles = window.getComputedStyle(root);
+  const read = (name) => String(styles.getPropertyValue(name) || '').trim();
+  const probe = read('--kind-goal') + '|' + (root.dataset ? root.dataset.theme : '') + '|' + read('--bg');
+  if (graphPaletteCache && graphPaletteCache.probe === probe) return graphPaletteCache;
+  const surface = $('#graph-surface');
+  // `--sans` 里套着 `var(--sans-system)`，`getPropertyValue` 拿到的是原文，喂不进
+  // `ctx.font`。所以字体从**元素的计算样式**取：CSS 给 `.graph-surface` 声明了
+  // `font: var(--fs-small)/1.35 var(--sans)`，算完就是一条可用的字体栈。
+  const surfaceFont = surface ? window.getComputedStyle(surface).fontFamily : '';
+  const palette = {
+    probe,
+    bg: read('--bg'), panel: read('--panel-2'), border: read('--border'), borderStrong: read('--border-strong'),
+    text: read('--text'), muted: read('--muted'), dim: read('--text-dim'),
+    accent: read('--accent'), accentSoft: read('--accent-soft'),
+    severity: { critical: read('--sev-critical'), high: read('--sev-high'), medium: read('--sev-medium'), low: read('--sev-low'), info: read('--sev-info') },
+    kind: {}, edge: {}, stateBg: {}, stateFg: {}, prioBg: {}, prioFg: {},
+    fontSans: surfaceFont || 'sans-serif',
+    fontMono: read('--mono') || 'monospace',
+    fsCaption: parseFloat(read('--fs-caption')) || 12,
+    fsSmall: parseFloat(read('--fs-small')) || 13,
+    hl: read('--hl-filter') || '',
+    hlStrong: read('--hl-filter-strong') || '',
+  };
+  ['begin', 'goal', 'hint', 'intent', 'fact', 'finding', 'digest', 'asset'].forEach((kind) => {
+    palette.kind[kind] = read('--kind-' + kind);
+  });
+  Object.keys(EDGE_TOKEN).forEach((kind) => {
+    palette.edge[kind] = read('--edge-' + EDGE_TOKEN[kind]);
+  });
+  GRAPH_STATES.forEach((name) => {
+    palette.stateBg[name] = read('--state-' + name + '-bg');
+    palette.stateFg[name] = read('--state-' + name + '-fg');
+  });
+  GRAPH_TONES.forEach((tone) => {
+    palette.prioBg[tone] = read('--prio-' + tone + '-bg');
+    palette.prioFg[tone] = read('--prio-' + tone + '-fg');
+  });
+  graphPaletteCache = palette;
+  return palette;
+}
+/* ---- 画布的坐标系 --------------------------------------------------------
+ *
+ *  布局坐标（用户单位）→ 屏幕：`screen = fit * (scale * u + t)`。`fit` 是"整幅塞进
+ *  画布"的等比系数（`preserveAspectRatio="xMinYMin meet"` 那件事，现在由这里算），
+ *  `scale` 是基准倍数（600% = 6）。三个量都在 `graphView` 里，与改造前**完全一样**
+ *  ——视图数学没有跟着绘制方式改，改的只是把 `transform` 写进 SVG 还是写进 2D 上下文。
+ *
+ *  拖动之所以"跟不上鼠标"，根子就在这层换算：`measureDragScale` 只除了 `fit`，漏了
+ *  `scale`，于是屏幕上挪 1 像素被当成 6 个用户单位。这里是**同一个 `k = fit * scale`**
+ *  同时喂给绘制、命中测试、滚轮锚点与拖动。 */
+/** 画布元素与它的量测。量不到（页签还没露出来）时返回 null。 */
+function surfaceMetrics() {
+  const surface = $('#graph-surface'), canvas = $('#graph-canvas');
+  if (!surface || !canvas) return null;
+  const rect = surface.getBoundingClientRect();
+  const width = Number(surface.dataset.width) || 0, height = Number(surface.dataset.height) || 0;
+  if (!rect.width || !rect.height || !width || !height) return null;
+  const fit = Math.min(rect.width / width, rect.height / height);
+  if (!fit) return null;
+  return { surface, rect, width, height, fit, k: fit * graphView.scale };
+}
+/** 整幅塞进画布的系数。init() 那一刻画布常是 0×0，返回 0 表示"量不到"。 */
+function fitScale() {
+  const surface = $('#graph-surface'), canvas = $('#graph-canvas');
+  if (!surface || !canvas) return 0;
+  const width = Number(surface.dataset.width) || 0, height = Number(surface.dataset.height) || 0;
+  const rect = canvas.getBoundingClientRect();
+  if (!width || !height || !rect.width || !rect.height) return 0;
+  return Math.min(rect.width / width, rect.height / height);
+}
+/** 冻结「屏幕像素 → 用户坐标」的比例：**一次拖动只量一次**。
+ *
+ *  屏幕位移 = `fit * scale` × 用户位移，所以反过来要乘它的**倒数**。原来这里只除了
+ *  `fit`（`1 / fit`），漏掉 `scale`——默认 600% 时屏幕每挪 1 像素被换算成 6 个用户
+ *  单位，图比光标快六倍，症状就是"拖动移动太快、不跟鼠标"。
+ *
+ *  量不到（画布还没露出来）时返回 `null`，这一次拖动整段不平移。 */
+function measureDragScale() {
+  const metrics = surfaceMetrics();
+  if (!metrics || !metrics.k) return null;
+  // 等比缩放下两个方向是同一把尺子。
+  return { sx: 1 / metrics.k, sy: 1 / metrics.k };
+}
+/** 客户端像素 → 用户坐标。滚轮锚点用它，`k` 与拖动同一把尺子。 */
+function toUserSpace(clientX, clientY) {
+  const metrics = surfaceMetrics();
+  if (!metrics) return null;
+  const scale = graphView.scale || 1;
+  return {
+    x: (clientX - metrics.rect.left) / metrics.k - graphView.tx / scale,
+    y: (clientY - metrics.rect.top) / metrics.k - graphView.ty / scale,
+  };
+}
+/** 命中测试：屏幕点 → 用户坐标 → 落在哪张卡上（后画的在上，所以倒着找）。 */
+function hitNode(clientX, clientY) {
+  const point = toUserSpace(clientX, clientY);
+  const boxes = graphIndex.boxes;
+  if (!point || !boxes) return null;
+  const nodes = graphIndex.nodes || [], hidden = graphIndex.hidden || new Set();
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const node = nodes[i];
+    if (hidden.has(node.id)) continue;
+    const box = boxWithPin(boxes.get(node.id), node.id);
+    if (!box) continue;
+    if (point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h) return node.id;
+  }
+  return null;
+}
+/** 验收探针用的坐标表：每张可见卡的中心落在**客户端坐标**上。
+ *
+ *  画布上没有"某张卡"这个元素可以 `querySelector`，点选探针只能按坐标点。换算与
+ *  `toUserSpace` 互逆（`clientX = rect.left + k * u + fit * tx`），几何复用 `boxWithPin`，
+ *  所以折叠掉的、被类型芯片滤掉的卡不会出现在这张表里——探针点不到看不见的东西。 */
+function graphNodePoints() {
+  const metrics = surfaceMetrics();
+  const boxes = graphIndex.boxes;
+  if (!metrics || !boxes) return [];
+  const rect = metrics.rect, k = metrics.k;
+  const hidden = graphIndex.hidden || new Set();
+  const out = [];
+  (graphIndex.nodes || []).forEach((node) => {
+    if (hidden.has(node.id)) return;
+    const box = boxWithPin(boxes.get(node.id), node.id);
+    if (!box) return;
+    out.push({
+      id: node.id,
+      x: rect.left + k * (box.x + box.w / 2) + metrics.fit * graphView.tx,
+      y: rect.top + k * (box.y + box.h / 2) + metrics.fit * graphView.ty,
+    });
+  });
+  return out;
+}
+/** 缩放：以 (ux, uy) 这个**用户坐标**为锚点。
+ *
+ *  `screen = fit * (s*u + t)` 里锚点要不动：`s'*u + t' = s*u + t`，于是
+ *  `t' = u - (s'/s) * (u - t)`。与改造前的公式逐字相同——换绘制方式不该改手感。 */
+function zoomAt(ux, uy, factor) {
+  const next = clamp(graphView.scale * factor, MIN_SCALE, graphView.ceiling);
+  if (!next || next === graphView.scale) return;
+  const ratio = next / graphView.scale;
+  graphView.tx = ux - ratio * (ux - graphView.tx);
+  graphView.ty = uy - ratio * (uy - graphView.ty);
+  graphView.scale = next;
+  graphView.touched = true;
+  paintGraph();
+}
+function zoomByFactor(factor) {
+  const metrics = surfaceMetrics();
+  if (!metrics) return;
+  const rect = metrics.rect;
+  const point = toUserSpace(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  if (point) zoomAt(point.x, point.y, factor);
+}
+/** 适应窗口：整幅可见 = `scale = 1`（`fit` 就是"整幅塞进画布"）。 */
+function resetView() {
+  // 卡片偏移也一起清：那颗按钮的语义是"把画面交回布局"，留下几张被拖出去的卡，
+  // 看上去就是"适应窗口没生效"。
+  graphView.pins.clear();
+  graphView.scale = 1;
+  graphView.tx = 0;
+  graphView.ty = 0;
+  // 「适应窗口」= 主动接受重新适配，所以把"人动过视角"这条标记清掉：之后到来的
+  // 新节点可以再自动适配一次。保留它的话，点过适应窗口的人反而再也看不到自动跟随。
+  graphView.touched = false;
+  paintGraph();
+}
+/** 首次摆正：把视图的左上角对到布局内容的左上角。
+ *
+ *  为什么不能只管 `tx = ty = 0`：原点在**布局的**左上角，而卡片不在原点上——
+ *  `MARGIN` 让每列都从 40 起画，同一层的卡片又按列居中排，于是"所有卡的最小 x"
+ *  与"最小 y"根本不在同一张卡上，取那个角会落在空格里。真正该对齐的是**第一列的
+ *  顶卡**。
+ *
+ *  上边距还要让开左上角那块图例：它是一张压在画布上的卡（`pointer-events: none`），
+ *  默认 600% 下第一张卡本来就在它右边，但列宽与窗口尺寸一变就可能被压住。 */
+function alignViewToStart(boxes) {
+  const metrics = surfaceMetrics();
+  if (!metrics || !boxes || !boxes.size) return;
+  const rect = metrics.rect, fit = metrics.fit;
+  let minX = Infinity;
+  boxes.forEach((box) => { minX = Math.min(minX, box.x); });
+  let minY = Infinity;
+  boxes.forEach((box) => { if (Math.abs(box.x - minX) < 1) minY = Math.min(minY, box.y); });
+  if (!isFinite(minX) || !isFinite(minY)) return;
+  const padX = 16, padY = 16;
+  const legend = $('.graph-legend');
+  const legendBox = legend ? legend.getBoundingClientRect() : null;
+  const cleared = legendBox && legendBox.height > 0 ? legendBox.bottom - rect.top + 8 : padY;
+  graphView.tx = padX / fit - minX * graphView.scale;
+  graphView.ty = Math.max(padY, cleared) / fit - minY * graphView.scale;
+}
+/** 初始缩放：**不低于基准 600%**，但可以更大（合并视图常需要 18 倍才看得清一张卡）。
+ *
+ *  量不到画布尺寸时（页签还没露出来）返回基准：那时算出来的任何值都不可信，宁可先
+ *  落在基准上，等第一次量到尺寸再重算（见 `retryMeasureGraph`）。 */
+function initialGraphScale() {
+  const fit = fitScale();
+  if (!fit) return BASE_SCALE;
+  return Math.max(BASE_SCALE, 1 / fit);
+}
+/** 量到画布尺寸之前不许把视角钉死。 */
+const MAX_MEASURE_RETRY = 60;
+/** 画布第一次量到尺寸时补上那次没算准的视角。
+ *
+ *  `init()` 无条件取一次链路，而那时页签常常还没露出来（`#graph-canvas` 是 0x0），
+ *  算出来的缩放与摆正都不可信。`ResizeObserver` 只报"尺寸**变了**"，而这里要的是
+ *  "尺寸**有了**"——夹具里画布从 0x0 直接稳定到目标尺寸，之后再没有变化事件。
+ *
+ *  所以除了观察器，还自己排一帧：要求**连续两帧读到同一个尺寸**才落定（首帧常常是
+ *  过渡值：侧栏还在收、字体还没换）。rAF 与 `setTimeout(80)` 两条路都排——无头浏览器
+ *  的虚拟时钟下 rAF 不一定响，只靠它会让截图永远停在空网格上。 */
+function retryMeasureGraph() {
+  if (state.graphScaleMeasured) return;
+  if (state.graphMeasureRetry >= MAX_MEASURE_RETRY) return;
+  state.graphMeasureRetry += 1;
+  const canvas = $('#graph-canvas');
+  const again = () => {
+    if (state.graphScaleMeasured) return;
+    const rect = canvas ? canvas.getBoundingClientRect() : null;
+    const w = rect ? Math.round(rect.width) : 0, h = rect ? Math.round(rect.height) : 0;
+    const last = state.graphMeasureRect;
+    state.graphMeasureRect = { width: w, height: h };
+    if (!w || !h || !last || last.width !== w || last.height !== h) { retryMeasureGraph(); return; }
+    renderGraph();
+  };
+  if (window.requestAnimationFrame) window.requestAnimationFrame(again);
+  window.setTimeout(again, 80);
+}
+/** 把一次重画推迟到下一帧，且**同一帧内只画一次**。
+ *
+ *  为什么需要队列：pointermove 的频率不由帧率决定。高回报率鼠标（1000 Hz）或者一次
+ *  卡顿之后的追帧，都会在一帧里送来好几次 move；画布是整张重绘，每一次都画一遍
+ *  等于把同一帧画十遍，而只有最后一次看得见。队列把"每次事件一次重绘"变成"每帧一次"。
+ *
+ *  累加的量仍然是 `graphView.tx/ty`（相对位移），队列只决定**什么时候画出去**，
+ *  所以拖动不会丢增量——丢增量会让图比光标走得慢，那是拖动最容易察觉的坏味道。 */
+function scheduleTransform() {
+  if (graphView.frame) return;
+  const flush = () => { graphView.frame = 0; paintGraph(); };
+  // rAF 缺席时退回同步画（老浏览器 / 测试环境）：宁可慢一档，也不要把这一帧的
+  // 位移丢掉——丢掉的表现是"图偶尔不动"。
+  graphView.frame = window.requestAnimationFrame ? window.requestAnimationFrame(flush) : (flush(), 0);
+}
+/* ---- 绘制 ----------------------------------------------------------------
+ *
+ *  画布是**一层像素**：没有"某个节点"这个对象可以单独改，所以每次重画整张。
+ *  代价靠三个地方收着：重画只在 `scheduleTransform` 的帧边界上发生；拖动期间不画
+ *  边上的中文标签（344 条边各一次描边+填充是最贵的一段）；命中测试与 hover 都走
+ *  `hitNode`，不去遍历 DOM（也没有 DOM 可遍历）。
+ *
+ *  **不做动画**：改造前的"进行中的意图"是流动虚线 + 图标块呼吸，靠 CSS animation
+ *  跑；画布上同样的效果要每帧整张重绘，350 张卡时那一帧是几十毫秒，会与拖动抢帧。
+ *  现在"在跑"这条信息由两处静态表达承担：连向它的边是虚线且更亮，它的图标块带一圈
+ *  强调色描边。读得出来，而且不花帧。 */
+function roundRectPath(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+  ctx.beginPath();
+  if (ctx.roundRect) { ctx.roundRect(x, y, w, h, radius); return; }
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx.lineTo(x + radius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+}
+/** 按像素宽度截断并补省略号（画布上没有排版引擎替我们折行）。 */
+function clipText(ctx, text, maxWidth) {
+  const str = String(text === null || text === undefined ? '' : text);
+  if (!str) return '';
+  if (ctx.measureText(str).width <= maxWidth) return str;
+  let cut = str.length;
+  while (cut > 1) {
+    cut -= 1;
+    const candidate = str.slice(0, cut) + '…';
+    if (ctx.measureText(candidate).width <= maxWidth) return candidate;
+  }
+  return '…';
+}
+/** 按宽度折行，最多 `limit` 行，最后一行超出的部分用省略号。 */
+function wrapText(ctx, text, maxWidth, limit) {
+  const str = String(text === null || text === undefined ? '' : text);
+  if (!str) return [];
+  const out = [];
+  let rest = str;
+  while (rest && out.length < limit) {
+    if (ctx.measureText(rest).width <= maxWidth) { out.push(rest); rest = ''; break; }
+    let cut = rest.length;
+    while (cut > 1 && ctx.measureText(rest.slice(0, cut)).width > maxWidth) cut -= 1;
+    out.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  if (rest) out[out.length - 1] = clipText(ctx, out[out.length - 1] + rest, maxWidth);
+  return out;
+}
+/** 箭头：14×14 的闭合三角（照 ARTEX 的 `MarkerType.ArrowClosed, 14`），尖端落在端点。 */
+function drawArrow(ctx, geo) {
+  const angle = Math.atan2(geo.y2 - geo.cy2, geo.x2 - geo.cx2);
+  if (!isFinite(angle)) return;
+  ctx.save();
+  ctx.translate(geo.x2, geo.y2);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(-14, -5);
+  ctx.lineTo(-14, 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+/** 画所有边。`graphIndex.keep` 是 hover 时的"相关集"（本人 + 邻居）。 */
+function drawEdges(ctx, palette) {
+  const boxes = graphIndex.boxes, edges = graphIndex.edges || [];
+  if (!boxes || !edges.length) return;
+  const hidden = graphIndex.hidden || new Set();
+  const hoverId = graphIndex.hoverId;
+  edges.forEach((edge) => {
     if (EDGE_HIDDEN_KINDS.indexOf(edge.kind) >= 0) return;
-    const from = boxWithPin(boxes.get(edge.source), edge.source);
-    const to = boxWithPin(boxes.get(edge.target), edge.target);
+    if (hidden.has(edge.source) || hidden.has(edge.target)) return;
+    const from = boxes.get(edge.source), to = boxes.get(edge.target);
     if (!from || !to) return;
+    const geo = edgeGeometry(boxWithPin(from, edge.source), boxWithPin(to, edge.target));
     const kind = EDGE_KINDS.indexOf(edge.kind) >= 0 ? edge.kind : EDGE_FALLBACK_KIND;
-    // data-kind 写**解析后**的类型：CSS 的基础规则兜的是"未知类型"，而未知类型在这里
-    // 已经收敛成 spawns 了。把原始值留给它，只会让两处兜底各说各话。
-    const geo = edgeGeometry(from, to);
-    const path = svgEl("path", {
-      class: "gedge", "data-kind": kind, d: geo.d, fill: "none",
-      "marker-end": "url(#arrow-" + kind + ")",
-    });
-    const tip = svgEl("title"), text = svgEl("text", {
-      class: "gedge-label", "data-kind": kind, x: geo.mx, y: geo.my - 4, "text-anchor": "middle",
-    });
-    // 连向**进行中的意图**的边：虚线流动，照 ARTEX 的 `animated: liveTargets.has(dst)`。
-    // 它回答的是「这一步正在跑」，而那是一张链路图里唯一会变的读数。
-    if (graphIndex.liveIds && graphIndex.liveIds.has(edge.target)) path.classList.add('is-live');
-    tip.textContent = (EDGE_LABEL[edge.kind] || edge.kind || "关系") + "：" + edge.source + " → " + edge.target;
-    text.textContent = edge.label || EDGE_LABEL[edge.kind] || edge.kind;
-    path.append(tip);
-    layer.append(path, text);
-    graphIndex.edgeItems.push({ node: path, label: text, source: edge.source, target: edge.target });
+    const related = !hoverId || edge.source === hoverId || edge.target === hoverId;
+    const live = graphIndex.liveIds && graphIndex.liveIds.has(edge.target);
+    const color = palette.edge[kind] || palette.edge[EDGE_FALLBACK_KIND];
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = related && hoverId ? 2.4 : 2;
+    ctx.globalAlpha = related ? (live ? 0.9 : (hoverId ? 1 : 0.55)) : 0.07;
+    if (live) ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    ctx.moveTo(geo.x1, geo.y1);
+    ctx.bezierCurveTo(geo.cx1, geo.cy1, geo.cx2, geo.cy2, geo.x2, geo.y2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawArrow(ctx, geo);
+    // 标签：拖动期间整段跳过（344 条边各描一次边再填一次字，是这一帧最贵的一段）。
+    if (!graphView.dragging && related) {
+      ctx.globalAlpha = hoverId ? 0.95 : 0.85;
+      ctx.font = palette.fsCaption + 'px ' + palette.fontSans;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = palette.bg;
+      ctx.strokeText(EDGE_LABEL[edge.kind] || edge.kind || '关系', geo.mx, geo.my - 4);
+      ctx.fillStyle = palette.muted;
+      ctx.fillText(EDGE_LABEL[edge.kind] || edge.kind || '关系', geo.mx, geo.my - 4);
+    }
+    ctx.restore();
   });
 }
-/** 估宽只剩后端一处：`pentestd/graph.py::_text_width`（离线 `render_svg` 用它排版）。
+/** 画一张卡。四角的位置与改造前的 DOM 卡一一对应：
  *
- *  画布上的卡已经是 **DOM**（装在 `<foreignObject>` 里），换行、三行截断、省略号
- *  全交给浏览器的排版引擎，前端不必再自己量一遍字宽——原来那套 `svgTextWidth` /
- *  `svgPill` 因此退役：两份系数只要有一天不同步，就会出现"后端没截、前端溢出去"。
- */
-/** 画节点：一张卡照 ARTEX 的 Dify 卡排。
- *
- *  卡是**真的 DOM**：装在 `<foreignObject>` 里，圆角、阴影、三行截断、悬停抬升
- *  全交给浏览器的排版引擎。这是本轮最大的一处替换——原来那张卡是十几支
- *  `<rect>` / `<text>` 拼的，字号、行高、胶囊宽度全要自己算，改一个像素就得回来
- *  调一遍系数。换成 DOM 之后，卡内布局与页面其它地方是同一套 CSS。
- *
- *  `foreignObject` 与 `<g>` 在同一个坐标系里，`#graph-viewport` 上的缩放平移照样
- *  作用在它身上，所以 `applyTransform` / `fitScale` / `zoomAt` 一行没改。
- *
- *  三行：**这是什么**（图标块 + 类型名 + 右上优先级）、**说了什么**（标题一行 +
- *  摘要三行，多的截断、全文在悬浮提示里）、**走到哪一步**（状态徽章 + 编号）。
- *  颜色只落在图标块、类型名与两颗小徽章上，卡身保持中性——七种类型各有全套配色，
- *  卡身也上色的话整张图就成了一片互不相让的色块。
- */
-function renderNodes(layer, nodes, boxes) {
-  graphIndex.nodeItems = [];
+ *  左上  类型图标块 + 中文类型名 ………………………………………………… 右上 优先级（P7）
+ *  第二行  标题（单行，超出省略号）
+ *  第三~五行  摘要（最多三行，末行省略号）
+ *  底行  状态徽章 ………………………………………………………………………………… #编号 */
+function drawNodeCard(ctx, palette, node, box) {
+  const kind = displayKindOf(node);
+  const color = palette.kind[kind] || palette.kind.intent || palette.text;
+  const severity = node.severity ? severityOf(node.severity) : '';
+  const selected = state.selectedNodeId === node.id;
+  const hovered = graphIndex.hoverId === node.id;
+  const related = graphIndex.keep && graphIndex.keep.has(node.id);
+  const live = kind === 'intent' && (node.state || 'active') === 'active';
+  const priority = Number(node.priority) || 0;
+  const stateText = node.stateLabel || STATE_LABEL[node.state] || '';
+  const stateName = node.state || 'active';
+  const dashed = kind === 'begin' || kind === 'hint' || kind === 'digest';
+  const x = box.x, y = box.y, w = box.w, h = box.h;
+  const padX = 11, padY = 9;
+  const innerW = w - padX * 2;
+
+  ctx.save();
+  // 悬停时无关的卡压暗：整张画布读起来就只剩"这一条链"。
+  ctx.globalAlpha = graphIndex.hoverId && !related ? 0.16 : 1;
+  roundRectPath(ctx, x, y, w, h, 12);
+  ctx.fillStyle = palette.panel;
+  ctx.fill();
+  // 描边：类型色；严重度压过类型色（一条 critical 漏洞必须第一眼被认出来）。
+  let stroke = color, lineWidth = 1;
+  if (dashed) ctx.setLineDash([6, 4]);
+  if (severity && palette.severity[severity]) { stroke = palette.severity[severity]; lineWidth = severity === 'critical' || severity === 'high' ? 2 : 1; }
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = stroke;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // 选中 / 悬停：强调色描边 + 一圈软光环（与改造前的 box-shadow 光环同一个意思）。
+  if (selected || hovered) {
+    roundRectPath(ctx, x - 2, y - 2, w + 4, h + 4, 14);
+    ctx.lineWidth = selected ? 3 : 2;
+    ctx.strokeStyle = palette.accentSoft;
+    ctx.stroke();
+    roundRectPath(ctx, x, y, w, h, 12);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = palette.accent;
+    ctx.stroke();
+  }
+  ctx.save();
+  roundRectPath(ctx, x, y, w, h, 12);
+  ctx.clip();
+
+  // 图标块：16×16、圆角 5，底色是类型色混 18%。画布没有 `color-mix`，用一次
+  // 半透明的同色填充代替——视觉上是同一件事（底色只是那一点色）。
+  const glyphY = y + padY;
+  ctx.save();
+  if ((selected || hovered) && palette.hl) ctx.filter = selected ? (palette.hlStrong || palette.hl) : palette.hl;
+  roundRectPath(ctx, x + padX, glyphY, 16, 16, 5);
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  if (live) {
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = palette.accent;
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.arc(x + padX + 8, glyphY + 8, 3, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  // 类型名：12px / 600，颜色就是类型色。
+  ctx.font = '600 ' + palette.fsCaption + 'px ' + palette.fontSans;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  const label = KIND_LABEL[kind] || kind;
+  ctx.fillText(label, x + padX + 22, glyphY + 8);
+  ctx.restore();
+
+  // 右上：优先级徽章。0 是"没定优先级"，不是"P0"。
+  if (priority > 0) {
+    const tone = priorityTone(priority);
+    ctx.font = '600 ' + palette.fsCaption + 'px ' + palette.fontMono;
+    const chipText = 'P' + priority;
+    const chipW = ctx.measureText(chipText).width + 12;
+    const chipH = palette.fsCaption + 6;
+    roundRectPath(ctx, x + w - padX - chipW, glyphY - 1, chipW, chipH, 6);
+    ctx.fillStyle = palette.prioBg[tone] || palette.border;
+    ctx.fill();
+    ctx.fillStyle = palette.prioFg[tone] || palette.dim;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(chipText, x + w - padX - chipW / 2, glyphY - 1 + chipH / 2);
+  }
+
+  // 标题：单行。
+  let cursorY = glyphY + 16 + 3;
+  ctx.font = '600 ' + palette.fsSmall + 'px ' + palette.fontSans;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = palette.text;
+  ctx.fillText(clipText(ctx, node.label || node.id, innerW), x + padX, cursorY + 2);
+  cursorY += palette.fsSmall + 6;
+
+  // 摘要：最多三行，行高 1.35。
+  if (node.subtitle) {
+    ctx.font = palette.fsSmall + 'px ' + palette.fontSans;
+    ctx.fillStyle = palette.muted;
+    const lineHeight = palette.fsSmall * 1.35;
+    const rows = wrapText(ctx, node.subtitle, innerW, 3);
+    rows.forEach((row, index) => ctx.fillText(row, x + padX, cursorY + index * lineHeight));
+  }
+
+  // 底行：状态徽章在左、编号靠右。它钉在卡底，与内容多少无关。
+  const footH = palette.fsCaption + 6;
+  const footY = y + h - padY - footH;
+  if (stateText) {
+    ctx.font = '600 ' + palette.fsCaption + 'px ' + palette.fontSans;
+    const badgeW = ctx.measureText(stateText).width + 14;
+    roundRectPath(ctx, x + padX, footY, badgeW, footH, footH / 2);
+    ctx.fillStyle = palette.stateBg[stateName] || palette.border;
+    ctx.fill();
+    ctx.fillStyle = palette.stateFg[stateName] || palette.dim;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(stateText, x + padX + 7, footY + footH / 2);
+  }
+  ctx.font = palette.fsCaption + 'px ' + palette.fontMono;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = palette.dim;
+  ctx.fillText('#' + node.id, x + w - padX, footY + footH / 2);
+
+  ctx.restore();
+  ctx.restore();
+}
+/** 画所有卡。顺序即 `layout.nodes`（后端按列排好），后画的压在上面。 */
+function drawNodes(ctx, palette) {
+  const boxes = graphIndex.boxes, nodes = graphIndex.nodes || [];
+  if (!boxes) return;
+  const hidden = graphIndex.hidden || new Set();
   nodes.forEach((node) => {
-    const box = boxes.get(node.id), kind = displayKindOf(node);
-    const group = svgEl('g', { class: 'gnode kind-' + kind, 'data-id': node.id, 'data-kind': kind });
-    if (node.severity) group.classList.add('sev-' + severityOf(node.severity));
-    const priority = Number(node.priority) || 0;
-    const stateText = node.stateLabel || STATE_LABEL[node.state] || '';
-    // 进行中的意图：卡上挂一颗呼吸的圆点，连向它的边走流动虚线（照 ARTEX 的 animated）。
-    const live = kind === 'intent' && node.state === 'active';
-    const card = el('div', 'gnode-card' + (live ? ' is-live' : ''));
-    const head = el('div', 'gnode-head');
-    const glyph = el('span', 'gnode-glyph');
-    glyph.append(el('span', 'gnode-dot'));
-    head.append(glyph, el('span', 'gnode-kind', KIND_LABEL[kind] || kind));
-    // 右上：优先级。0 是「没定级」而不是「最低优先级」，所以不画 P0。
-    // 三档色（red / amber / slate）照 ARTEX 的 prioTone：8 以上是红灯，5 以上是黄灯。
-    if (priority > 0) {
-      const chip = el('span', 'gnode-priority', 'P' + priority);
-      chip.classList.add('tone-' + priorityTone(priority));
-      head.append(chip);
-    }
-    card.append(head);
-    const text = el('div', 'gnode-body');
-    text.append(el('div', 'gnode-title', node.label || node.id));
-    if (node.subtitle) text.append(el('div', 'gnode-sub', node.subtitle));
-    card.append(text);
-    const foot = el('div', 'gnode-foot');
-    // 没有状态就不画徽章——空徽章会读成"状态缺失"，那是另一个意思。
-    if (stateText) {
-      const badge = el('span', 'gnode-state', stateText);
-      badge.classList.add('state-' + (node.state || 'active'));
-      foot.append(badge);
-    }
-    foot.append(el('span', 'gnode-id', '#' + node.id));
-    card.append(foot);
-    // 悬浮提示把被截断的内容补全：卡上是三行截断，这里是完整的。
-    card.title = [
-      (KIND_LABEL[kind] || kind) + '｜' + (node.label || node.id), node.subtitle || '',
-      stateText, priority > 0 ? 'P' + priority : '', node.id,
-    ].filter(Boolean).join('\n');
-    const frame = svgEl('foreignObject', {
-      class: 'gnode-frame', x: box.x, y: box.y, width: box.w, height: box.h,
-    });
-    frame.append(card);
-    group.append(frame);
-    // 拖开的卡整组平移（`transform` 只作用于这一组，布局本身不动）。
-    const pin = pinOffset(node.id);
-    if (pin.dx || pin.dy) group.setAttribute("transform", "translate(" + pin.dx + " " + pin.dy + ")");
-    layer.append(group);
-    graphIndex.nodeItems.push({ node: group, id: node.id, kind });
+    if (hidden.has(node.id)) return;
+    const box = boxWithPin(boxes.get(node.id), node.id);
+    if (!box) return;
+    drawNodeCard(ctx, palette, node, box);
   });
+}
+/** 主重画：清画布 → 按当前视角设变换 → 边 → 卡 → 缩略图视野框。
+ *
+ *  画布尺寸走 `devicePixelRatio`：CSS 尺寸交给布局（100% × 100%），后备缓冲按物理
+ *  像素铺满，否则高分屏上整张图是糊的。`k = fit * scale` 与命中测试、拖动、滚轮
+ *  锚点共用一个换算，见本节开头那段坐标系说明。 */
+function paintGraph() {
+  const surface = $('#graph-surface');
+  if (!surface || surface.classList.contains('hidden')) { syncMinimapWindow(); return; }
+  const rect = surface.getBoundingClientRect();
+  const width = Number(surface.dataset.width) || 0, height = Number(surface.dataset.height) || 0;
+  if (!rect.width || !rect.height || !width || !height) { syncMinimapWindow(); return; }
+  const dpr = window.devicePixelRatio || 1;
+  const pxW = Math.max(1, Math.round(rect.width * dpr)), pxH = Math.max(1, Math.round(rect.height * dpr));
+  if (surface.width !== pxW) surface.width = pxW;
+  if (surface.height !== pxH) surface.height = pxH;
+  const ctx = surface.getContext('2d');
+  if (!ctx) return;
+  const fit = Math.min(rect.width / width, rect.height / height);
+  const k = fit * graphView.scale;
+  const palette = graphPalette();
+  // hover 的"相关集"：本人 + 直接邻居。边与卡都读它，不必各自再查一遍。
+  const keep = new Set();
+  if (graphIndex.hoverId) {
+    keep.add(graphIndex.hoverId);
+    (graphIndex.neighbors.get(graphIndex.hoverId) || new Set()).forEach((id) => keep.add(id));
+  }
+  graphIndex.keep = keep;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, pxW, pxH);
+  ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * fit * graphView.tx, dpr * fit * graphView.ty);
+  drawEdges(ctx, palette);
+  drawNodes(ctx, palette);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  syncMinimapWindow();
+}
+/** `paintGraph` 的旧名字：`applyTransform` 是"把视角写出去"的那一步，而画布上写视角
+ *  与重画是同一件事。留着这个薄封装是为了让 `loadGraph` / 心跳那条路径读起来不变。 */
+function applyTransform() {
+  paintGraph();
 }
 /** 「链路已更新」提示：只在**有新数据、而视角被保留**时出现。
  *
  *  两个条件缺一不可：布局没变时新节点就落在原处，没什么可提示的；视角没被动过时
  *  `renderGraph` 会自己重新适配，新节点直接看得见。真正需要它的是第三种情况——
  *  人已经放大到某个节点上，新数据落在视野外，而页面此刻**不该**擅自移动视角。
- *  于是把"要不要重新适配"这个决定交回给使用者：点它 = 接受视角重置。
- */
+ *  于是把"要不要重新适配"这个决定交回给使用者：点它 = 接受视角重置。 */
 function setGraphStale(flag) {
   const node = $('#graph-stale');
   if (!node) return;
@@ -941,57 +1365,42 @@ function setGraphStale(flag) {
 }
 /** 主渲染：节点位置完全采用后端 layout，前端不做布局计算。 */
 function renderGraph() {
-  const svg = $('#graph-svg'), empty = $('#graph-empty'), layout = state.graph && state.graph.layout;
+  const surface = $('#graph-surface'), empty = $('#graph-empty'), layout = state.graph && state.graph.layout;
   const nodes = asArray(layout && layout.nodes);
-  clear(svg);
   if (!nodes.length) {
-    svg.classList.add('hidden');
-    empty.classList.remove('hidden');
-    empty.textContent = state.graph ? '链路里还没有任何节点' : '正在加载链路…';
+    if (surface) surface.classList.add('hidden');
+    if (empty) {
+      empty.classList.remove('hidden');
+      empty.textContent = state.graph ? '链路里还没有任何节点' : '正在加载链路…';
+    }
+    graphIndex.nodes = []; graphIndex.edges = []; graphIndex.boxes = new Map();
+    graphIndex.liveIds = new Set(); graphIndex.hoverId = null;
+    if (graphIndex.minimapSize) { graphIndex.minimapSize = null; renderMinimap([], new Map(), 0, 0); }
     setGraphStale(false);                                // 空图上没有"新节点在视野外"这回事
     return;
   }
-  svg.classList.remove('hidden');
-  empty.classList.add('hidden');
+  if (surface) surface.classList.remove('hidden');
+  if (empty) empty.classList.add('hidden');
   const width = Number(layout.width) || 1200, height = Number(layout.height) || 800;
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  svg.dataset.width = String(width);
-  svg.dataset.height = String(height);
-  const defs = svgEl('defs');                             // 每种关系一个箭头，颜色与边一致
-  EDGE_KINDS.forEach((kind) => {
-    const marker = svgEl('marker', {
-      // 箭头 14×14（viewBox 0 0 10 10 里的三角形铺满 10 单位），照 ARTEX 的
-      // `MarkerType.ArrowClosed, width: 14, height: 14`；refX 9 让箭尖正好落在线的端点上。
-      // 画布默认落在 600%，14 单位在屏幕上约 84px 的卡旁边是相称的。
-      id: `arrow-${kind}`, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '14', markerHeight: '14',
-      orient: 'auto-start-reverse',
-    });
-    marker.append(svgEl('path', { class: 'garrow', 'data-kind': kind, d: 'M 0 0 L 10 5 L 0 10 z' }));
-    defs.append(marker);
-  });
-  const viewport = svgEl('g', { id: 'graph-viewport' });
-  const edgeLayer = svgEl('g', { class: 'edge-layer' }), nodeLayer = svgEl('g', { class: 'node-layer' });
+  if (surface) { surface.dataset.width = String(width); surface.dataset.height = String(height); }
   // 折叠只发生在画这一步：`layout` 本身不动，详情面板与离线 SVG 拿到的还是全量。
   const view = collapseDigests(nodes, layout.edges);
   const boxes = new Map();
   view.nodes.forEach((node) => boxes.set(node.id, nodeBox(node)));
   graphIndex.boxes = boxes;
+  graphIndex.nodes = view.nodes;
+  graphIndex.edges = view.edges;
   // 卡片偏移跨重画保留：心跳每 3 秒重画一次，人拖开的卡不该自己弹回去。
   // 反向也要清——被折叠掉或已不在窗口里的卡，偏移留着只会越积越多。
   Array.from(graphView.pins.keys()).forEach((id) => { if (!boxes.has(id)) graphView.pins.delete(id); });
-  viewport.append(edgeLayer, nodeLayer);
-  svg.append(defs, viewport);
-  // 进行中的意图：边与卡都要知道这一批里谁在跑，所以先算一次集合，
-  // 两个渲染函数各自去查（不必互相传参，也不会各自算一份而分歧）。
+  // 进行中的意图：边与卡都要知道这一批里谁在跑，所以先算一次集合。
   graphIndex.liveIds = new Set();
   view.nodes.forEach((node) => {
     if (displayKindOf(node) === 'intent' && (node.state || 'active') === 'active') graphIndex.liveIds.add(node.id);
   });
-  renderEdges(edgeLayer, view.edges, boxes);
-  renderNodes(nodeLayer, view.nodes, boxes);
+  if (graphIndex.hoverId && !boxes.has(graphIndex.hoverId)) graphIndex.hoverId = null;
   renderMinimap(view.nodes, boxes, width, height);
   buildNeighborIndex();
-  applyKindFilter();
   // **视图与选中项一律跨重画保留**，只在"画布还没量到尺寸"时摆正一次。
   //
   // 这里原来写的是"布局指纹变了就重置"（`graphLayoutKey`）。链路接进心跳之后那条
@@ -1006,12 +1415,9 @@ function renderGraph() {
   // 没手动动过视角的人（`graphView.touched`）另算：那样把视角跟着新布局重新适配
   // 一次，看到的才是"数据长出来了"，而不是"我盯着的永远是左上角那一块"。一旦
   // 他自己缩放过或拖过，就再也不擅自移动。
-  const layoutKey = `${width}x${height}:${nodes.length}`;
+  const layoutKey = width + 'x' + height + ':' + nodes.length;
   const layoutChanged = state.graphLayoutKey !== layoutKey;
   const measurable = fitScale() > 0;
-  // 上限跟着这张图算：至少容得下初始缩放（再多给一半余量），并且从**基准**之上
-  // 还能再放大五倍。两个都取最大而不是只取初始缩放：只跟初始缩放走时，一张刚好
-  // 放得下的图上限会低到 900%，而那种图上"想再看大一点"是常态。
   const initial = initialGraphScale();
   graphView.ceiling = Math.max(BASE_SCALE * BASE_HEADROOM, initial * 1.5);
   if (!state.graphScaleMeasured) {
@@ -1027,359 +1433,96 @@ function renderGraph() {
   }
   state.graphLayoutKey = layoutKey;
   setGraphStale(layoutChanged && graphView.touched);
-  applyTransform();
-  // 选中项跨重画保留：节点还在新区里就继续选中、右侧详情跟着刷新字段，没了才清掉。
-  // 原来这里无条件清空，而心跳每判到一次变化就重画一次——右侧详情会自己关掉。
-  if (state.selectedNodeId) {
-    const current = $(`.gnode[data-id="${cssEscape(state.selectedNodeId)}"]`, svg);
-    if (current) { current.classList.add('selected'); renderNodeDetail(state.selectedNodeId); }
-    else { state.selectedNodeId = null; renderNodeDetail(null); }
-  }
-  // 这一次没量到画布（页签还没露出来、分栏还没排完），上面算出的缩放与摆正都不可信。
-  // 不能等「画布尺寸变化」来救：`ResizeObserver` 只在**尺寸真的变了**时回调，而这里
-  // 的典型情形是画布一上来就有尺寸、只是那一刻 `state.graphLoaded` 还是假——首次回调
-  // 撞在数据到达之前，之后再也不响。所以自己排一次下一帧的重试（带上限，避免在
-  // 永远看不到这一页的情形下空转）。
+  applyKindFilter();                                     // 里面会重画（含选中态）
+  // 重画之后再喂一次详情面板：心跳每 3 秒换掉整张图，右侧那一栏读的却是上一批数据。
+  // 选中项本身跨重画保留（`state.selectedNodeId` 不动），这里只是让它显示的东西也跟上。
+  if (state.selectedNodeId) renderNodeDetail(state.selectedNodeId);
   if (!state.graphScaleMeasured) retryMeasureGraph();
 }
-/** 缩略图：整张布局压成一张小图，节点画成小方块。
+/** 缩略图：整张布局压成一张小图，**只读**。它回答的是「我现在看的是哪一块」。
  *
- *  为什么要有：布局按列铺开，合并视图实测 1820 x 7974 用户单位；放大到 600% 之后
- *  视野只覆盖其中一小块，而这一页的读法是「顺着一条链往下走」——没有这张索引卡，
- *  走三步就不知道自己在整张图的哪个位置了。
- *
- *  只读，不绑定点击：这一页的视角是**工作位置**，误触一下会把人从正在读的那一列
- *  甩开；要看别处，滚轮与拖动本来就在手边（与 ARTEX 的 MiniMap 不同，那里能点——
- *  但那边没有「拖动卡片」这件事，误触的代价也小）。
- *
- *  节点按类型上色（令牌与卡片图标同源），不写字：180px 宽的缩略图上，文字只会
- *  糊成一片噪点。比例取 `min` 而不是各算各的，缩略图不拉伸布局的形状。
- */
+ *  这一块仍然是 SVG（`#minimap-svg`）：它只画几十个矩形、不需要文字、也不需要与
+ *  主画布共用坐标系，用 SVG 反而省掉一次 DPR 换算。节点按类型上色，与卡上的图标
+ *  块同一个令牌源；看不见字——这个尺度上文字只会糊成一片噪点。 */
 function renderMinimap(nodes, boxes, width, height) {
   const svg = $('#minimap-svg');
   if (!svg) return;
   clear(svg);
   if (!nodes.length || !width || !height) { graphIndex.minimapSize = null; return; }
-  // 只写 viewBox，不自己算缩放：缩略图的实际像素尺寸由 CSS 决定（那张 180x120 的卡
-  // 去掉 4px 白边），比例交给 `preserveAspectRatio="xMidYMid meet"` 去等比重排。
-  // 这里算一份是没用的——量不到真实尺寸，且窗口矩形的参照系必须与 svg 完全同一。
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-  // 缩略图上的卡按布局框等比缩小（`rx: 6` 是用户坐标里的圆角，缩到 1/40 之后
-  // 仍是圆角小方块），这个尺度上它既不会糊成一片，也不会把密集处连成实心色块。
   nodes.forEach((node) => {
     const box = boxes.get(node.id);
     if (!box) return;
-    const dot = svgEl('rect', {
+    svg.append(svgEl('rect', {
       class: 'minimap-node kind-' + displayKindOf(node),
       x: box.x, y: box.y, width: box.w, height: box.h, rx: '6',
-    });
-    svg.append(dot);
+    }));
   });
   graphIndex.minimapSize = { width, height };
 }
-/** 「现在看的是这一块」：把 `graphView` 的平移缩放换算成缩略图上的一个矩形。
+/** 缩略图上的视野框：把当前视角换算成缩略图里的一个矩形。
  *
- *  视野在**用户坐标**里的范围：屏幕左上角对应的用户点，以及它的宽高除以缩放。
- *  屏幕尺寸从画布量——缩略图只是它的索引，不该自己猜画布多大。
- *
- *  每次 `applyTransform` 之后跟着跑一次（缩放平移是唯一改变它的动作）。量不到画布
- *  （页签还没露出来）时把框藏起来，而不是留一个错位的矩形。
- */
+ *  三套坐标要对齐：**缩略图元素**（180×120 的卡里 inset 4px）、它按 `xMidYMid meet`
+ *  装 viewBox 后的实际画布（`fit`）、主画布的屏幕像素。任何一步漏了都会让框偏小或
+ *  偏在角落（漏 `fit` 时框只有真实的四成；漏主画布的 `fit` 时框不随缩放变）。 */
 function syncMinimapWindow() {
   const mask = $('#minimap-window'), canvas = $('#graph-canvas'), svg = $('#minimap-svg');
-  const main = $('#graph-svg');
   const size = graphIndex.minimapSize;
-  if (!mask) return;
-  const host = mask.parentElement;
-  const cRect = canvas ? canvas.getBoundingClientRect() : null;
-  const sRect = svg ? svg.getBoundingClientRect() : null;
-  const hRect = host ? host.getBoundingClientRect() : null;
-  const gRect = main ? main.getBoundingClientRect() : null;
-  // 页签没露出来时三者都量到 0：此时把框藏起来，而不是留一个错位的矩形。
-  if (!size || !cRect || !sRect || !hRect) { mask.classList.add('hidden'); return; }
-  if (!cRect.width || !cRect.height || !sRect.width || !sRect.height) { mask.classList.add('hidden'); return; }
-  mask.classList.remove('hidden');
-  // 缩略图把整张布局等比塞进 svg（xMidYMid meet）：先取缩比，再算居中留白。
+  if (!mask || !canvas || !svg || !size) { if (mask) mask.classList.add('hidden'); return; }
+  const cRect = canvas.getBoundingClientRect();
+  const sRect = svg.getBoundingClientRect();
+  const hRect = mask.parentElement ? mask.parentElement.getBoundingClientRect() : null;
+  if (!cRect.width || !cRect.height || !sRect.width || !sRect.height || !hRect) { mask.classList.add('hidden'); return; }
+  if (!size.width || !size.height) { mask.classList.add('hidden'); return; }
   const fit = Math.min(sRect.width / size.width, sRect.height / size.height);
+  if (!fit) { mask.classList.add('hidden'); return; }
   const ox = sRect.left - hRect.left + (sRect.width - size.width * fit) / 2;
   const oy = sRect.top - hRect.top + (sRect.height - size.height * fit) / 2;
-  // **还有一层**：`#graph-svg` 的 viewBox 是整张布局、`preserveAspectRatio="xMinYMin
-  // meet"`，所以浏览器先把用户坐标等比缩到元素框里（缩放系数 base），`graphView` 的
-  // 缩放平移是在这之上再叠一次。只按 `graphView.scale` 换算会漏掉 base，视野框会小
-  // 掉一个 base（实测 0.4 左右，框只有真实视野的四成，看着像「只圈住了一块」）。
-  const base = gRect && size.width && size.height
-    ? Math.min(gRect.width / size.width, gRect.height / size.height) : 0;
+  // 主画布那层"整幅塞进元素框"的系数：视野宽 = 元素宽 / (scale * 它)。
+  const metrics = surfaceMetrics();
+  const base = metrics ? metrics.fit : 0;
   if (!base) { mask.classList.add('hidden'); return; }
-  // 视野在用户坐标里的左上角与尺寸：屏幕像素 = (用户坐标 * 缩放 + 平移) * base，
-  // 所以屏幕左上角对应的用户点是 -tx/scale，宽度是画布像素 ÷ (缩放 * base)。
   const left = -graphView.tx / graphView.scale, top = -graphView.ty / graphView.scale;
   const viewW = cRect.width / (graphView.scale * base), viewH = cRect.height / (graphView.scale * base);
-  mask.style.left = `${ox + left * fit}px`;
-  mask.style.top = `${oy + top * fit}px`;
-  mask.style.width = `${viewW * fit}px`;
-  mask.style.height = `${viewH * fit}px`;
+  mask.style.left = (ox + left * fit) + 'px';
+  mask.style.top = (oy + top * fit) + 'px';
+  mask.style.width = (viewW * fit) + 'px';
+  mask.style.height = (viewH * fit) + 'px';
+  mask.classList.remove('hidden');
 }
-/** 邻接索引：供 hover 高亮使用。 */
+/** 邻接表：hover 时高亮"这一条链"要用（无向，因为读图时两边都算关联）。 */
 function buildNeighborIndex() {
-  graphIndex.neighbors = new Map();
-  graphIndex.edgeItems.forEach((item) => {
-    [item.source, item.target].forEach((id) => { if (!graphIndex.neighbors.has(id)) graphIndex.neighbors.set(id, new Set()); });
-    graphIndex.neighbors.get(item.source).add(item.target);
-    graphIndex.neighbors.get(item.target).add(item.source);
+  const map = new Map();
+  (graphIndex.edges || []).forEach((edge) => {
+    if (!map.has(edge.source)) map.set(edge.source, new Set());
+    if (!map.has(edge.target)) map.set(edge.target, new Set());
+    map.get(edge.source).add(edge.target);
+    map.get(edge.target).add(edge.source);
   });
+  graphIndex.neighbors = map;
 }
-/** 类型过滤：隐藏未勾选类型的节点，以及任一端被隐藏的边。 */
+/** 类型芯片：把被关掉的类型记进 `graphIndex.hidden`，然后重画。
+ *
+ *  改造前是给每张卡 toggle `filtered-out` 类；画布上"不画"就是真的跳过，
+ *  连它的边也一起跳过（边两端都得在场，否则会留下指向空处的线）。 */
 function applyKindFilter() {
-  const visible = new Set();
-  // 类型直接读渲染时记下的 `kind`：原来走 `state.nodeIndex` 反查，而索引里**没有**
-  // 那些只在 layout 里出现的节点（`nodeIndex` 是从 view.nodes 建的）。查不到就按
-  // "显示"处理，于是某类芯片关掉之后，恰好只在 layout 里的节点纹丝不动。
-  graphIndex.nodeItems.forEach((item) => {
-    const shown = state.kindFilter[item.kind] !== false;
-    item.node.classList.toggle('filtered-out', !shown);
-    if (shown) visible.add(item.id);
+  const hidden = new Set();
+  (graphIndex.nodes || []).forEach((node) => {
+    if (state.kindFilter[displayKindOf(node)] === false) hidden.add(node.id);
   });
-  graphIndex.edgeItems.forEach((item) => item.node.classList.toggle('filtered-out', !(visible.has(item.source) && visible.has(item.target))));
+  graphIndex.hidden = hidden;
+  paintGraph();
 }
-/** hover 高亮：相连的边与邻居节点提亮，其余压暗。 */
+/** hover 高亮：本人与直接邻居保持原样，其余压暗。空 id = 清掉高亮。 */
 function highlightNeighborhood(id) {
-  const keep = new Set([id, ...(graphIndex.neighbors.get(id) || new Set())]);
-  graphIndex.edgeItems.forEach((item) => {
-    const related = item.source === id || item.target === id;
-    item.node.classList.toggle('hl', related);
-    item.node.classList.toggle('dim', !related);
-  });
-  graphIndex.nodeItems.forEach((item) => {
-    item.node.classList.toggle('hl', keep.has(item.id));
-    item.node.classList.toggle('dim', !keep.has(item.id));
-  });
+  if (graphIndex.hoverId === (id || null)) return;
+  graphIndex.hoverId = id || null;
+  paintGraph();
 }
 function clearHighlight() {
-  graphIndex.nodeItems.forEach((item) => item.node.classList.remove('hl', 'dim'));
-  graphIndex.edgeItems.forEach((item) => item.node.classList.remove('hl', 'dim'));
+  highlightNeighborhood(null);
 }
-/** 缩放 / 平移只改一个 transform。
- *
- *  **缩放读数只在显示出来的百分比真的变了的时候写。** 平移根本不改缩放，所以拖动
- *  时那一行整段不执行。它原来是无条件写的，代价在真实数据上量过（352 节点 / 344 边
- *  / 2806 个 SVG 元素，初始 2215%）：写 transform 之后强读一次画布矩形是 11.2 ms，
- *  而多写这一行文本再强读是 **23.2 ms**——整整一倍，而屏幕上那个数字一个字都没变。
- *  机制是这一次文本写入把工具栏那一行（乃至根）的布局标脏了，于是紧跟其后的强读
- *  变成一次整文档布局，把那份 SVG 也一起算进去。
- */
-function applyTransform() {
-  const viewport = $('#graph-viewport');
-  if (!viewport) return;
-  viewport.setAttribute('transform', `translate(${graphView.tx} ${graphView.ty}) scale(${graphView.scale})`);
-  // 缩略图上的视野框**必须在下面那个提前返回之前**同步：平移不改变缩放读数，
-  // 而「只平移、不缩放」正是这一页最常见的动作（拖动找位置）。写在返回之后的话，
-  // 框只会在缩放变化时动，拖动时原地不动——看着像框坏了。
-  syncMinimapWindow();
-  const text = Math.round(graphView.scale * 100) + '%';
-  if (graphView.zoomText === text) return;
-  graphView.zoomText = text;
-  // 缓存这一个节点是安全的：它在 index.html 里是静态标记，`renderGraph` 重建的是
-  // SVG 内部（`#graph-viewport` 每次重画都是新的），所以那个**不能**缓存。
-  const readout = graphView.zoomNode || (graphView.zoomNode = $('#zoom-level'));
-  if (readout) readout.textContent = text;
-}
-/** 把一次 transform 写入推迟到下一帧，且**同一帧内只写一次**。
- *
- *  为什么需要队列：pointermove 的频率不由帧率决定。高回报率鼠标（1000 Hz）或者一次
- *  卡顿之后的追帧，都会在一帧里送来好几次 move；而每一次都会写 transform、写缩放
- *  读数，于是好几次"强制布局 + 重绘"堆在同一帧里——其中只有最后一次是看得见的。
- *  实测 352 节点的图上单次 pointermove 21.9 ms，连发 200 次是 4.4 秒：主线程全堵在
- *  这上面，而屏幕上只是图在缓慢地跟手。队列把"每次事件一次布局"变成"每帧一次"。
- *
- *  累加的量仍然是 `graphView.tx/ty`（相对位移），队列只决定**什么时候写出去**，
- *  所以拖动不会丢增量——丢增量会让图比光标走得慢，那是拖动最容易察觉的坏味道。
- */
-function scheduleTransform() {
-  if (graphView.frame) return;
-  const flush = () => { graphView.frame = 0; applyTransform(); };
-  // rAF 缺席时退回同步写（老浏览器 / 测试环境）：宁可慢一档，也不要把这一帧的
-  // 位移丢掉——丢掉的表现是"图偶尔不动"。
-  graphView.frame = window.requestAnimationFrame ? window.requestAnimationFrame(flush) : (flush(), 0);
-}
-/** 冻结「客户端像素 → 视图用户坐标」的比例：**一次拖动只量一次**。
- *
- *  拖动期间这个比例不会变（画布尺寸与 viewBox 都不动），而每量一次都要
- *  `getBoundingClientRect()`——它紧跟在上一次 transform 写入之后，会把那一帧还没做的
- *  布局同步做掉（实测 11.2 ms）。原来每个 pointermove 都要量**两次**（当前点与上一点，
- *  见 `toUserSpace`），而两次之间没有任何写入，第二次纯属白读。
- *
- *  ## 比例是**等比**的，不是两条边各算各的
- *
- *  viewBox 装进画布时按 `meet` 等比缩放（`preserveAspectRatio="xMinYMin meet"`），
- *  系数取 `min(rect.width / width, rect.height / height)`。用户坐标 → 屏幕坐标乘它，
- *  反过来（每一屏幕像素换多少用户单位）就是它的**倒数**。拿 `width / rect.width`
- *  当横向比例只在"画布与布局宽高比相同"时成立；链路图是竖长的（实例：1820×7974 的
- *  viewBox 装进 945×836 的画布），那个值是 1.93，而真实比例是 9.54——横向拖动只有
- *  手指的 1/5，纵向却刚好对，于是整张图"横着拖不动"。这是"拖动速度太慢"的全部原因。
- *
- *  冻结后按差值换算与逐点换算**等价**：
- *  `(clientX - left) * k - (lastX - left) * k = (clientX - lastX) * k`，
- *  两点的 left 都抵消掉了，所以每一像素的位移与逐点换算完全一样。
- *
- *  量不到（画布还没露出来）时返回 `null`，这一次拖动整段不平移——与原来
- *  `toUserSpace` 返回 null 时 `return` 的行为一致（那时它也是每次事件各自失败）。
- *  落回 1200×800 那两个默认值与 `toUserSpace` 保持一致，免得两条路径在
- *  "viewBox 还没写上去"的那一瞬间算出不同的比例。
- */
-function measureDragScale() {
-  const svg = $('#graph-svg'), rect = svg ? svg.getBoundingClientRect() : null;
-  if (!rect || !rect.width || !rect.height) return null;
-  const width = Number(svg.dataset.width) || 1200, height = Number(svg.dataset.height) || 800;
-  const fit = Math.min(rect.width / width, rect.height / height);
-  if (!fit) return null;
-  // 等比缩放下两个方向是同一把尺子：屏幕像素 → 用户单位都乘它的倒数。
-  return { sx: 1 / fit, sy: 1 / fit };
-}
-/** 适应窗口：viewBox 本身即整图，复位到单位变换即可。 */
-function resetView() {
-  // 卡片偏移也一起清：那颗按钮的语义是"把画面交回布局"，留下几张被拖出去的卡，
-  // 看上去就是"适应窗口没生效"。
-  clearPins();
-  graphView.scale = 1;
-  graphView.tx = 0;
-  graphView.ty = 0;
-  // 「适应窗口」= 主动接受重新适配，所以把"人动过视角"这条标记清掉：之后到来的
-  // 新节点可以再自动适配一次。保留它的话，点过适应窗口的人反而再也看不到自动跟随。
-  graphView.touched = false;
-  applyTransform();
-}
-/** 首次摆正：把视图的左上角对到布局内容的左上角。
- *
- *  为什么不能只管 `tx = ty = 0`：单位变换下的原点是**布局的**原点，而卡片不在原点
- *  上——`MARGIN` 让每列都从 40 起画，同一层的卡片又按列居中排（`build_layout` 的
- *  `offset`），于是最上面那张卡可能离原点几百个用户单位。600% 下视野只有
- *  300 来个用户单位宽，对着原点看就是**一片空画布**：图已经画好了，只是没在框里。
- *
- *  量不到画布（页签还没露出来）时什么都不做，等 `state.graphScaleMeasured` 那次
- *  重算再来摆——两次都算一遍比"猜一个值"便宜。
- */
-function alignViewToStart(boxes) {
-  const canvas = $('#graph-canvas');
-  if (!canvas || !boxes || !boxes.size) return;
-  const rect = canvas.getBoundingClientRect();
-  const fit = fitScale();
-  if (!rect.width || !rect.height || !fit) return;
-  // 对齐的是**第一列的顶卡**，不是「所有卡的最小 x」配「所有卡的最小 y」。
-  // 那两个最小值常常来自不同节点：布局按列居中（`build_layout` 的 `offset`），
-  // 最高的一列从 `MARGIN` 起画、最短的一列要从几百往下，而第一列（目标）恰恰
-  // 可能是最短的那一列。取 (minX, minY) 这个角就落在**空格**上——图已经画好，
-  // 视角却对着第一列上方的空白，看到的还是一片网格。实测（32 节点的合并视图）：
-  // minX=40 来自目标列、minY=40 来自事实列，摆正后视野里一张卡都没有。
-  // 读图顺序是从左往右，所以先定列（最小 x），再在这一列里取最上面那张。
-  let minX = Infinity;
-  boxes.forEach((box) => { minX = Math.min(minX, box.x); });
-  let minY = Infinity;
-  boxes.forEach((box) => {
-    if (Math.abs(box.x - minX) < 1) minY = Math.min(minY, box.y);
-  });
-  if (!isFinite(minX) || !isFinite(minY)) return;
-  // `pad` 是**屏幕**像素：换回用户单位要除以适配比例（`translate` 在 `scale` 之前，
-  // 所以平移量本身就是用户单位，与 `zoomAt` 那套锚点公式同一个坐标系）。
-  // 上边距还要让开左上角那块图例：它与卡是同一层浮层，压在卡上就是「读数被挡住了」。
-  // 图例的高度按它自己的 rect 量，量不到（被 CSS 藏了）就退回一个空白边距。
-  const padX = 16, padY = 16;
-  const legend = $('.graph-legend');
-  const legendBox = legend ? legend.getBoundingClientRect() : null;
-  const cleared = legendBox && legendBox.height > 0 ? legendBox.bottom - rect.top + 8 : padY;
-  graphView.tx = padX / fit - minX * graphView.scale;
-  graphView.ty = Math.max(padY, cleared) / fit - minY * graphView.scale;
-}
-/** 画布相对整图的适配比例。viewBox 即整图，所以它就是单位变换下的等效缩放。 */
-function fitScale() {
-  const svg = $('#graph-svg'), canvas = $('#graph-canvas');
-  if (!svg || !canvas) return 0;
-  const width = Number(svg.dataset.width) || 0, height = Number(svg.dataset.height) || 0;
-  const rect = canvas.getBoundingClientRect();
-  if (!width || !height || !rect.width || !rect.height) return 0;
-  return Math.min(rect.width / width, rect.height / height);
-}
-/** 下一帧再量一次画布，量到了就重画一遍（只为把视角摆正）。
- *
- *  为什么需要它：`init()` 无条件取一次链路，而那一刻页签可能还没露出来，
- *  `#graph-canvas` 的 rect 是 0x0 → `fitScale()` 返回 0 → `initialGraphScale()` 退回基准
- *  600%，`alignViewToStart()` 也算不出该往哪挪。落点于是是**布局原点的左上角**，
- *  而卡片从 `MARGIN` 起画、同层还按列居中，画面上就是一片空网格——看着像没数据。
- *
- *  光靠 `ResizeObserver` 补不上：它只在**尺寸变化**时回调，而这里多数情形是画布一上来
- *  就有尺寸（页签是默认页、分栏还没动），变化的只是数据到达的那一刻。所以按帧重试，
- *  量到就停；`MAX_MEASURE_RETRY` 帧还没量到就放弃（有人把窗口缩到看不见、或者干脆
- *  不是这一页），不在后台空转。
- */
-const MAX_MEASURE_RETRY = 60;
-function retryMeasureGraph() {
-  if (state.graphScaleMeasured) return;
-  if (state.graphMeasureRetry >= MAX_MEASURE_RETRY) return;
-  state.graphMeasureRetry += 1;
-  const canvas = $('#graph-canvas');
-  const again = () => {
-    if (state.graphScaleMeasured) return;
-    const rect = canvas ? canvas.getBoundingClientRect() : null;
-    const w = rect ? Math.round(rect.width) : 0, h = rect ? Math.round(rect.height) : 0;
-    // 量到**稳定**的尺寸再落定，不是量到非零就落定。首帧的 rect 常常是过渡值
-    // （侧栏还在收、分栏还没排、字体还没换），拿它算出的适配比例会偏小一个数量级，
-    // 于是 `initialGraphScale()` 给出一个过大的缩放——而画布随后长到正常尺寸时，
-    // 那个缩放就只剩**几十分之一的图**在视野里，看起来还是一片空网格。
-    // 所以要求连续两帧同一个尺寸：布局定下来之后它才为真。
-    const last = state.graphMeasureRect;
-    state.graphMeasureRect = { width: w, height: h };
-    if (!w || !h || !last || last.width !== w || last.height !== h) { retryMeasureGraph(); return; }
-    renderGraph();                   // 这一趟里 `measurable` 为真，视角与摆正都会落定
-  };
-  // 两条路都排上：`requestAnimationFrame` 让真实浏览器在**下一帧之前**就摆正（看不到
-  // 那一帧空网格）；`setTimeout` 是兜底——无头浏览器的虚拟时钟下 rAF 不一定会响，
-  // 而只靠 rAF 的那种写法在截图上就是「永远停在空网格」。`again` 自己是幂等的
-  // （`state.graphScaleMeasured` 一置真，两条路都立刻返回）。
-  if (window.requestAnimationFrame) window.requestAnimationFrame(again);
-  window.setTimeout(again, 80);
-}
-/** 新图载入时的缩放：**不低于 600% 这个基准**，放不下时取"可读"那一档。
- *
- *  两个量在争同一个位置，规则是把大的那个交出去：
- *
- *  * `BASE_SCALE`（600%）—— 平台基准，也是**下限**。原来的默认是"适应窗口"，
- *    而几百个节点的图上那意味着节点框只有二十几像素宽、文字 5–10px：图是画出来了，
- *    但读不了。用户的原话是"链路显示还是太小"，所以进来就该有 600% 这么近。
- *  * `1 / fit` —— **可读**那一档（1 个布局单位 = 1 个 CSS 像素，节点框 220×60 就是
- *    220×60 个屏幕像素）。合并视图上它会到 18 以上，比基准还大，那时听它的。
- *
- *  `fit` 量不到（画布 0×0）时返回基准而不是 1：算不准的时候落在一个**确定能用**
- *  的位置上，等量到了 `renderGraph` 会重算一次（`state.graphScaleMeasured`）。
- *
- *  想看全貌仍然按「适应窗口」（那会把缩放回到 100%），所以基准不挡任何一条路。
- */
-function initialGraphScale() {
-  const fit = fitScale();
-  if (!fit) return BASE_SCALE;
-  return Math.max(BASE_SCALE, 1 / fit);
-}
-/** 以 viewBox 用户坐标 (ux, uy) 为锚点缩放，保持该点不动。 */
-function zoomAt(ux, uy, factor) {
-  const next = clamp(graphView.scale * factor, MIN_SCALE, graphView.ceiling), ratio = next / graphView.scale;
-  graphView.tx = ux - ratio * (ux - graphView.tx);
-  graphView.ty = uy - ratio * (uy - graphView.ty);
-  graphView.scale = next;
-  graphView.touched = true;                    // 人自己缩放过：此后不再替他动视角
-  applyTransform();
-}
-/** 客户端像素坐标 → viewBox 用户坐标。 */
-function toUserSpace(clientX, clientY) {
-  const svg = $('#graph-svg'), rect = svg.getBoundingClientRect();
-  if (!rect.width || !rect.height) return null;
-  const width = Number(svg.dataset.width) || 1200, height = Number(svg.dataset.height) || 800;
-  return { x: (clientX - rect.left) * (width / rect.width), y: (clientY - rect.top) * (height / rect.height) };
-}
-function zoomByFactor(factor) {
-  const rect = $('#graph-svg').getBoundingClientRect();
-  const point = toUserSpace(rect.left + rect.width / 2, rect.top + rect.height / 2);
-  if (point) zoomAt(point.x, point.y, factor);
-}
-
 /* --------------------------------------------------- 7. 节点详情面板 ---- */
 /** 原始字段 → 键值对列表（含未识别字段）。 */
 function kvList(raw) {
@@ -1502,7 +1645,8 @@ function digestMembers(raw) {
 }
 function selectNode(id) {
   state.selectedNodeId = id;
-  $$('.gnode').forEach((group) => group.classList.toggle('selected', group.dataset.id === id));
+  // 画布上"选中"不是一个元素上的类，而是这一帧重画时换一套描边——所以只标记 + 重画。
+  if (graphIndex.boxes) paintGraph();
   renderNodeDetail(id);
 }
 
@@ -4905,7 +5049,9 @@ function severitySource() {
 }
 /** 图交互：滚轮缩放、拖拽平移、抬起点选、hover 高亮、工具栏按钮。 */
 function bindGraphEvents() {
-  const svg = $('#graph-svg');
+  // 变量名仍叫 `svg`：它是"绘制面"，改造前是 SVG 根，现在是 canvas。手势全挂在它
+  // 上面——玻璃面板之外那一圈留白不该响应拖动。
+  const svg = $('#graph-surface');
   svg.addEventListener('wheel', (event) => {              // 以光标位置为锚点缩放
     if (svg.classList.contains('hidden')) return;
     event.preventDefault();
@@ -4915,12 +5061,13 @@ function bindGraphEvents() {
   // 指针被 svg 捕获后 click 的 target 会变成 svg，故按下时记节点、抬起时判定点击
   svg.addEventListener('pointerdown', (event) => {
     if (event.button !== 0 || svg.classList.contains('hidden')) return;
-    const pressed = event.target.closest ? event.target.closest('.gnode') : null;
+    // 画布没有元素可以 `closest`：按下的点落在哪张卡上，要自己用框反查。
+    const pressedId = hitNode(event.clientX, event.clientY);
     // 按在卡上 = 拖这张卡，按在空白 = 平移画布。两者共用一套手势状态（手抖阈值、
     // 冻结比例、每帧一次写），只在位移的落点上分叉——按在卡上改卡自己的偏移，
     // 按在空白改视角。
     Object.assign(graphView, {
-      pressNodeId: pressed ? pressed.dataset.id : null, dragNodeId: pressed ? pressed.dataset.id : null,
+      pressNodeId: pressedId, dragNodeId: pressedId,
       dragging: true, moved: false,
       lastX: event.clientX, lastY: event.clientY,
       pressX: event.clientX, pressY: event.clientY,
@@ -4930,7 +5077,7 @@ function bindGraphEvents() {
       dragScale: measureDragScale(),
     });
     svg.classList.add('dragging');
-    if (pressed) svg.classList.add('node-dragging');
+    if (pressedId) svg.classList.add('node-dragging');
     svg.setPointerCapture(event.pointerId);
   });
   svg.addEventListener('pointermove', (event) => {
@@ -4981,12 +5128,10 @@ function bindGraphEvents() {
   svg.addEventListener('pointerup', (event) => endDrag(event, false));
   svg.addEventListener('pointercancel', (event) => endDrag(event, true));
   svg.addEventListener('mouseover', (event) => {           // hover 高亮相连的边与邻居
-    const group = event.target.closest ? event.target.closest('.gnode') : null;
-    if (group) highlightNeighborhood(group.dataset.id);
+    const hoverId = hitNode(event.clientX, event.clientY);
+    if (hoverId) highlightNeighborhood(hoverId);
   });
-  svg.addEventListener('mouseout', (event) => {
-    if (event.target.closest && event.target.closest('.gnode')) clearHighlight();
-  });
+  svg.addEventListener('mouseout', () => clearHighlight());
   $('#graph-canvas').addEventListener('mouseleave', clearHighlight);
   $('#zoom-in').addEventListener('click', () => zoomByFactor(1.2));
   $('#zoom-out').addEventListener('click', () => zoomByFactor(1 / 1.2));
@@ -5305,6 +5450,9 @@ window.PentestUI = {
   // 记录区末尾的让位（m18801）。审查卡改成浮层之后，它出现/消失都不一定改变
   // 被观察元素的尺寸（浮动元素脱出流内），所以画完卡片要主动叫一次。
   syncChatTail,
+  // 验收探针的入口：画布上没有可查询的元素，点选/拖动只能按坐标点，而坐标换算
+  // 只该有一份（与 toUserSpace 互逆）。它不改任何状态，只回答"可见的卡在哪"。
+  graphNodePoints,
 };
 /** 由 boot.js 接管启动：未登录时先只渲染登录门，不渲染工作台内容。 */
 if (!window.PentestConsoleGate) document.addEventListener('DOMContentLoaded', init);

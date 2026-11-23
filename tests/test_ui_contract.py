@@ -2965,27 +2965,34 @@ class GraphDragCostTestCase(unittest.TestCase):
                          "拖动自己写 transform：一帧里的每一次都算一遍布局，只有最后一次看得见")
         self.assertIn("function scheduleTransform()", self._js)
 
-    def test_the_zoom_readout_is_only_written_when_it_changes(self):
-        """缩放读数只在**显示出来的百分比真的变了**的时候写。
+    def test_the_zoom_readout_is_gone_because_the_canvas_reports_nothing(self):
+        """读数撤掉了：画布只重画，一帧里不再写任何"百分比"。
 
-        无条件写它，是"多花一倍时间、屏幕上一个字都不变"（10.8 → 21.5 ms）。
+        这类断言反过来守：`applyTransform` 里不许再出现读数节点与它的缓存字段。
+        历史理由（值得留着）：无条件写读数曾是"多花一倍时间、屏幕上一个字都不变"
+        （10.8 → 21.5 ms）。改成 canvas 之后这条读数本身没有意义——整幅塞进画布时
+        是 100%，600% 基准下就是 600%，而 2000×50000 的布局里它既不是面积也不是
+        倍数；要看"我在整幅的哪里"，右下角那张缩略图比一个数字准得多。
         """
         body = _fn_body(self._js, "applyTransform")
-        self.assertIn("graphView.zoomText === text", body,
-                      "读数又变成无条件写了——平移时那个数根本没变")
-        self.assertIn("return", body)
+        self.assertTrue(body, "applyTransform 没了")
+        self.assertNotIn("zoomText", body, "读数又回到 applyTransform 里了")
+        self.assertNotIn("#zoom-level", self._js, "脚本又在找 #zoom-level：那个节点已经撤掉")
+        self.assertNotIn("zoom-level", _read("index.html"), "index.html 里又出现读数节点")
 
-    def test_the_viewport_element_is_not_cached_but_the_readout_is(self):
-        """`#graph-viewport` **不能**缓存，`#zoom-level` 可以。
+    def test_the_canvas_element_is_not_cached_across_repaints(self):
+        """绘制面**不能**缓存：`applyTransform` 每次现取 `#graph-surface`。
 
-        `renderGraph` 每次都 `clear(svg)` 之后重建 viewport，缓存下来的引用在第一次
-        重画之后就指向一个已经不在文档里的节点——那之后所有的缩放平移都会写到一个
-        没人看的节点上，而画面上完全看不出来（图就是不动）。
-        读数那个节点是 index.html 里的静态标记，反过来缓存它才是对的那一边。
+        canvas 的尺寸与 `dataset.width/height` 跟着布局换，缓存下来的引用还指着上一张
+        缓冲，重画会写到一个已经不被渲染的 canvas 上——而画面上完全看不出来（图就是
+        不动）。这一条与改造前守 `#graph-viewport` 不缓存是同一件事，只是节点换了。
         """
         body = _fn_body(self._js, "applyTransform")
-        self.assertIn("$('#graph-viewport')", body, "viewport 被缓存了：重画之后会写到死节点上")
-        self.assertNotIn("graphView.viewport", body)
+        self.assertIn("paintGraph(", body, "applyTransform 不再触发重画")
+        surface = _fn_body(self._js, "paintGraph")
+        self.assertIn("$('#graph-surface')", surface, "paintGraph 没现取绘制面")
+        self.assertNotIn("graphView.surface", surface)
+        self.assertNotIn("graphView.canvasEl", surface)
 
 
 class GoalDeleteUiTestCase(unittest.TestCase):
@@ -4250,16 +4257,17 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         self.assertIn("graphView.scale = 1", body, "适应窗口没有回到整幅（100%）")
         self.assertIn('id="zoom-fit"', _read("index.html"))
 
-    def test_the_readout_placeholder_is_the_baseline_not_a_hundred(self):
-        """读数旁边那个**静态占位**也得是基准。
+    def test_the_zoom_placeholder_is_gone_with_the_readout(self):
+        """读数撤掉之后，那个静态占位也不能留着。
 
-        它会被 `applyTransform` 覆盖，所以只在"图画好了但还没应用变换"这一瞬间
-        看得见——正因为看得见的时间这么短，写错才没人发现：它写着 100%，而实际
-        落点是 600%。
+        它原先写死 600%，只在"图画好了但还没应用变换"那一瞬间看得见——留着它就是
+        一个没人维护的旧锚点：样式表里 `.zoom-level` 被删掉之后，它退化成一行裸字，
+        而且读者会以为这个数还会变。基准 600% 现在只由 `BASE_SCALE` 一处决定，
+        守在那条用例里（见 `test_the_default_zoom_is_never_below_the_600_percent_baseline`）。
         """
         html = _read("index.html")
-        self.assertIn('<span class="zoom-level" id="zoom-level">600%</span>', html,
-                      "缩放占位符写的不是 600%")
+        self.assertNotIn("zoom-level", html, "读数的静态占位又回来了")
+        self.assertNotIn("zoom-level", self._css, ".zoom-level 的样式又回来了：那个节点已经撤掉")
 
     # -------------------------------------------------- 链路页的自动更新（本轮）
 
@@ -4645,44 +4653,43 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         每一处都单独断言，因为少掉任何一角都不会报错：卡片照样画出来，只是那一角
         空着——只有对着参考形态比过的人才知道少的是什么。
         """
-        body = self._graph_fn("renderNodes")
+        body = self._graph_fn("drawNodeCard")
 
-        # 卡是 **DOM**（装在 <foreignObject> 里），四角的位置改由 CSS 决定；这里只钉
-        # "四样东西都在、都带得上类名"。换成 DOM 卡的理由写在 renderNodes 的注释里：
-        # 卡内排版本该交给排版引擎，而旧版手算的系数（字号 / 行高 / 折行位置）与后端
-        # _text_width 双份维护，改一个像素就要回来对一遍。
-        self.assertIn("'foreignObject'", body,
-                      "节点卡不再装进 foreignObject：DOM 卡是这一版形态的全部意义")
-        # 左上：类型图标块 + 中文类型名。圆点用 currentColor，颜色由 .gnode.kind-* 喂。
-        self.assertIn("'gnode-dot'", body,
-                      "节点卡左上角没有类型圆点：整张图只剩文字，颜色不再分区")
-        self.assertIn("'gnode-kind'", body,
-                      "节点卡左上角没有类型名")
+        # 卡是画在 2D 上下文里的一层像素：四角的位置由这一支函数里的坐标算出来，没有
+        # DOM、没有 CSS、也没有 foreignObject。这里钉的是"四样东西都在、都取自己的令牌"。
+        self.assertIn("roundRectPath(ctx, x, y, w, h, 12)", body,
+                      "卡不再是那枚圆角矩形：整张图会退化成一片底色")
+        self.assertIn("palette.panel", body, "卡底没走 --panel 令牌")
+
+        # 左上：类型图标块 + 中文类型名。颜色全部来自 palette.kind[kind]（类型令牌）。
+        self.assertIn("palette.kind[kind]", body,
+                      "图标块不取类型色：整张图只剩文字，颜色不再分区")
         self.assertIn("KIND_LABEL[kind]", body,
                       "类型名没走 KIND_LABEL：卡上会露出英文 kind 原文")
 
         # 右上：优先级徽章。0 是"没定优先级"，不是"P0"。
         self.assertIn("if (priority > 0)", body,
                       "优先级徽章没有 0 的判断：P0 会被画成最低优先级，而它其实是没有")
-        self.assertIn("'gnode-priority'", body, "优先级徽章丢了类名，样式表上不了色")
-        self.assertIn("tone-' + priorityTone(priority)", body,
-                      "优先级徽章没带三档语气的类名：P7 与 P5 看起来一样")
+        self.assertIn("priorityTone(priority)", body,
+                      "优先级徽章没取三档语气：P7 与 P5 看起来一样")
+        self.assertIn("palette.prioBg[tone]", body, "优先级底色没走 --prio-*-bg 令牌")
+        self.assertIn("palette.prioFg[tone]", body, "优先级字色没走 --prio-*-fg 令牌")
 
-        # 底行：状态徽章。九档状态各自一对颜色，靠 state-<值> 这个类名分发。
-        self.assertIn("'state-' + (node.state || 'active')", body,
-                      "状态徽章没带 state-<值>：九档状态会全部共用一种颜色")
+        # 底行：状态徽章。九档状态各自一对颜色，靠 state 名去查表。
+        self.assertIn("palette.stateBg[stateName]", body,
+                      "状态徽章没取底色：九档状态会全部共用一种颜色")
+        self.assertIn("palette.stateFg[stateName]", body, "状态徽章没取字色")
 
         # 右下：节点 id。它是复制到别处（日志 / 报告）时的抓手。
-        self.assertIn("'gnode-id'", body, "节点卡上没有 id")
+        self.assertIn("'#' + node.id", body, "节点卡上没有 id")
 
-        # 悬浮提示把被截断的四层信息补全。
-        self.assertIn(".filter(Boolean).join(", body,
-                      "悬浮提示没把四层信息串起来：卡片上的字是截断过的")
-
-        # 摘要交给 CSS 的 line-clamp：前端不再自己按字宽折行。
+        # 摘要交给 clipText / wrapText：最多三行，末行省略号。
+        self.assertIn("wrapText(ctx, node.subtitle, innerW, 3)", body,
+                      "摘要不再限三行：一张卡会把整列撑高")
         self.assertNotIn("box.y + 24", body,
-                         "标题回到了 y+24：那是旧 SVG 卡的坐标，DOM 卡里没有这种东西")
-        self.assertIn("'gnode-sub'", body, "摘要没了类名：line-clamp 上不去")
+                         "标题回到了 y+24：那是旧 SVG 卡的坐标，画布版按游标累加")
+        self.assertIn("clipText(ctx, node.label || node.id", body,
+                      "标题不再截断：它会长到隔壁卡上")
 
     def test_the_width_estimate_is_the_same_on_both_sides(self):
         """估宽系数两边必须一致，否则后端没截、前端溢出去。
@@ -4766,19 +4773,22 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         panel = self._html[self._html.index('id="panel-graph"'):]
         panel = panel[:panel.index("</section>")]
 
-        for ident in ("zoom-in", "zoom-out", "zoom-fit", "zoom-level"):
+        # 读数（`zoom-level`）已撤：画布上只留三颗按钮。百分比在这里既不是面积也不是
+        # 倍数（2000×50000 的布局 fit 只有 0.09），"我在整幅的哪里"由缩略图回答。
+        for ident in ("zoom-in", "zoom-out", "zoom-fit"):
             self.assertEqual(1, panel.count('id="%s"' % ident),
                              "画布上的 #%s 不是恰好一处：页头那份没删干净" % ident)
+        self.assertNotIn("zoom-level", panel, "读数又回到画布上了")
 
         self.assertIn('class="graph-zoom"', panel, "画布上没有缩放控件")
         self.assertIn('class="graph-legend"', panel, "画布上没有图例")
 
-        # 图例必须在 <svg> **之外**：放进去就跟着缩放走，放到 800% 时它先跑出屏幕。
-        svg = panel.index('id="graph-svg"')
-        self.assertLess(svg, panel.index('class="graph-legend"'),
-                        "图例跑到 svg 前面去了")
-        self.assertIn('preserveAspectRatio="xMinYMin meet"></svg>', panel,
-                      "svg 不再是自闭合的空壳：图例可能被摆进了它里面")
+        # 图例必须在绘制面**之外**：放进去就跟着缩放走，放到 800% 时它先跑出屏幕。
+        surface = panel.index('id="graph-surface"')
+        self.assertLess(surface, panel.index('class="graph-legend"'),
+                        "图例跑到画布前面去了")
+        self.assertIn('<canvas id="graph-surface" class="hidden"></canvas>', panel,
+                      "绘制面不再是一张没有内容的空壳：图例可能被摆进了它里面")
 
         legend = self._rule(self._css, ".graph-legend")
         self.assertIn("position: absolute", legend, "图例不悬浮，会在画布上占掉一条布局")
@@ -4912,9 +4922,9 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
 
         graph = self._graph_fn("renderGraph")
         self.assertIn("collapseDigests(", graph, "renderGraph 没接折叠：压缩还是孤岛")
-        edges_fn = self._graph_fn("renderEdges")
+        edges_fn = self._graph_fn("drawEdges")
         self.assertIn("EDGE_HIDDEN_KINDS.indexOf", edges_fn,
-                      "renderEdges 不跳过 covers / parent：画布会变成一张网")
+                      "drawEdges 不跳过 covers / parent：画布会变成一张网")
 
     def test_the_digest_reaches_the_canvas_not_only_the_payload(self):
         """压缩卡必须真的进布局，否则前端那套折叠一行也跑不到。
@@ -4981,10 +4991,11 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         self.assertIn("back", body, "回边与正向没有分岔：意图接力会绕一大圈")
         self.assertIn(" C ", body, "连线不是三次贝塞尔")
 
-        render = self._graph_fn("renderEdges")
-        self.assertIn("edgeGeometry(", render, "renderEdges 没走那条共用的几何")
-        self.assertIn('svgEl("path"', render, "边还是 <line>：没有曲线")
-        self.assertNotIn('svgEl("line"', render, "边又变回了直线")
+        render = self._graph_fn("drawEdges")
+        self.assertIn("edgeGeometry(", render, "drawEdges 没走那条共用的几何")
+        self.assertIn("ctx.bezierCurveTo(", render, "边不是三次贝塞尔：曲线没了")
+        self.assertNotIn("ctx.lineTo(", render, "边又变回了直线")
+        self.assertIn("drawArrow(ctx, geo)", render, "箭头没画：方向看不出来")
 
     def test_a_single_card_can_be_dragged_without_moving_the_view(self):
         """按住卡片拖 = 移动这张卡；按空白拖 = 平移画布。
@@ -5002,7 +5013,8 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         self.assertIn("dragNodeId:", down, "按下时没记要拖的是哪张卡")
 
         reset = _fn_body(self._app, "resetView")
-        self.assertIn("clearPins()", reset, "「适应窗口」不清卡片偏移：按了像没按")
+        self.assertIn("graphView.pins.clear()", reset,
+                      "「适应窗口」不清卡片偏移：按了像没按")
         graph = self._graph_fn("renderGraph")
         self.assertIn("graphIndex.boxes = boxes", graph,
                       "没有留下节点框：拖卡时算不出线的新几何")

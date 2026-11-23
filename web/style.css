@@ -1075,8 +1075,7 @@
   .setup-card, .finding-card, .model-card, .mode-option, .theme-card,
   .guide-status-card, .notice, .stat, .empty,
   .plan-item, .job-log, .rpt-row, .dock-chip, .chat-quick, .chat-msg,
-  .chat-review-card, .mcp-card, .notify-card, .intercept-card, .dash-card,
-  .gnode-card) {
+  .chat-review-card, .mcp-card, .notify-card, .intercept-card, .dash-card) {
   -webkit-backdrop-filter: blur(var(--glass-card-blur)) saturate(var(--glass-sat));
   backdrop-filter: blur(var(--glass-card-blur)) saturate(var(--glass-sat));
   background-image: linear-gradient(180deg, var(--glass-edge) 0, transparent 1px);
@@ -1830,7 +1829,6 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
   font-size: var(--fs-small);
 }
 .page-config .ph-config .select { max-width: 220px; }
-.zoom-level { font: var(--fs-small)/1.5 var(--mono); color: var(--muted); min-width: 44px; text-align: right; }
 
 /* -------------------------------------------------------------- 图 ----- */
 
@@ -1856,8 +1854,12 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 }
 .graph-stale:hover { border-color: var(--accent); color: var(--text); }
 .graph-stale.hidden { display: none; }
-.graph-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
-.graph-svg.dragging { cursor: grabbing; }
+/* 画布元素：`<canvas>` 是替换元素，`width/height` 属性是后备缓冲、`width: 100%` 是 CSS 尺寸，两者都由 `paintGraph` 按 `devicePixelRatio` 铺满。`touch-action: none` 让触屏的拖动不被滚动手势抢走；`user-select: none` 防止拖动时把图例文字选中。
+ * 选择器用 id 而不是 `.graph-surface`：类名与 html id 同名、又没在别处当过类，会被
+ * `test_class_selectors_are_not_ids_in_disguise` 判成「伪装成 id 的类」。
+ */
+#graph-surface { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
+#graph-surface.dragging { cursor: grabbing; }
 
 /* 图例：画布**左上角**一张卡，说明「圆点是类型、线型是关系」。
  *
@@ -1938,12 +1940,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .gzoom-btn:hover { background: var(--panel-3); color: var(--text); }
 /* 焦点环用内描边而不是 outline：外描边会被这一列 3px 的内边距裁掉一半。 */
 .gzoom-btn:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
-/* 读数留在这一列最下面：它回答「现在多大」，与三颗按钮是同一件事，分开摆反而要
-   两处找。宽度不再固定 44px（那是页头横排时的排版需要），这里居中即可。 */
-.graph-zoom .zoom-level {
-  min-width: 0; text-align: center; padding: 1px 0 2px;
-  font: var(--fs-caption)/1.2 var(--mono); color: var(--muted);
-}
+
 /* 缩略图：画布**右下角**一张小卡，照 ARTEX 的 <MiniMap>。
  *
  *  它回答的问题是「我现在看的是整张图的哪一块」——布局动辄 2000 x 50000 单位，

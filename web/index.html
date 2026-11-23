@@ -777,13 +777,17 @@
     </div>
     <div class="graph-body">
       <div class="graph-canvas" id="graph-canvas">
-        <!-- 对齐方式取 `xMinYMin`，不是默认的居中：viewBox 是一整张布局（竖长），
-             居中会在画布左侧留出一条与缩放无关的空带（实测 945px 宽的画布上空 377px），
-             整张图看起来"没有从左上角开始"。左上对齐后布局原点就是画布原点，缩放、
-             拖动与「适应窗口」都从同一个角出发；`toUserSpace` 也不再要被裁掉的那段偏移。 -->
-        <svg id="graph-svg" class="graph-svg hidden" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet"></svg>
+        <!-- 画布是 `<canvas>`：卡、边、箭头全在 2D 上下文里画（`paintGraph`），缩放与
+             平移只是 `ctx.setTransform` 的前四个分量——不再有 SVG 节点被浏览器排版。
+             坐标系仍是「布局用户单位 → 屏幕」，且**左上对齐**：`fit = min(w/W, h/H)` 之后
+             从原点铺开，不居中。居中会在画布左侧留一条与缩放无关的空带（实测 945px 宽的
+             画布上空 377px），整张图看起来"没有从左上角开始"。
+             字体不在 CSS 里画字，但 `.graph-surface` 那条 `font` 声明仍要留着：
+             `graphPalette()` 从**元素的计算样式**读回一条能喂给 `ctx.font` 的字体栈，
+             而 `--sans` 里套着 `var()`，令牌原文不能直接用。 -->
+        <canvas id="graph-surface" class="hidden"></canvas>
         <!-- 画布左上角的图例：图上每个符号——色块、线型——在这里都有说法。
-             它刻意放在 svg **外面**：放进去就会跟着缩放走，放大到 800% 时最该看的这张
+             它刻意放在画布 **外面**：画进去就会跟着缩放走，放大到 800% 时最该看的这张
              说明先跑出屏幕。`pointer-events: none` 让它不抢画布的拖动与悬停。
              七个类型与四条关系逐条对应 `KIND_ORDER`/`KIND_LABEL`/`EDGE_KINDS`/`EDGE_LABEL`
              （`test_the_legend_speaks_the_same_vocabulary_as_the_graph` 会逐字比对）——
@@ -828,15 +832,18 @@
         <button class="graph-stale hidden" id="graph-stale" type="button"
                 title="把视角重新适配到新布局（缩放与平移会重置）">链路已更新 · 点这里适应窗口</button>
         <!-- 画布左下角的悬浮缩放：手指在图上，控件就该在手边。按钮是 `+ / − / ⛶`，
-             与页头时代同一套 id——`bindGraphEvents` 与 `applyTransform` 都不必改。
-             读数跟在按钮下方，它报的是**当前**缩放（`applyTransform` 每次都写它）。
+             与页头时代同一套 id——`bindGraphEvents` 不必改。
+             **这里不报读数。** 百分比是「整幅塞进画布」的副产物：布局动辄
+             2000 x 50000 单位，`fit` 小到 0.09，于是「600%」跟屏幕上一厘米
+             有多长毫无关系；换一档窗口大小，同一个百分比对应的密度又变了。
+             真正想知道的其实是「现在看的是整张图的哪一块」，右下角的缩略图
+             直接画出来，比数字准。
              这一列的形状照 ARTEX 的 `<Controls showInteractive={false}>`：竖排、细边、
              悬浮在图上，互不抢位。 -->
         <div class="graph-zoom">
           <button id="zoom-in" class="gzoom-btn" type="button" title="放大" aria-label="放大">+</button>
           <button id="zoom-out" class="gzoom-btn" type="button" title="缩小" aria-label="缩小">−</button>
           <button id="zoom-fit" class="gzoom-btn" type="button" title="适应窗口" aria-label="适应窗口">⛶</button>
-          <span class="zoom-level" id="zoom-level">600%</span>
         </div>
         <!-- 画布右下角的缩略图（照 ARTEX 的 `<MiniMap>`）：整张布局压成一张小图，
              一个矩形框出「现在看的是哪一块」。它只读——点它不跳转，因为这一页的
@@ -2199,7 +2206,7 @@
 <script src="app.js"></script>
 <script src="panels.js"></script>
 <!-- split.js 排在这里没有顺序依赖：它只读自己那三个手柄与一份设备上的宽度偏好，
-     不碰 app.js 的任何状态。放在应用脚本之后只是为了让 app.js 先定义 #graph-svg
+     不碰 app.js 的任何状态。放在应用脚本之后只是为了让 app.js 先把 #graph-surface
      这些节点，截图与调试时 DOM 已经成型。 -->
 <script src="split.js"></script>
 <!-- fold.js 与 split.js 同一档：只读 DOM 与一份设备上的折叠偏好，不碰任何状态，
