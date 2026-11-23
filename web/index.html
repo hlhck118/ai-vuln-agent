@@ -782,7 +782,7 @@
              整张图看起来"没有从左上角开始"。左上对齐后布局原点就是画布原点，缩放、
              拖动与「适应窗口」都从同一个角出发；`toUserSpace` 也不再要被裁掉的那段偏移。 -->
         <svg id="graph-svg" class="graph-svg hidden" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet"></svg>
-        <!-- 画布右下角的图例：图上每个符号——色块、线型——在这里都有说法。
+        <!-- 画布左上角的图例：图上每个符号——色块、线型——在这里都有说法。
              它刻意放在 svg **外面**：放进去就会跟着缩放走，放大到 800% 时最该看的这张
              说明先跑出屏幕。`pointer-events: none` 让它不抢画布的拖动与悬停。
              八个类型与四条关系逐条对应 `KIND_ORDER`/`KIND_LABEL`/`EDGE_KINDS`/`EDGE_LABEL`
@@ -796,7 +796,6 @@
              起点与提示排在最前：它们是这张图上最先要认出来的两个位置——「从哪儿
              开始」与「谁给过这条方向」。两者都是显示类型，库里仍是事实。 -->
         <div class="graph-legend" aria-hidden="true">
-          <div class="legend-cap">节点类型</div>
           <div class="legend-kinds">
             <span class="legend-kind kind-begin">起点</span>
             <span class="legend-kind kind-goal">目标</span>
@@ -807,7 +806,6 @@
             <span class="legend-kind kind-digest">压缩</span>
             <span class="legend-kind kind-asset">资产</span>
           </div>
-          <div class="legend-cap">关系</div>
           <div class="legend-edges">
             <span class="legend-edge" data-kind="spawns">派生</span>
             <span class="legend-edge" data-kind="derived_from">意图链</span>

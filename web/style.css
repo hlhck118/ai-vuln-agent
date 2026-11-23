@@ -1861,28 +1861,36 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .graph-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
 .graph-svg.dragging { cursor: grabbing; }
 
-/* 图例：画布**右下角**一张卡，说明「圆点是类型、线型是关系」。
+/* 图例：画布**左上角**一张卡，说明「圆点是类型、线型是关系」。
  *
  *  压在图上而不是占一行高度：画布的可用面积就是这一页的价值，图例再重要也不该
  *  分走一条横带。压在图上就必须付代价——**不吃指针事件**，否则拖动画布时指针正好
  *  落在它上面，拖动会在这里断掉（pointerdown 收不到，表现是「这块区域拖不动」）。
  *
- *  为什么不是左上角（参考图里它在那儿）：链路是从左上角长出来的，layout 的 MARGIN
- *  只有 40 个用户单位，初始缩放下第一张卡正好落在左上角——图例摆那儿就是**压住
- *  第一个节点**，而且是标题与类型徽标那一块。右下角在链路长大后才会被占用，那时
- *  人已经在拖动了；左下角留给缩放控件，两者不打架。 */
+ *  位置照参考实现（ARTEX 的 `<Panel position="top-left">`）：读图的人和读表的人
+ *  一样，先看左上角那块"这份图怎么读"，再顺着链路往右下走——图例放在落笔处，
+ *  眼睛不必先跑到右下角再回来。缩放控件留在左下角，两个角互不相干。
+ *
+ *  与第一张卡的关系算过：默认落点是 600%（`BASE_SCALE`），layout 的原点在
+ *  MARGIN = 40 个用户单位，于是首卡在屏幕上离左上角约 240px，而这张卡宽 150、
+ *  高不到 100——默认视角下压不到它。只有把图缩到「适应窗口」（100%）时，首卡才
+ *  会落到图例底下；那时看的是整张图的形状而不是某一格的内容，且图例不吃指针事件，
+ *  拖一下就把它甩开了。 */
 .graph-legend {
-  position: absolute; bottom: 10px; right: 10px; z-index: 3; pointer-events: none;
-  display: flex; flex-direction: column; gap: 5px;
+  position: absolute; top: 10px; left: 10px; z-index: 3; pointer-events: none;
+  display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-2);
   background: var(--panel); box-shadow: var(--shadow-1);
   font: var(--fs-caption)/1.4 var(--sans); color: var(--muted);
 }
-.legend-cap { color: var(--text-dim); }
 /* 宽度刻意压到 150px：卡片的首列在 layout 里从 MARGIN=40 起，而默认缩放下限是
- *  600%，于是最左边那张卡离画布左边约 216px。图例一旦宽过这个数就会**压住卡片**——
- *  它是 chrome，压住内容就成了遮挡。150px 装不下六个类型一行，折成两三行反而更窄。 */
+ *  600%，于是最左边那张卡离画布左边约 240px。图例一旦宽过这个数就会**压住卡片**——
+ *  它是 chrome，压住内容就成了遮挡。150px 装不下八个类型一行，折成三行反而更窄
+ *  （八加四一共十二个符号，一行要 300px 以上）。 */
 .legend-kinds, .legend-edges { display: flex; flex-wrap: wrap; gap: 3px 10px; max-width: 150px; }
+/* 关系那一行与类型之间一条细线：两组符号读法不同（圆点 vs 线段），ARTEX 那张
+   左上角面板也是这么分的，不加线时八加四挤在一起像十二个平行的类型。 */
+.legend-edges { border-top: 1px solid var(--border); padding-top: 5px; }
 .legend-kind, .legend-edge { display: inline-flex; align-items: center; gap: 4px; color: var(--text-dim); }
 .legend-kind::before {
   content: ""; width: 7px; height: 7px; border-radius: 50%;

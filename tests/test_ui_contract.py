@@ -4763,6 +4763,12 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         self.assertIn("position: absolute", legend, "图例不悬浮，会在画布上占掉一条布局")
         self.assertIn("pointer-events: none", legend,
                       "图例抢鼠标：它盖住的那块画布拖不动")
+        # 位置照参考实现的 `<Panel position="top-left">`：左上角是「这份图怎么读」的
+        # 落笔处，读者不该先跑到右下角再回来。钉住 top/left，也钉住别偷偷挪回底角。
+        self.assertIn("top:", legend, "图例没贴住画布顶边（参考实现里它就在左上角）")
+        self.assertIn("left:", legend, "图例不在画布左侧（参考实现里它就在左上角）")
+        self.assertNotIn("bottom:", legend, "图例又回到画布底角了")
+        self.assertNotIn("right:", legend, "图例又回到画布右角了")
         zoom = self._rule(self._css, ".graph-zoom")
         self.assertIn("position: absolute", zoom, "缩放控件不悬浮")
         self.assertIn("left:", zoom, "缩放控件不在画布左侧（左下角留给它）")
