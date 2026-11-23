@@ -54,7 +54,7 @@ const KIND_LABEL = { begin: '起点', goal: '目标', hint: '提示', intent: '�
 const STATE_LABEL = { origin: '起点', confirmed: '已确认', done: '已完成', exhausted: '已穷尽', met: '已达成', active: '进行中', superseded: '已取代', blocked: '已阻塞', pending: '待跟进' };
 /* 类型芯片与图例的顺序（照 ARTEX 的画布图例：起点在最前，它是整张图的入口）。
  *  这份表必须与 `state.kindFilter` 的键**完全一致**，漏一个那一类就关不掉。 */
-const KIND_ORDER = ['begin', 'goal', 'hint', 'intent', 'fact', 'finding', 'digest', 'asset'];
+const KIND_ORDER = ['begin', 'goal', 'hint', 'intent', 'fact', 'finding', 'digest'];
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 const SEVERITY_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '信息' };
 /* 关系的中文名。四条是**画布上真画出来的**（其余两条见 `EDGE_HIDDEN_KINDS`）：
@@ -81,6 +81,11 @@ const EDGE_KINDS = ['spawns', 'derived_from', 'yields', 'proves'];
 const EDGE_HIDDEN_KINDS = ['covers', 'parent'];
 /** 没见过的 kind 按这个上色。必须与 .gedge 基础规则里的默认令牌一致。 */
 const EDGE_FALLBACK_KIND = 'spawns';
+/** 详情面板里「关联边」的排列顺序：先按关系的方向语义（派生 → 意图链 → 产出 →
+ *  证明 → 覆盖 → 归属），同一种关系再按对端在布局里的列从左到右。
+ *  它回答的是「这条链从我这儿怎么往下走」，所以必须有个稳定顺序——
+ *  按数据到达顺序列出来，同一条记录两次点开顺序都不一样（作业是并发写的）。 */
+const EDGE_SORT_ORDER = ['spawns', 'derived_from', 'yields', 'proves', 'covers', 'parent'];
 /* 资产类型的中文说法。**这不是唯一的来源**：权威词表在 `pentestd/models.py` 的
  * `ASSET_TYPE_LABELS`，平台把结果贴成 `asset.typeLabel`（`store.asset_tree()` 里贴）。
  * 留这一份只是兜底——本地缓存的旧快照、或者直接读 `state.assets` 里没经过后端的那几条，
@@ -328,10 +333,10 @@ const state = {
   // 当前正在跟随哪条任务的执行过程（null = 没在跟随）。它是**内存态**，
   // 刻意不进 URL：一条 SSE 长连接不该因为有人分享了地址而被别人接过去。
   jobLog: null,
-  // 八个类型一个不能少（与 `KIND_ORDER` 同一组键）：漏掉哪个，那一类的节点就在
+  // 七个类型一个不能少（与 `KIND_ORDER` 同一组键）：漏掉哪个，那一类的节点就在
   // 启动那一秒被判定成「已关闭」，而芯片却是亮着的——图上一整类节点凭空消失，
   // 芯片点两下才回来。
-  kindFilter: { begin: true, goal: true, hint: true, intent: true, fact: true, finding: true, digest: true, asset: true },
+  kindFilter: { begin: true, goal: true, hint: true, intent: true, fact: true, finding: true, digest: true },
   severityFilter: new Set(SEVERITY_ORDER),
   keyword: '', selectedNodeId: null, selectedAssetId: null,
   loaded: { findings: false, assets: false, report: false }, inflight: {},
@@ -378,10 +383,14 @@ const state = {
 const graphView = { scale: 1, tx: 0, ty: 0, ceiling: BASE_SCALE * BASE_HEADROOM,
                     dragging: false, moved: false, touched: false,
                     pressNodeId: null, lastX: 0, lastY: 0, pressX: 0, pressY: 0,
-                    dragScale: { sx: 1, sy: 1 }, frame: 0, zoomText: null, zoomNode: null };
+                    dragScale: { sx: 1, sy: 1 }, frame: 0, zoomText: null, zoomNode: null,
+                    // 单卡偏移：id → { dx, dy }（用户坐标）。与 scale/tx/ty 同级，都是**视图**
+                    // 状态——布局一变就被后端覆盖，所以不能写进 layout 里。
+                    pins: new Map(), dragNodeId: null, dragNode: null };
 // `nodeItems` 与 `edgeItems` 对称：过滤与高亮都靠它遍历，不必每次回 DOM 里
 // 用 `.gnode` 现查——那张图在真实数据上是 350 多个节点，一帧里查三遍够呛。
-const graphIndex = { edgeItems: [], nodeItems: [], neighbors: new Map() };
+// `boxes` 是最近一次渲染的节点框（含 w/h），拖卡时重画边要按它算几何。
+const graphIndex = { edgeItems: [], nodeItems: [], neighbors: new Map(), boxes: null };
 
 /* ------------------------------------------------- 5. 错误条与状态栏 ---- */
 let errorTimer = null;
@@ -736,27 +745,109 @@ function collapseDigests(nodes, edges) {
  *  只画 `EDGE_KINDS` 里那四种推进关系。`covers` / `parent` 有数据但不画：压缩节点
  *  吸收了十几条记录，每条一条虚线，画布就从一条链变成一张网，而这两条关系在详情
  *  面板里读得比在图上清楚（它们是「归属」，不是「推进到哪一步」）。 */
+/** 一条边从哪画到哪：与 `pentestd/graph.py` 的 `render_svg` 同一套几何。
+ *
+ *  正向（目标卡在源卡右边）：从源卡右缘中点出发，落到目标卡左缘中点；
+ *  回边（目标卡在源卡左边，意图互相接力时会出现）：改从两张卡的下缘中点走，
+ *  否则线要从卡片上方绕一大圈穿过别人的卡。
+ *
+ *  曲线用三次贝塞尔、两个控制点水平拉开半个列距——看起来是「从右边出来、往右边进去」
+ *  的 S 形，而不是一条斜线。这条几何在离线 SVG 里已经用了很久（导出图与画布要长得一样，
+ *  用户拿导出的图对截图时不会觉得是两张图）。 */
+/** 单卡拖动：每张卡自己记一个偏移量，不改布局。
+ *
+ *  为什么偏移记在 `graphView.pins` 而不是改 layout：layout 是后端算的，前端改它下一次
+ *  心跳（每 3 秒）就把它覆盖回去，拖到一半的卡会自己弹回原处。偏移是**视图状态**，
+ *  与缩放/平移同级；`resetView()`（适应窗口）清掉它，重画时按 id 重新贴上去。
+ *
+ *  偏移的单位是用户坐标（viewBox 里那个），所以拖动时要用按下那一刻冻结的比例把
+ *  屏幕像素换算过来——和画布平移同一把尺子（`measureDragScale`）。
+ */
+function pinOffset(id) {
+  const pin = graphView.pins.get(id);
+  return pin ? { dx: pin.dx, dy: pin.dy } : { dx: 0, dy: 0 };
+}
+function boxWithPin(box, id) {
+  if (!box) return box;
+  const off = pinOffset(id);
+  if (!off.dx && !off.dy) return box;
+  const moved = { x: box.x + off.dx, y: box.y + off.dy, w: box.w, h: box.h };
+  moved.cx = moved.x + moved.w / 2;
+  moved.cy = moved.y + moved.h / 2;
+  return moved;
+}
+/** 把一张卡贴回它当前的偏移上，并重画与它相连的线。
+ *  线要跟着走：卡片离位而线还连着老地方，读起来是"这条关系断了"。 */
+function applyPin(id) {
+  const off = pinOffset(id);
+  graphIndex.nodeItems.forEach((item) => {
+    if (item.id !== id) return;
+    if (off.dx || off.dy) item.node.setAttribute("transform", "translate(" + off.dx + " " + off.dy + ")");
+    else item.node.removeAttribute("transform");
+  });
+  repaintEdges([id]);
+}
+/** 重画与这些 id 有关的边（不传就全画）。几何与 `edgeGeometry` 同一套，
+ *  只是取框时叠上当前的卡片偏移。 */
+function repaintEdges(ids) {
+  const boxes = graphIndex.boxes;
+  if (!boxes) return;
+  const only = ids ? new Set(ids) : null;
+  graphIndex.edgeItems.forEach((item) => {
+    if (only && !(only.has(item.source) || only.has(item.target))) return;
+    const from = boxWithPin(boxes.get(item.source), item.source);
+    const to = boxWithPin(boxes.get(item.target), item.target);
+    if (!from || !to) return;
+    const geo = edgeGeometry(from, to);
+    item.node.setAttribute("d", geo.d);
+    if (item.label) {
+      item.label.setAttribute("x", String(geo.mx));
+      item.label.setAttribute("y", String(geo.my - 4));
+    }
+  });
+}
+/** 清掉全部卡片偏移（适应窗口时用）：DOM 就地还原，不必整张重画。 */
+function clearPins() {
+  if (!graphView.pins.size) return;
+  const ids = Array.from(graphView.pins.keys());
+  graphView.pins.clear();
+  ids.forEach((id) => applyPin(id));
+}
+function edgeGeometry(from, to) {
+  const back = to.x + to.w / 2 < from.x + from.w / 2;
+  const x1 = back ? from.x + from.w / 2 : from.x + from.w;
+  const y1 = back ? from.y + from.h : from.y + from.h / 2;
+  const x2 = back ? to.x + to.w / 2 : to.x;
+  const y2 = back ? to.y + to.h : to.y + to.h / 2;
+  const mid = back ? (x1 + x2) / 2 : x1 + (x2 - x1) / 2;
+  return {
+    d: "M " + x1 + " " + y1 + " C " + mid + " " + y1 + ", " + mid + " " + y2 + ", " + x2 + " " + y2,
+    mx: mid, my: (y1 + y2) / 2,
+  };
+}
 function renderEdges(layer, layoutEdges, boxes) {
   graphIndex.edgeItems = [];
   asArray(layoutEdges).forEach((edge) => {
     if (EDGE_HIDDEN_KINDS.indexOf(edge.kind) >= 0) return;
-    const from = boxes.get(edge.source), to = boxes.get(edge.target);
+    const from = boxWithPin(boxes.get(edge.source), edge.source);
+    const to = boxWithPin(boxes.get(edge.target), edge.target);
     if (!from || !to) return;
     const kind = EDGE_KINDS.indexOf(edge.kind) >= 0 ? edge.kind : EDGE_FALLBACK_KIND;
     // data-kind 写**解析后**的类型：CSS 的基础规则兜的是"未知类型"，而未知类型在这里
     // 已经收敛成 spawns 了。把原始值留给它，只会让两处兜底各说各话。
-    const line = svgEl('line', {
-      class: 'gedge', 'data-kind': kind, x1: from.cx, y1: from.cy, x2: to.cx, y2: to.cy,
-      'marker-end': `url(#arrow-${kind})`,
+    const geo = edgeGeometry(from, to);
+    const path = svgEl("path", {
+      class: "gedge", "data-kind": kind, d: geo.d, fill: "none",
+      "marker-end": "url(#arrow-" + kind + ")",
     });
-    const tip = svgEl('title'), text = svgEl('text', {
-      class: 'gedge-label', x: (from.cx + to.cx) / 2, y: (from.cy + to.cy) / 2 - 4, 'text-anchor': 'middle',
+    const tip = svgEl("title"), text = svgEl("text", {
+      class: "gedge-label", "data-kind": kind, x: geo.mx, y: geo.my - 4, "text-anchor": "middle",
     });
-    tip.textContent = `${EDGE_LABEL[edge.kind] || edge.kind || '关系'}：${edge.source} → ${edge.target}`;
+    tip.textContent = (EDGE_LABEL[edge.kind] || edge.kind || "关系") + "：" + edge.source + " → " + edge.target;
     text.textContent = edge.label || EDGE_LABEL[edge.kind] || edge.kind;
-    line.append(tip);
-    layer.append(line, text);
-    graphIndex.edgeItems.push({ node: line, source: edge.source, target: edge.target });
+    path.append(tip);
+    layer.append(path, text);
+    graphIndex.edgeItems.push({ node: path, label: text, source: edge.source, target: edge.target });
   });
 }
 /** SVG 里没有布局引擎：`<text>` 不会自动换行、不会自动裁剪，写多长就画多长。
@@ -797,7 +888,7 @@ function svgPill(right, top, text, size, className) {
  *  为什么不是四角布局：优先级与状态原先各占右上、右下两个角，中间被标题与副标题
  *  横穿，扫读时眼睛要走 Z 字。三行之后每一行只说一件事，从上往下读两遍就够。
  *
- *  颜色只在图标块、类型名与两颗胶囊上，卡身保持中性——八种类型各有全套配色，
+ *  颜色只在图标块、类型名与两颗胶囊上，卡身保持中性——七种类型各有全套配色，
  *  卡身也上色的话整张图就成了一片互不相让的色块。
  */
 function renderNodes(layer, nodes, boxes) {
@@ -863,6 +954,9 @@ function renderNodes(layer, nodes, boxes) {
       stateText, priority > 0 ? 'P' + priority : '', node.id,
     ].filter(Boolean).join('\n');
     parts.push(tip);
+    // 拖开的卡整组平移（`transform` 只作用于这一组，布局本身不动）。
+    const pin = pinOffset(node.id);
+    if (pin.dx || pin.dy) group.setAttribute("transform", "translate(" + pin.dx + " " + pin.dy + ")");
     group.append(...parts);
     layer.append(group);
     graphIndex.nodeItems.push({ node: group, id: node.id, kind });
@@ -901,7 +995,9 @@ function renderGraph() {
   const defs = svgEl('defs');                             // 每种关系一个箭头，颜色与边一致
   EDGE_KINDS.forEach((kind) => {
     const marker = svgEl('marker', {
-      id: `arrow-${kind}`, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '6', markerHeight: '6',
+      // 箭头尺寸与离线 SVG（`pentestd/graph.py::render_svg`）一致：7×7、refX 9；
+      // 画布上放大到 600% 时箭头随之变大，所以这里只需要"同一比例"，不必猜屏幕像素。
+      id: `arrow-${kind}`, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7',
       orient: 'auto-start-reverse',
     });
     marker.append(svgEl('path', { class: 'garrow', 'data-kind': kind, d: 'M 0 0 L 10 5 L 0 10 z' }));
@@ -913,6 +1009,10 @@ function renderGraph() {
   const view = collapseDigests(nodes, layout.edges);
   const boxes = new Map();
   view.nodes.forEach((node) => boxes.set(node.id, nodeBox(node)));
+  graphIndex.boxes = boxes;
+  // 卡片偏移跨重画保留：心跳每 3 秒重画一次，人拖开的卡不该自己弹回去。
+  // 反向也要清——被折叠掉或已不在窗口里的卡，偏移留着只会越积越多。
+  Array.from(graphView.pins.keys()).forEach((id) => { if (!boxes.has(id)) graphView.pins.delete(id); });
   viewport.append(edgeLayer, nodeLayer);
   svg.append(defs, viewport);
   renderEdges(edgeLayer, view.edges, boxes);
@@ -1075,6 +1175,9 @@ function measureDragScale() {
 }
 /** 适应窗口：viewBox 本身即整图，复位到单位变换即可。 */
 function resetView() {
+  // 卡片偏移也一起清：那颗按钮的语义是"把画面交回布局"，留下几张被拖出去的卡，
+  // 看上去就是"适应窗口没生效"。
+  clearPins();
   graphView.scale = 1;
   graphView.tx = 0;
   graphView.ty = 0;
@@ -1171,7 +1274,22 @@ function renderNodeDetail(id) {
   // 折叠是为了「先读结论」，不是「看不见细节」。成员按 id 回查索引，点一下就地
   // 换成那一条的详情（它不在画布上，所以不会高亮任何卡片，但字段一个不少）。
   if (kind === 'digest') body.append(digestMembers(entry.raw));
-  const related = asArray(state.graph && state.graph.edges).filter((edge) => edge.sourceId === id || edge.targetId === id);
+  // 关联边要**按链条的顺序**列，不能按数据到达顺序（那是并发的作业写进来的顺序）。
+  // 主键是关系本身的方向语义（派生 → 意图链 → 产出 → 证明 → 覆盖 → 归属），
+  // 次键是对端在布局里的那一列：同一种关系的三条边，左边那条先读。这两个键合起来
+  // 就是"这条链从我这儿往哪走、走出去了几步"。
+  const columnOf = (nodeId) => {
+    const hit = asArray(state.graph && state.graph.layout && state.graph.layout.nodes).find((node) => node.id === nodeId);
+    return hit ? Number(hit.x) || 0 : 0;
+  };
+  const related = asArray(state.graph && state.graph.edges)
+    .filter((edge) => edge.sourceId === id || edge.targetId === id)
+    .sort((left, right) => {
+      const order = (edge) => { const at = EDGE_SORT_ORDER.indexOf(edge.kind); return at < 0 ? EDGE_SORT_ORDER.length : at; };
+      if (order(left) !== order(right)) return order(left) - order(right);
+      const far = (edge) => (edge.sourceId === id ? edge.targetId : edge.sourceId);
+      return columnOf(far(left)) - columnOf(far(right));
+    });
   if (!related.length) return;
   const list = el('ul', 'edge-list');
   body.append(el('div', 'detail-section', `关联边（${related.length}）`));
@@ -4628,8 +4746,12 @@ function bindGraphEvents() {
   svg.addEventListener('pointerdown', (event) => {
     if (event.button !== 0 || svg.classList.contains('hidden')) return;
     const pressed = event.target.closest ? event.target.closest('.gnode') : null;
+    // 按在卡上 = 拖这张卡，按在空白 = 平移画布。两者共用一套手势状态（手抖阈值、
+    // 冻结比例、每帧一次写），只在位移的落点上分叉——按在卡上改卡自己的偏移，
+    // 按在空白改视角。
     Object.assign(graphView, {
-      pressNodeId: pressed ? pressed.dataset.id : null, dragging: true, moved: false,
+      pressNodeId: pressed ? pressed.dataset.id : null, dragNodeId: pressed ? pressed.dataset.id : null,
+      dragging: true, moved: false,
       lastX: event.clientX, lastY: event.clientY,
       pressX: event.clientX, pressY: event.clientY,
       // 比例在这一刻量一次，整个手势都用它（见 `measureDragScale`）。放在按下时而不是
@@ -4638,6 +4760,7 @@ function bindGraphEvents() {
       dragScale: measureDragScale(),
     });
     svg.classList.add('dragging');
+    if (pressed) svg.classList.add('node-dragging');
     svg.setPointerCapture(event.pointerId);
   });
   svg.addEventListener('pointermove', (event) => {
@@ -4656,10 +4779,22 @@ function bindGraphEvents() {
     // 矩形，而它紧跟在上一次写入之后，等于每次事件强制一次布局）。
     const scale = graphView.dragScale;
     if (!scale) return;                                     // 按下时画布量不到尺寸
-    graphView.tx += (event.clientX - graphView.lastX) * scale.sx;
-    graphView.ty += (event.clientY - graphView.lastY) * scale.sy;
+    const dx = (event.clientX - graphView.lastX) * scale.sx;
+    const dy = (event.clientY - graphView.lastY) * scale.sy;
     graphView.lastX = event.clientX;
     graphView.lastY = event.clientY;
+    if (graphView.dragNodeId) {
+      // 拖卡：把这一步位移加到这张卡自己的偏移上，然后只重画它自己与它那几条边。
+      // 不走 `scheduleTransform`（视角没变），也不整张重画（350 张卡时一次 40 ms）。
+      const pin = graphView.pins.get(graphView.dragNodeId) || { dx: 0, dy: 0 };
+      pin.dx += dx;
+      pin.dy += dy;
+      graphView.pins.set(graphView.dragNodeId, pin);
+      applyPin(graphView.dragNodeId);
+      return;
+    }
+    graphView.tx += dx;
+    graphView.ty += dy;
     scheduleTransform();                                    // 每帧最多写一次
   });
   const endDrag = (event, cancelled) => {
@@ -4670,6 +4805,8 @@ function bindGraphEvents() {
     // 被系统取消的手势（右键菜单、触摸被打断）不是一次点选，不该改选中态
     if (!cancelled && !graphView.moved && graphView.pressNodeId) selectNode(graphView.pressNodeId);
     graphView.pressNodeId = null;
+    graphView.dragNodeId = null;
+    svg.classList.remove('node-dragging');
   };
   svg.addEventListener('pointerup', (event) => endDrag(event, false));
   svg.addEventListener('pointercancel', (event) => endDrag(event, true));

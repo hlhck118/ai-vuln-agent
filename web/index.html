@@ -785,7 +785,7 @@
         <!-- 画布左上角的图例：图上每个符号——色块、线型——在这里都有说法。
              它刻意放在 svg **外面**：放进去就会跟着缩放走，放大到 800% 时最该看的这张
              说明先跑出屏幕。`pointer-events: none` 让它不抢画布的拖动与悬停。
-             八个类型与四条关系逐条对应 `KIND_ORDER`/`KIND_LABEL`/`EDGE_KINDS`/`EDGE_LABEL`
+             七个类型与四条关系逐条对应 `KIND_ORDER`/`KIND_LABEL`/`EDGE_KINDS`/`EDGE_LABEL`
              （`test_the_legend_speaks_the_same_vocabulary_as_the_graph` 会逐字比对）——
              图例说谎比没有图例更糟。
 
@@ -794,7 +794,12 @@
              与右侧详情里，想知道某条压缩吸收了谁，点开它就行。
 
              起点与提示排在最前：它们是这张图上最先要认出来的两个位置——「从哪儿
-             开始」与「谁给过这条方向」。两者都是显示类型，库里仍是事实。 -->
+             开始」与「谁给过这条方向」。两者都是显示类型，库里仍是事实。
+
+             没有资产：资产是一棵父子树（域名 → 主机 → 服务），它与「这条链走到哪
+             一步」没有共同的刻度，混在一张按推进排序的图上会把每一列拉高一倍，
+             读的人还得先分辨"这张卡为什么在这一列"。资产仍在「资产」页签里，
+             `parent` 边也仍在数据与详情面板里。 -->
         <div class="graph-legend" aria-hidden="true">
           <div class="legend-kinds">
             <span class="legend-kind kind-begin">起点</span>
@@ -804,7 +809,6 @@
             <span class="legend-kind kind-fact">事实</span>
             <span class="legend-kind kind-finding">漏洞</span>
             <span class="legend-kind kind-digest">压缩</span>
-            <span class="legend-kind kind-asset">资产</span>
           </div>
           <div class="legend-edges">
             <span class="legend-edge" data-kind="spawns">派生</span>

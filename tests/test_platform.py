@@ -233,8 +233,11 @@ class GraphTestCase(unittest.TestCase):
 
     def _layout(self):
         view = self.store.view(self.eid)
+        # 资产不进链路图（见 `graph.build_layout` 的说明）：它与「走到哪一步」没有
+        # 共同的刻度，混进来会把每一列拉高一倍。`_nodes()` 故意把资产也带上，
+        # 由 `test_assets_stay_off_the_canvas` 盯住"带上也不画"。
         nodes = [view["goal"]] + sum((view["nodes"][k] for k in
-                                      ("intents", "facts", "findings", "assets")), [])
+                                      ("intents", "facts", "findings")), [])
         return graph.build_layout([n for n in nodes if n], view["edges"])
 
     def test_layers_follow_the_chain(self):
@@ -244,13 +247,25 @@ class GraphTestCase(unittest.TestCase):
         self.assertLess(position[self.intent["id"]]["x"], position[self.fact["id"]]["x"])
         self.assertLess(position[self.fact["id"]]["x"], position[self.derived["id"]]["x"])
 
-    def test_assets_are_in_their_own_band(self):
-        layout = self._layout()
-        position = {n["id"]: n for n in layout["nodes"]}
-        chain_x = max(position[i]["x"] for i in
-                      ("goal-1", self.intent["id"], self.fact["id"],
-                       self.derived["id"], self.finding["id"]))
-        self.assertGreater(position[self.asset["id"]]["x"], chain_x)
+    def test_assets_stay_off_the_canvas(self):
+        """资产是**父子树**，不是链路的一步：它不进布局。
+
+        原先它单独占一条竖带，图上于是有一列既不在时间上、也不在推进上——
+        "这台机器上还开着 22 端口"与"这个意图产出了什么"被并排摆着，读的人
+        要先分辨每张卡为什么在这一列。资产仍在「资产」页签，`parent` 边也仍在
+        数据与详情面板里，只是不上画布。
+        """
+        view = self.store.view(self.eid)
+        nodes = [view["goal"]] + sum((view["nodes"][k] for k in
+                                      ("intents", "facts", "findings", "assets")), [])
+        layout = graph.build_layout([n for n in nodes if n], view["edges"])
+        placed = {n["id"] for n in layout["nodes"]}
+        self.assertNotIn(self.asset["id"], placed,
+                         "资产又画到链路图上了")
+        self.assertGreater(len(placed), 0, "布局什么也没画出来，这条用例什么也没验证到")
+        for edge in layout["edges"]:
+            self.assertNotIn(self.asset["id"], (edge["source"], edge["target"]),
+                             "资产不在画布上，却还有边挂在它身上")
 
     def test_the_asset_node_label_uses_the_chinese_type_word(self):
         """资产节点标签是给人看的（这张图还会导出成自包含的 SVG）。
@@ -258,9 +273,9 @@ class GraphTestCase(unittest.TestCase):
         原先拼的是 `node.type + ' · ' + node.value`，于是图上写 `app · graph-target`，
         而网页资产树写「应用」——同一份数据的两种语言。
         """
-        layout = self._layout()
-        position = {n["id"]: n for n in layout["nodes"]}
-        label = position[self.asset["id"]]["label"]
+        # 资产不上画布了，但 `_label_of` 仍是资产在别处（导出的树、日志）取名字的
+        # 那一条路径，所以直接问它要标签——不比绕道布局再断言。
+        label = graph._label_of({"kind": "asset", "type": "app", "value": "graph-target"})
         self.assertIn("应用", label, "资产节点的类型没走中文词表：%s" % label)
         self.assertNotIn("app ·", label, "资产节点的类型还是机器词：%s" % label)
 

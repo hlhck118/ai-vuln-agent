@@ -4588,6 +4588,16 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         self.assertTrue(body, "app.js 里找不到函数 %s" % name)
         return body
 
+    def _handler_for(self, event_name):
+        """取 svg 上某个事件处理函数的源码片段（到下一个 addEventListener 为止）。
+
+        手势那几条断言要落在 `bindGraphEvents` 的**某一个分支**上：整份 app.js
+        里 `graphView.pins` 到处都有（读、写、清），全文断言等于什么都没断言。
+        """
+        start = self._app.index("svg.addEventListener('%s'" % event_name)
+        nxt = self._app.find("svg.addEventListener('", start + 5)
+        return self._app[start:nxt if nxt > 0 else len(self._app)]
+
     def _arrow(self, name):
         """箭头函数常量（`const x = (...) => ...;`）的整行。
 
@@ -4811,9 +4821,11 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         hidden = self._js_list(self._app, "EDGE_HIDDEN_KINDS")
         edge_label = self._js_map(self._app, "EDGE_LABEL")
 
-        self.assertEqual(["begin", "goal", "hint", "intent", "fact", "finding", "digest", "asset"], kinds,
-                         "KIND_ORDER 不再是八类：起点与提示掉了，或者顺序被打乱")
-        self.assertEqual(sorted(kinds), sorted(labels),
+        self.assertEqual(["begin", "goal", "hint", "intent", "fact", "finding", "digest"], kinds,
+                         "KIND_ORDER 不再是那七类：起点与提示掉了、资产又回来了，或者顺序被打乱")
+        # 资产从画布上撤了，但 `KIND_LABEL.asset` 还得留着：对话与面板用它写
+        # 「资产 12」这类计数（chat.js、panels.js），删掉会印出英文 asset。
+        self.assertEqual(sorted(kinds + ["asset"]), sorted(labels),
                          "KIND_LABEL 与 KIND_ORDER 不是同一组键：少一个的那类卡上会露出英文")
         self.assertEqual(["spawns", "derived_from", "yields", "proves"], edges,
                          "画布上画的关系不再是那四条推进关系")
@@ -4939,6 +4951,88 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
                           "--prio-amber-fg", "--prio-slate-bg"):
                 self.assertIn(token, body, "%s 主题缺 %s" % (sel, token))
 
+    # -------------------------------- 第13轮：连线 / 单卡拖动 / 去资产 / 关联顺序
+
+    def test_the_edges_are_drawn_with_the_same_geometry_as_the_export(self):
+        """画布上的线要与导出的 SVG 同一条曲线。
+
+        原先画布用 `<line>` 连两个中心点、导出图用三次贝塞尔从右边中点连到左边中点——
+        同一份数据两张图长得不一样，而人拿导出的图对截图时会以为哪边画错了。
+        几何只有一处：`edgeGeometry`，回边（目标在源左边）改走两张卡的下缘中点。
+        """
+        body = self._graph_fn("edgeGeometry")
+        self.assertIn("from.x + from.w", body, "起点没取源卡的右缘")
+        self.assertIn("from.y + from.h / 2", body, "起点没取源卡右缘的中点")
+        self.assertIn("to.y + to.h / 2", body, "终点没取目标卡左缘的中点")
+        self.assertIn("back", body, "回边与正向没有分岔：意图接力会绕一大圈")
+        self.assertIn(" C ", body, "连线不是三次贝塞尔")
+
+        render = self._graph_fn("renderEdges")
+        self.assertIn("edgeGeometry(", render, "renderEdges 没走那条共用的几何")
+        self.assertIn('svgEl("path"', render, "边还是 <line>：没有曲线")
+        self.assertNotIn('svgEl("line"', render, "边又变回了直线")
+
+    def test_a_single_card_can_be_dragged_without_moving_the_view(self):
+        """按住卡片拖 = 移动这张卡；按空白拖 = 平移画布。
+
+        偏移只能记在**视图**上（`graphView.pins`）：写进 layout 的话，心跳每 3 秒
+        用后端布局重画一次，拖到一半的卡会自己弹回去。位移的单位是用户坐标，
+        所以要乘按下那一刻冻结的比例——与画布平移同一把尺子。
+        """
+        move = _strip_js_comments(self._handler_for("pointermove"))
+        self.assertIn("graphView.dragNodeId", move, "pointermove 不分岔：拖卡会平移整张画布")
+        self.assertIn("graphView.pins", move, "拖卡的位移没有落到卡片偏移上")
+        self.assertIn("applyPin(", move, "拖完没有把那张卡与它的线重新贴一遍")
+
+        down = _strip_js_comments(self._handler_for("pointerdown"))
+        self.assertIn("dragNodeId:", down, "按下时没记要拖的是哪张卡")
+
+        reset = _fn_body(self._app, "resetView")
+        self.assertIn("clearPins()", reset, "「适应窗口」不清卡片偏移：按了像没按")
+        graph = self._graph_fn("renderGraph")
+        self.assertIn("graphIndex.boxes = boxes", graph,
+                      "没有留下节点框：拖卡时算不出线的新几何")
+
+    def test_assets_stay_off_the_canvas(self):
+        """资产是父子树，不是链路的一步：这一类不上画布。
+
+        它原先单独占一条竖带。代价不是"多一列"，而是那一列让整张图高一倍，
+        而它回答不了"下一步做什么"——22 条资产与 8 条链路并排，读的人要先分辨
+        每张卡为什么在这一列。资产仍在「资产」页签，`parent` 边仍在数据里。
+        """
+        kinds = self._js_list(self._app, "KIND_ORDER")
+        self.assertNotIn("asset", kinds, "资产又回到画布类型表里了")
+        self.assertIn("asset", self._js_map(self._app, "KIND_LABEL"),
+                      "KIND_LABEL.asset 被删了：对话与面板会印出英文 asset")
+        self.assertNotIn("kind-asset", self._html, "图例里还挂着资产")
+
+        with open(os.path.join(ROOT, "pentestd", "server.py"), "r", encoding="utf-8") as handle:
+            server_src = handle.read()
+        body = re.search(r"def _all_nodes\(.*?\n    def ", server_src, re.S)
+        self.assertTrue(body, "找不到 _all_nodes")
+        self.assertNotIn('"assets"' + ",", body.group(0),
+                         "_all_nodes 又把资产收进布局了")
+
+        with open(os.path.join(ROOT, "pentestd", "graph.py"), "r", encoding="utf-8") as handle:
+            graph_src = handle.read()
+        build = re.search(r"def build_layout\(.*?\n    def ", graph_src, re.S)
+        self.assertTrue(build, "找不到 build_layout")
+        self.assertNotIn("_asset_order", graph_src, "资产竖带的排序函数又回来了")
+        self.assertNotIn("asset_x", build.group(0), "build_layout 又给资产留了一条竖带")
+
+    def test_related_edges_are_listed_in_chain_order(self):
+        """详情面板的「关联边」按链条顺序列，不按数据到达顺序。
+
+        边是并发的作业写进来的，到达顺序是随机的：同一条记录两次点开，
+        「产出」可能排第一也可能排第三。主键是关系的方向语义，次键是对端在布局里
+        的列——这也是「这条链从我这儿怎么往下走」的读法。
+        """
+        order = self._js_list(self._app, "EDGE_SORT_ORDER")
+        self.assertEqual(["spawns", "derived_from", "yields", "proves", "covers", "parent"], order,
+                         "关联边的排列顺序变了")
+        body = self._graph_fn("renderNodeDetail")
+        self.assertIn("EDGE_SORT_ORDER", body, "renderNodeDetail 没按这张表排")
+        self.assertIn(".sort(", body, "关联边没有排序，仍按数据到达顺序")
 class LiveStepBadgeTestCase(unittest.TestCase):
     """气泡上那个步数徽章：报**实际**步数，上限只在它真会拦人时才报。
 

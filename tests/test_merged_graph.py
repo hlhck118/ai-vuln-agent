@@ -127,7 +127,11 @@ class MergedViewTestCase(unittest.TestCase):
         view = self._view()
         view["layout"] = graph.build_layout(self._all_nodes(view), view["edges"])
         placed = {node["id"] for node in view["layout"]["nodes"]}
-        for node in self._all_nodes(view):
+        # 资产是唯一一类**故意**不上画布的节点（见 `test_assets_never_reach_the_canvas`）：
+        # 这条用例守的是"该画的都画了"，把资产算进来就成了"该不画的也画了"。
+        visible = [node for node in self._all_nodes(view) if node.get("kind") != "asset"]
+        self.assertGreater(len(visible), 0, "测试数据里没有可见节点")
+        for node in visible:
             self.assertIn(node["id"], placed, "布局漏掉了节点：%s" % node["id"])
 
     # ---------------------------------------------------------- 窗口不丢账
@@ -466,8 +470,19 @@ class DigestLayoutTestCase(unittest.TestCase):
                            "摘要混进了链路列：跨层的 covers 会把链路纵深拉长")
         self.assertGreater(self._column(layout, "finding")["x"],
                            self._column(layout, "digest")["x"])
-        self.assertGreater(self._column(layout, "asset")["x"],
-                           self._column(layout, "finding")["x"])
+        # 资产不在这张图上（它是父子树，与推进没有比得上的刻度）。点开
+        # `test_assets_never_reach_the_canvas` 看那条断言。
+
+    def test_assets_never_reach_the_canvas(self):
+        """`_nodes()` 里带着 asset-1，布局必须一只也不画。
+
+        资产混进链路图的代价不是"多一张卡"，而是**每一列都被拉高一倍**
+        （它是 22 条、链路是 8 条），而它同时提供不了任何"下一步"。
+        """
+        layout = graph.build_layout(self._nodes(), self._edges())
+        kinds = {node["kind"] for node in layout["nodes"]}
+        self.assertNotIn("asset", kinds, "资产又画到链路图上了")
+        self.assertIn("digest", kinds, "布局少画了压缩卡")
 
     def test_no_digest_means_no_empty_column(self):
         """没有摘要时不许凭空多一条空竖带：空库的图会被推到右边。"""
