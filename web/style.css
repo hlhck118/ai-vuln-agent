@@ -180,6 +180,10 @@
   --state-blocked-bg: #46301a;
   --state-pending-fg: #c9cdd8;
   --state-pending-bg: #33333d;
+  /* 第十档「已修复」：它不与其他九档共用色相——修复是**收尾**，不是又一种「做完了」。
+   * 取青绿：与 confirmed 的绿同侧但压低了饱和度，读起来像「同一个好消息的更早一步」。 */
+  --state-fixed-fg: #6fd7c8;
+  --state-fixed-bg: #1d3b38;
 
   /* ---- 优先级胶囊：三档语气（照 ARTEX 的 prioTone） ----
    * 8 以上红、5 以上黄、其余中性。三档而不是九个色阶：这条读数只在「先看哪张卡」
@@ -418,6 +422,9 @@
   --state-blocked-bg: #fce3cd;
   --state-pending-fg: #4d5462;
   --state-pending-bg: #e7e9ee;
+  /* 已修复在亮底上的那一套：字压到能过 AA 的深青，底提到几乎白，与其余九档同一取向。 */
+  --state-fixed-fg: #1a6f63;
+  --state-fixed-bg: #dcf3ee;
   /* 优先级三档在亮底上的那一套：红/黄/中性的**字**压深、**底**提浅，与状态胶囊同样的取向。 */
   --prio-red-fg: #8a1a12;
   --prio-red-bg: #fbdcd8;
@@ -573,6 +580,8 @@
   --state-blocked-bg: #fce3cd;
   --state-pending-fg: #4d5462;
   --state-pending-bg: #e7e9ee;
+  --state-fixed-fg: #1a6f63;
+  --state-fixed-bg: #dcf3ee;
   --prio-red-fg: #8a1a12;
   --prio-red-bg: #fbdcd8;
   --prio-amber-fg: #6b4400;
@@ -2120,6 +2129,7 @@ button.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offse
 .state-superseded { --pill-fg: var(--state-superseded-fg); --pill-bg: var(--state-superseded-bg); }
 .state-blocked { --pill-fg: var(--state-blocked-fg); --pill-bg: var(--state-blocked-bg); }
 .state-pending { --pill-fg: var(--state-pending-fg); --pill-bg: var(--state-pending-bg); }
+.state-fixed { --pill-fg: var(--state-fixed-fg); --pill-bg: var(--state-fixed-bg); }
 /* 前四个是结构类型，后两个是显示类型（起点 / 提示），顺序与 `KIND_ORDER` 一致。 */
 .gnode.kind-begin { color: var(--kind-begin); }
 .gnode.kind-goal { color: var(--kind-goal); }
@@ -6358,6 +6368,9 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   background: var(--panel-3); border: 1px solid var(--border-strong); color: var(--text-dim);
 }
 .orch-badge.state-active { color: var(--accent); border-color: var(--accent); }
+/* 「在跑」：与 state-active 同色系但实心，因为在同一行里它必须一眼区分于状态徽标——
+   两者都念「进行中」时，使用者没法回答"我现在动手改它安全吗"。 */
+.orch-badge.running { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 .orch-badge.state-met, .orch-badge.state-done, .orch-badge.state-confirmed { color: var(--ok); border-color: var(--ok); }
 .orch-badge.state-blocked { color: var(--sev-high); border-color: var(--sev-high); }
 .orch-badge.state-pending { color: var(--sev-medium); border-color: var(--sev-medium); }

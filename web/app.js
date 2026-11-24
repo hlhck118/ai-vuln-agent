@@ -51,7 +51,10 @@ const KIND_LABEL = { begin: '起点', goal: '目标', hint: '提示', intent: '�
 // 与 `kind` 回答的「这是什么」分开——摘要有 active / superseded，事实有 origin / confirmed。
 // `blocked` / `pending` 是编排面新增的两档（意图可以被挂起或判定走进死路）。原先这份表
 // 只有七个词，于是那两档在卡上会退回显示英文原文——状态是给人扫读的，露出原词等于没有。
-const STATE_LABEL = { origin: '起点', confirmed: '已确认', done: '已完成', exhausted: '已穷尽', met: '已达成', active: '进行中', superseded: '已取代', blocked: '已阻塞', pending: '待跟进' };
+/* 第十档「已修复」是复测给的，不是流程推出来的：一条漏洞被复测判定修好时才会落到这里。
+ *  它必须与其余九档分得开——把「已修复」画成和「已确认」同色，等于说"修好了"和"还开着"
+ *  是一件事，而这正是复测要回答的那个问题。 */
+const STATE_LABEL = { origin: '起点', confirmed: '已确认', done: '已完成', exhausted: '已穷尽', met: '已达成', active: '进行中', superseded: '已取代', blocked: '已阻塞', pending: '待跟进', fixed: '已修复' };
 /* 类型芯片与图例的顺序（照 ARTEX 的画布图例：起点在最前，它是整张图的入口）。
  *  这份表必须与 `state.kindFilter` 的键**完全一致**，漏一个那一类就关不掉。 */
 const KIND_ORDER = ['begin', 'goal', 'hint', 'intent', 'fact', 'finding', 'digest'];
@@ -2096,6 +2099,9 @@ function renderOrchestration() {
     const row = el('li', 'orch-row');
     row.append(el('span', 'orch-badge state-' + (intent.state || ''),
       intent.stateLabel || intent.state || ''));
+    // 「待领」与「在跑」都算 active，可它们对使用者的含义不同：前者是"平台随时会动手"，
+    // 后者是"已经在动手，改它之前先想清楚"。owner 是运行期标识，只在这里当开关用。
+    if (intent.owner) row.append(el('span', 'orch-badge running', '在跑'));
     row.append(el('span', 'orch-text', intent.title || intent.id));
     const select = el('select', 'select xs-select');
     (data.intentStates || []).forEach((value) => {

@@ -154,6 +154,24 @@ class StoreTestCase(unittest.TestCase):
         self.assertEqual(public["kind"], "fact")
         self.assertEqual(public["factKind"], "port")
 
+    def test_writing_factkind_directly_keeps_it(self):
+        """按落库的键名写子类型也要算数。
+
+        `validate_fact` 原先只读 `payload.kind`，而落库的键是 `factKind`——
+        `record_fact` 与 `add_hint` 传的正是后者。于是 agent 记一条 `port`，
+        库里落成 `info`，报告里每一条事实都印「说明」，而写的人以为记下了端口。
+        """
+        intent = self.store.add_node(self.eid, "intent",
+                                     {"title": "侦察", "goalId": "goal-1"})
+        node = self.store.add_node(self.eid, "fact",
+                                   {"intentId": intent["id"],
+                                    "factKind": "port", "detail": "22 开"})
+        self.assertEqual("port", node["factKind"])
+        # 旧键名继续认：历史调用方与外部执行节点还在用它。
+        legacy = self.store.add_node(self.eid, "fact",
+                                     {"intentId": intent["id"],
+                                      "kind": "http", "detail": "200 /"})
+        self.assertEqual("http", legacy["factKind"])
     def test_every_fact_subtype_has_a_chinese_word(self):
         """`FACT_KIND_LABELS` 的键集就是 `FACT_KINDS`，表外的值原样回。"""
         self.assertEqual(set(models.FACT_KIND_LABELS), set(models.FACT_KINDS))

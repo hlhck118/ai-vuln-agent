@@ -4807,14 +4807,16 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
                          "svgPill 又回来了：SVG 胶囊已经换成 DOM 徽章")
 
     def test_every_state_has_its_own_pill_colour(self):
-        """九档状态各有各的一对颜色，且两个元素分别取。
+        """十档状态各有各的一对颜色，且两个元素分别取。
 
-        状态是这一页的"进展"读法。九档里有五档是"做完了"的不同方式（已达成 /
+        状态是这一页的"进展"读法。十档里有五档是"做完了"的不同方式（已达成 /
         已完成 / 已穷尽 / 已取代 / 已阻塞），共用一个颜色就等于说它们是同一件事。
+        第十档「已修复」尤其不能与「已确认」同色：前者是复测判定的结果，后者是
+        漏洞还在——这两句正是复测要分开回答的。
         """
         states = self._js_map(self._app, "STATE_LABEL")
-        self.assertEqual(9, len(states),
-                         "STATE_LABEL 的档数变了（应是九档），配色表要跟着改：%s"
+        self.assertEqual(10, len(states),
+                         "STATE_LABEL 的档数变了（应是十档），配色表要跟着改：%s"
                          % sorted(states))
         for name in states:
             rule = self._rule(self._css, ".state-" + name)

@@ -281,7 +281,7 @@ class InterceptHookWiringTests(unittest.TestCase):
         path = os.path.join(root, "pentestd", "chat.py")
         with io.open(path, encoding="utf-8") as handle:
             source = handle.read()
-        hook = source.index("intercept_module.guard(plane, name, args)")
+        hook = source.index("intercept_module.guard(plane, name, args,")
         owner = source.index("_terminal_owner_problem(plane, name, args,")
         self.assertGreater(hook, owner)
 

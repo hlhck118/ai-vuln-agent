@@ -68,8 +68,13 @@ class EngagementDeleteStoreTestCase(unittest.TestCase):
         eid = self._make()
         counts = self.store.delete_engagement(eid)
         self.assertEqual(0, counts["edges"])
+        # `interceptRules` 与 `chatSessionsUnbound` 一样不在挂靠表清单里：它按
+        # engagement_id **认**任务（空串=全局规则），所以删目标时要专门排掉这一层。
+        # 计到单独一个键而不是并在别的键里，是为了让调用方能分开说"删了 3 个任务"
+        # 与"顺手带走了 5 条只对这条任务生效的拦截规则"。
         self.assertEqual(set(ATTACHED) | {"jobEvents", "engagements",
-                                          "chatSessionsUnbound"}, set(counts))
+                                          "chatSessionsUnbound", "interceptRules"},
+                         set(counts))
 
     def test_the_execution_log_goes_with_the_job(self):
         """日志按 `job_id` 挂，不在挂靠表清单里——但它也不能留。
