@@ -3258,6 +3258,28 @@ function formatDuration(value) {
   if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} s`;
   return `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s`;
 }
+/** 秒 → 人类可读耗时。
+ *
+ * 与 `formatDuration` 分两个名字，因为**单位错是看不见的**：把 epoch 秒当毫秒
+ * 交给 `formatDuration`，得到的不是报错而是一个「95 ms」——数字小得像噪声，人
+ * 只会以为这任务刚起来。界面上量时间的东西有两类来源：性能读数（`elapsedMs`、
+ * `durationMs`，毫秒）与时间戳差（作业与任务的 `runSeconds`、`lastActivity`，
+ * 秒），两者的量级差 1000，混着传就会静默差三个数量级。名字里带单位，读调用点
+ * 的人不必回溯数据源；换算只在这里做一次。
+ */
+function formatSeconds(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return '—';
+  // 跨小时就不再用分钟数说话：`formatDuration` 的分钟档会给出「120 min 0 s」，
+  // 读的人得先心算一下。累计运行是这一屏唯一会长到小时的读数。
+  if (num >= 3600) {
+    let hours = Math.floor(num / 3600);
+    let minutes = Math.round((num % 3600) / 60);
+    if (minutes === 60) { hours += 1; minutes = 0; }
+    return `${hours} h ${minutes} min`;
+  }
+  return formatDuration(num * 1000);
+}
 /** 布尔项 → 是 / 否 / —（后端可能不返回该字段）。 */
 function formatFlag(value) {
   return value === undefined || value === null ? '—' : (value ? '是' : '否');
@@ -5605,7 +5627,7 @@ function init() {
 /** auth.js / settings.js / guide.js / chat.js 复用同一套 DOM 与 API 工具，避免重复实现。 */
 window.PentestUI = {
   API_BASE, $, $$, asArray, clamp, el, clear, truncate, formatTime, formatRelative,
-  formatClock, formatCount, formatDuration, emptyBlock, errorBlock, apiGet, apiPost, apiStream, apiStreamGet,
+  formatClock, formatCount, formatDuration, formatSeconds, emptyBlock, errorBlock, apiGet, apiPost, apiStream, apiStreamGet,
   showError, hideError,
   renderMarkdown, copyText, copyButton, loadTabData, switchTab, refreshAll, init, state,
   // 目标选择搬进对话侧边栏之后，选择这件事仍由本模块持有（它同时决定

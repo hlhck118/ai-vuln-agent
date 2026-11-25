@@ -19,7 +19,7 @@
   if (!UI) return;
 
   const { $, el, clear, emptyBlock, errorBlock, apiGet, apiPost, formatTime,
-    formatCount, formatDuration, formatBytes, API_BASE,
+    formatCount, formatDuration, formatSeconds, formatBytes, API_BASE,
     jobView, severityView, switchTab } = UI;
 
   /* ------------------------------------------------------------ 仪表盘 */
@@ -130,7 +130,9 @@
       kvRow(list, '目标达成', formatCount(active.goalsMet || 0) + ' / ' + formatCount(active.goalsTotal || 0));
       kvRow(list, '发现', countOf(active.findings || {}));
       kvRow(list, '在途作业', formatCount(active.inFlight || 0));
-      kvRow(list, '累计运行', formatDuration(active.runSeconds || 0));
+      // `runSeconds` 是**秒**（作业 finished_at 减 created_at 的累加），不是毫秒。
+      // 走 formatSeconds 而不是 formatDuration：后者吃毫秒，95 秒会被画成「95 ms」。
+      kvRow(list, '累计运行', formatSeconds(active.runSeconds || 0));
       kvRow(list, '最近活动', active.lastActivity ? formatTime(active.lastActivity) : '—');
       activeCard.append(list);
     }
@@ -199,11 +201,18 @@
     const assetMap = data.assetCounts || {};
     const assetCard = dashCard('资产类型');
     const assetKeys = Object.keys(assetMap).sort();
+    // 行名要用中文：`assetCounts` 的键是节点里存的原始类型（ip / subdomain /
+    // root-domain …），直接印出来就是半屏英文。词表跟着响应走（`assetTypeLabels`，
+    // 与任务详情资产块、资产页同一份来源），这里再不抄一遍六项——抄了之后平台
+    // 换词，这一屏会安静地留在旧说法上。认不出的类型仍退回原始键：宁可露英文，
+    // 也不能把某一类资产从分布里抹掉。
+    const assetTypeLabels = data.assetTypeLabels || {};
     if (!assetKeys.length) {
       assetCard.append(emptyBlock('还没有收集到资产'));
     } else {
       const assetList = el('div', 'dash-list');
-      assetKeys.forEach((key) => kvRow(assetList, key, formatCount(assetMap[key])));
+      assetKeys.forEach((key) => kvRow(assetList, assetTypeLabels[key] || key,
+        formatCount(assetMap[key])));
       assetCard.append(assetList);
     }
     host.append(assetCard);
@@ -250,8 +259,11 @@
   // 会话状态），**各自单独取数**：打开详情就同时打九个请求，多数时候人只看其中
   // 一块，剩下八份是白拉的。
   const TASK_STATES = ['running', 'queued', 'paused', 'done', 'idle'];
+  // `archived` 也在这张表里：归档是布尔标记、不是第七种状态，但任务页那一行
+  // 徽标与仪表盘的计数行都要印「已归档」，两边同词才不会一屏两种说法。
   const TASK_STATE_TEXT = {
     running: '进行中', queued: '排队中', paused: '已暂停', done: '已完成', idle: '未开始',
+    archived: '已归档',
   };
   // 九块的顺序即阅读顺序：先看它攒了什么（情报），再看还剩多少没动（覆盖度），
   // 接着看动过的那些**修好了没**（复测）——这三块回答「打到哪一步了」。然后是
@@ -325,7 +337,7 @@
     parts.push('目标 ' + formatCount(task.goalsMet || 0) + '/'
       + formatCount(task.goalsTotal || 0));
     if (task.sessionCount) parts.push('对话 ' + formatCount(task.sessionCount));
-    if (task.runSeconds) parts.push('运行 ' + formatDuration(task.runSeconds));
+    if (task.runSeconds) parts.push('运行 ' + formatSeconds(task.runSeconds));
     return parts.join(' · ');
   }
 
@@ -933,7 +945,8 @@
       const bits = [];
       if (item.running) {
         bits.push(item.cancelling ? '正在取消' : '进行中');
-        if (item.elapsedMs) bits.push('已跑 ' + formatDuration(Math.round(item.elapsedMs / 1000)));
+        // `elapsedMs` 已经是毫秒，再除 1000 会把「跑了 3 分钟」画成「已跑 3 s」。
+        if (item.elapsedMs) bits.push('已跑 ' + formatDuration(item.elapsedMs));
         if (item.inbox) bits.push('排队 ' + formatCount(item.inbox));
       } else {
         bits.push('空闲');

@@ -83,6 +83,12 @@ ENDPOINTS = ["/api/v1/health", "/api/v1/setup", "/api/v1/jobs",
              # 造出来的必然是没有重名节点的理想数据，而"同名节点塌成一个"恰恰
              # 是这张图最容易出的错。
              "/api/v1/graph",
+             # 仪表盘。它一屏要打两条请求：读数（`/dashboard`）与系统指标
+             # （`/system/metrics`）。这两条都得回放真实响应——仪表盘的数字全部
+             # 由后端现算（`runSeconds` 是秒、`assetTypeLabels` 是词表），夹具
+             # 自己造一份就等于拿理想数据验证界面，恰恰验不出「单位拿错」「词表
+             # 没带回来」这类事。
+             "/api/v1/dashboard", "/api/v1/system/metrics",
              "/api/v1/chat/tools", "/api/v1/chat/sessions"]
 
 # 演示用的意图：一句话里同时含"作用域内的网段""范围外的地址""代码路径"三种目标，
@@ -1105,8 +1111,14 @@ def collect(intrusive=None, intrusive_targets=None,
             "objective": "示例代码审计（含智能体协作轨迹）",
             "authorization": "AUTH-FIXTURE-002"})
         executor.run_once()
-        _post(base, "/api/v1/jobs", {             # 再放一个待执行的审计任务
+        # 再放一个待执行的审计任务。**挂在同一条目标下**（`engagementId` 指回上面
+        # 那条扫描）：仪表盘「累计运行」读的是当前任务那一条目标的作业总时长，
+        # 而一条作业都没跑过的目标永远是 0，那一行就永远显示「—」——单位错了也
+        # 看不出来。挂过来之后它读到的是上面那条扫描真实跑过的时间：仍是真数据，
+        # 只是让这个读数有个非零的来源（待领取那一条本身没跑过，照旧是 0）。
+        _post(base, "/api/v1/jobs", {
             "kind": "scan", "target": os.path.join(demo, "webapp"),
+            "engagementId": scan_job["engagementId"],
             "objective": "示例代码审计（尚未领取）"})
         # 对话页必须有一个启用中的模型，否则输入框是禁用的、发送按钮也点不动，
         # 那一屏就成了空壳。所以这里登记一个真的会流式回话的端点。
@@ -1430,7 +1442,7 @@ def main() -> int:
     parser.add_argument("out", help="输出 HTML 路径")
     parser.add_argument("--tab", default="setup",
                         choices=["graph", "chat", "findings", "assets", "report",
-                                 "jobs", "setup", "settings", "guide"])
+                                 "jobs", "dashboard", "setup", "settings", "guide"])
     parser.add_argument("--kind", default="probe", choices=["probe", "scan"])
     parser.add_argument("--job-mode", default="manual", choices=["manual", "plan"],
                         help="任务下发方式页签：manual（手动指定）或 plan（AI 规划）")

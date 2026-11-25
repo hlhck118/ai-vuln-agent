@@ -54,6 +54,39 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("running", payload["statusLabels"])
         self.assertFalse(payload["llmConfigured"])
 
+    def test_the_archived_bucket_has_a_word(self):
+        """`tasks.archived` 这一档也要有中文说法。
+
+        这一行原先在界面上印成裸 `archived`：`statusLabels`（后端 `TASK_STATE_LABELS`）
+        只有五个正常状态，而计数里多一个归档档。界面按 `labels[key] || key` 取值，
+        缺词就**安静地**退回机器词——整屏别处都是中文，只有这一行是英文，看起来
+        像「另一种东西」，而它其实只是「已归档的任务」。
+        """
+        status, payload = self.client.get("/api/v1/dashboard")
+        self.assertEqual(200, status, payload)
+        self.assertIn("archived", payload["statusLabels"])
+        self.assertEqual("已归档", payload["statusLabels"]["archived"])
+        self.assertIn("archived", payload["tasks"])
+
+    def test_the_asset_type_labels_ride_along(self):
+        """`assetCounts` 的键是原始类型，词表必须跟着响应一起回来。
+
+        键必须是机器值（`ip` / `subdomain` / `root-domain`），因为那是节点里存的
+        东西；但给人看的那一列得是中文。词表只有后端 `models.ASSET_TYPE_LABELS`
+        一份——界面自己再抄六项的话，平台改了词之后仪表盘与资产页会各说各话，
+        而两边单看都说得通。
+        """
+        status, payload = self.client.get("/api/v1/dashboard")
+        self.assertEqual(200, status, payload)
+        self.assertIn("assetTypes", payload)
+        self.assertIn("assetTypeLabels", payload)
+        self.assertEqual(sorted(payload["assetTypes"]),
+                         sorted(payload["assetTypeLabels"]),
+                         "词表与类型清单不是同一套")
+        # 与 `/tasks/{id}/assets` 是同一份；这里钉两个最容易被改错的。
+        self.assertEqual("IP", payload["assetTypeLabels"]["ip"])
+        self.assertEqual("根域", payload["assetTypeLabels"]["root-domain"])
+
     def test_top_findings_keep_high_and_above(self):
         eid = _engagement(self.store)
         intent = self.store.add_node(

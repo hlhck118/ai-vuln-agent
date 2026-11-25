@@ -8405,6 +8405,82 @@ class PanelsWiringTestCase(unittest.TestCase):
                       "日志页没有区分「只要几行」与「服务端只读了尾部」")
         self.assertIn("只读了尾部", self._code, "截断时没有说出文件只读了一段")
 
+    def test_the_dashboard_reads_run_time_in_seconds(self):
+        """「累计运行」的入参是**秒**，不是毫秒。
+
+        时间戳差（作业的 `finished_at - created_at`、任务的 `runSeconds`）都是 epoch
+        秒，而 `formatDuration` 的契约是毫秒（性能读数 `elapsedMs` / `durationMs` 全是
+        毫秒）。把秒直接喂给毫秒函数**不报错**，只是少三个数量级：跑了 95 秒的任务
+        显示成「95 ms」，小得像噪声，人只会以为它刚起来。
+
+        所以量时间按单位分两个名字：秒走 `formatSeconds`（它就是 `formatDuration`
+        乘 1000，换算只有一处），毫秒走 `formatDuration`。判据钉调用点——名字里
+        带单位，读代码的人不必回溯数据源。
+        """
+        self.assertIn("formatSeconds(active.runSeconds", self._code,
+                      "仪表盘把 epoch 秒当毫秒喂给了 formatDuration")
+        self.assertNotIn("formatDuration(active.runSeconds", self._code,
+                         "秒又被当成毫秒了（会显示成「95 ms」）")
+        self.assertIn("formatSeconds(task.runSeconds", self._code,
+                      "任务列表那一行也是同一批秒，同样要换")
+        # 反过来：`elapsedMs` 已经是毫秒，再除 1000 会把三分钟画成「已跑 3 s」。
+        self.assertNotIn("elapsedMs / 1000", self._code,
+                         "毫秒读数又被除了一次 1000")
+        self.assertIn("formatSeconds", self._app,
+                      "app.js 里没有这个函数，panels.js 解构到的是 undefined")
+        # 导出表里必须有它：panels.js 是另一支脚本，只能从 window.PentestUI 拿。
+        start = self._app.find("window.PentestUI = {")
+        self.assertNotEqual(-1, start, "找不到命名空间导出表")
+        self.assertIn("formatSeconds", self._app[start:start + 900],
+                      "formatSeconds 没有导出，panels.js 拿到的是 undefined")
+
+    def test_the_dashboard_names_asset_types_in_chinese(self):
+        """资产类型那一列要印中文，而且词表来自响应。
+
+        `assetCounts` 的键是节点里存的原始类型（`ip` / `subdomain` / `root-domain`），
+        直接当行名印出来就是半屏英文。词表只有后端 `models.ASSET_TYPE_LABELS` 一份，
+        跟着响应回来（`assetTypeLabels`，与任务详情资产块、资产页同一份）；界面上
+        再抄六项的话，平台换词之后这一屏会安静地留在旧说法上。
+
+        认不出的类型仍退回原始键：宁可露一个英文，也不能把某一类资产从分布里抹掉。
+        """
+        self.assertIn("data.assetTypeLabels", self._code,
+                      "仪表盘没有读响应里的资产类型词表")
+        self.assertIn("assetTypeLabels[key] || key", self._code,
+                      "没有按词表取中文，也没留认不出时的退路")
+        self.assertNotIn("kvRow(assetList, key,", self._code,
+                         "资产类型那一行还在直接印原始键")
+
+    def test_the_archived_bucket_has_a_word_on_both_sides(self):
+        """`archived` 这一档在界面与后端都要有中文说法。
+
+        它不是第七种状态，是归档视图里的那一档（归档行的 status 仍是归档前的值）。
+        但计数里确实有这一格，而 `statusLabels` 原先只有五个正常状态——界面按
+        `labels[key] || key` 取值，缺词就安静地退回机器词，于是整屏中文里独独这一行
+        是 `archived`。后端 `TASK_STATE_LABELS` 补了这一格，前端那张兜底表也要补，
+        两边同词（「已归档」，与任务列表那枚徽标一致）。
+        """
+        self.assertIn("archived: '已归档'", self._code,
+                      "panels.js 的兜底表里没有归档档的说法")
+
+    def test_the_fixture_can_render_the_dashboard(self):
+        """夹具要能截仪表盘：两条接口 + 一个页签。
+
+        夹具的假后端只回放 `ENDPOINTS` 里列过的接口，漏一条的症状是「加载失败：
+        夹具未准备该接口」——和真实缺陷长得一模一样。所以仪表盘一屏要打的那两条
+        （读数与系统指标）必须在表里；`--tab` 的 choices 里也要有它，否则想截图
+        的人会先撞上 argparse 的 choices 报错。
+        """
+        with open(os.path.join(ROOT, "tools", "render_ui_fixture.py"),
+                  "r", encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn('"/api/v1/dashboard"', source,
+                      "夹具的 ENDPOINTS 里没有 /dashboard")
+        self.assertIn('"/api/v1/system/metrics"', source,
+                      "夹具的 ENDPOINTS 里没有 /system/metrics")
+        self.assertIn('"dashboard"', source,
+                      "夹具的 --tab choices 里没有 dashboard")
+
     def test_the_dashboard_readings_use_the_shared_count_format(self):
         """仪表盘的读数是給人扫一眼的，要千分位。
 
