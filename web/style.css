@@ -3599,7 +3599,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
      是模型名与目录入口的计数（`@container chat-field` 那几段），不是"再折一行"——折行
      会让卡片高度随宽度变，这条下限就永远算不准（t82 把这一行钉成 `flex: 1 0 100%`
      正是为了躲开那件事；t88 改用容器查询，钉法撤了，这条不变式不变）。 */
-  --chat-dock-row: 28px;                            /* 目录入口 / 自动继续那一行（`.dock-tab` 与 `.chat-auto` 都是 28px） */
+  --chat-dock-row: 28px;                            /* 目录入口 / 自动执行那一行（`.dock-tab` 与 `.chat-auto` 都是 28px） */
   --chat-action-row: 34px;                          /* 动作行一行的高度（见 .chat-actions，= 发送圆钮的直径；t78 照官方 InputBar 的 .primary 由 32 改 34） */
   flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0;
 }
@@ -4514,7 +4514,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
      `flex-wrap: wrap` 折出两行：textarea（`width: 100%`，见 `.chat-input`）与它下面
      那一行控件。⚠️ t94：选项面板已搬出这一层（见 `.chat-choice` 那一段），这里不再有
      第二个 `flex: 1 0 100%` 的子节点；最后一行里**并排**装着
-     「目录入口 + 自动继续」与「模型 / 权限 / 发送」两格（t88 用户要求「输入框下面
+     「目录入口 + 自动执行」与「模型 / 权限 / 发送」两格（t88 用户要求「输入框下面
      几个选项并成一行」；t61/t82 时它们是各占一行的）。**不需要额外的容器元素**。
      叠进记录区：`margin-top: calc(-1 * var(--chat-overlap))`。⚠️ t63 之前这个数是
      20px（内容贴着卡片上沿被切开）；现在它是**卡片自己的高度**——记录区的盒子因此
@@ -4698,7 +4698,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .chat-field-tabs {
   display: flex; align-items: center; gap: 6px;
   /* ⚠️ t82：`flex-wrap: wrap` → `nowrap`。这一格里现在装的是两颗目录入口 **加上**
-     「自动继续」那颗开关（见 index.html 的注释：开关必须和入口同处一格，否则
+     「自动执行」那颗开关（见 index.html 的注释：开关必须和入口同处一格，否则
      `.chat-field` 会先把它们折成两行、再谈收缩，卡片就比下限高出一整行）。既然
      折行被禁掉，窄屏下的出路只能是收缩，所以这一格里的开关允许被压窄。 */
   flex-wrap: nowrap;
@@ -5290,10 +5290,10 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 /* t78：这一格从动作行里搬到了卡片上方（见 index.html），选择器跟着改成 id——
    页面上只有一个 `#chat-model`，用类选择器会被"类选择器不许伪装成 id"那条规则判死
    （`.chat-model` 恰好与 id 同名）。 */
-/* ------------------------------------------------ 自动继续 + 输入框内权限档 ----
+/* ------------------------------------------------ 自动执行 + 输入框内权限档 ----
  *
  * 这两件和「发送」同处卡片最后一行，形态都照着 DSH 桌面端输入框来：
- * 一颗 28px 的无框 chip（权限）、一颗 34×18 的滑动开关（自动继续）。
+ * 一颗 28px 的无框 chip（权限）、一颗 34×18 的滑动开关（自动执行）。
  * 刻意**不用** `.btn`：那一套是"同级别的一排文字按钮"，而这里是两个
  * "这一轮怎么跑"的状态开关，官方那一行里它们也是薄的、没有描边的。
  */
@@ -5303,7 +5303,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   background: transparent; color: var(--text-dim);
   font: 500 var(--fs-body)/20px var(--sans); cursor: pointer;
   /* t82：允许被压窄（`min-width: 0` + 标签省略号）。它与两颗目录入口共用一行，
-     那一行的宽度在 360px 视口下只有 256px，而"可用能力 + 技能手册 + 自动继续"
+     那一行的宽度在 360px 视口下只有 256px，而"可用能力 + 技能手册 + 自动执行"
      自然宽 271px —— 不让它缩，它就会折到下一行，卡片因此比 `--chat-field-floor`
      高 28px，记录区的叠进深度就对不上了（最后一行字被卡片吃掉）。 */
   min-width: 0;
@@ -5331,7 +5331,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
 .chat-auto[aria-pressed="true"] .chat-auto-switch::after {
   transform: translateX(16px); background: var(--accent);
 }
-/* 自动继续的倒计时行（卡片**上方**）：只在失败之后、下一次自动发送之前出现。
+/* 自动执行的倒计时行（卡片**上方**）：只在失败之后、下一次自动发送之前出现。
    与 `.chat-notice` 同一位置、同一层；`[hidden]` 那条不能省——UA 的
    `[hidden]{display:none}` 特异性低于本规则，不显式写就会被 flex 盖回来。
    ⚠️ 它占的位置得看**谁紧挨着卡片**（见下面那条 `:has()`）：卡片用负外边距把自己
@@ -5576,7 +5576,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
      ② 缩到读不全时再淡一档 —— 把"被压窄"和"写错了"分开
      ③ 权限名退场 —— 盾牌与箭头还在，点开菜单仍是全名
      ④ 计数退场 —— `可用能力` / `技能手册` 这两个词本身还在
-     ⑤ 「自动继续」四个字退场 —— 开关还在，`aria-label` 还在
+     ⑤ 「自动执行」四个字退场 —— 开关还在，`aria-label` 还在
      ⑥ 模型只剩图标
 
    每档 `calc(100cqw - Npx)` 里的 N 是**这一档除模型外**其余东西的实测总宽
@@ -5615,7 +5615,7 @@ p.finding-basis { margin: 4px 0 0; font: var(--fs-caption)/1.6 var(--mono); }
   .chat-model-menu { left: auto; right: 0; }
 }
 @container chat-field (max-width: 522px) {
-  /* 190（「自动继续」四个字退场，开关还在）+ 46 + 34 + 24 + 8 = 302，再留 2px。
+  /* 190（「自动执行」四个字退场，开关还在）+ 46 + 34 + 24 + 8 = 302，再留 2px。
      它排在计数之后：一个开关没有字，比一个数字消失更难认。 */
   .chat-auto-label { display: none; }
   .chat-model { max-width: calc(100cqw - 300px); }

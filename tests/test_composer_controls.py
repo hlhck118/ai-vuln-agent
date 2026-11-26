@@ -213,7 +213,7 @@ class ComposerControlsTestCase(unittest.TestCase):
     def test_permanent_failures_are_skipped_with_a_reason(self):
         body = slice_function(self.js, "scheduleAutoContinue")
         self.assertIn("AUTO_PERMANENT.test(why)", body)
-        self.assertIn("自动继续跳过", body,
+        self.assertIn("不自动执行", body,
                       "跳过必须说一句为什么；静默跳过和没反应长得一样")
 
     def test_the_continue_text_tells_it_not_to_replay_side_effects(self):
@@ -300,7 +300,11 @@ class ComposerControlsTestCase(unittest.TestCase):
         self.assertIn('id="chat-auto-cancel"', self.html)
 
     def test_the_toggle_does_not_persist_a_second_truth(self):
-        """三项选择只有一份真相（服务端）。自动继续是界面偏好，刷新回默认开。"""
+        """三项选择与这颗开关都只有一份真相（服务端），浏览器里不许再存一份。
+
+        自动执行落在 chat_sessions.auto_drive：它跟着会话走，但**不**跟着账号
+        走（不进 chat_entry_choice），也绝不是第二份真相。
+        """
         self.assertNotIn("localStorage", self.raw_js)
         self.assertRegex(self.js, r"const auto = \{\s*on: true",
                          "默认必须是开的；写成读某个存储值就把第二份真相请回来了")

@@ -201,7 +201,7 @@
   };
 
   let dom = {};
-  /* 自动继续的运行状态。**刻意与 `view` 分开**：`view` 里的东西都是"服务端事实的
+  /* 自动执行的运行状态。**刻意与 `view` 分开**：`view` 里的东西都是"服务端事实的
      本地投影"，而这个只是一个浏览器里的定时器与计数（开关不落库，刷新回默认开）。
      混进去会让 `onSignedOut` / `openSession` 那些"换一个人、换一个会话就重置"的
      路径顺手清掉它——而失败恢复恰恰要跨过一次 `openSession`（`finish()` 会重取
@@ -304,7 +304,7 @@
       // 模型 chip 与它的菜单：与权限那颗同一套（原生 `dom.modelSelect` 仍是真相源）。
       modelBtn: byId('chat-model-btn'), modelName: byId('chat-model-name'),
       modelMenu: byId('chat-model-menu'),
-      // 自动继续：一行开关 + 卡片上方的倒计时行。
+      // 自动执行：一行开关 + 卡片上方的倒计时行。
       auto: byId('chat-auto'), autoNote: byId('chat-auto-note'),
       autoText: byId('chat-auto-text'), autoCancel: byId('chat-auto-cancel'),
       // 排队任务（卡片上方、输入框前面那一块）。整块靠 `hidden` 收起：没有排队时
@@ -513,6 +513,8 @@
     // chip 上的字跟着**当前值**走（含"跟随默认"那种空值），而不是跟着 `config`。
     syncPolicyChip();
 
+    // 入口那几项都对齐了，开关也跟着服务端走：它是同一个 config 里的一项。
+    syncAutoFromConfig();
     renderEntryHint();
   }
 
@@ -766,7 +768,7 @@
     hideModelMenu(true);
   }
 
-  /* -------------------------------------------------------- 自动继续 ----
+  /* -------------------------------------------------------- 自动执行 ----
    *
    * 参考 dsh-client-auto-continue：一轮因为**非人为原因**失败（网络、超时、5xx、
    * 429、输出被截断）时，隔一小会儿自动再发一句"继续"，把人从"盯着屏幕等它自己
@@ -792,18 +794,34 @@
      token 可能只是普通单词（比如一次凭据测试的输出），不能一律判死。 */
   const AUTO_PERMANENT = /(401|403|认证|鉴权|凭据|密钥|API\s*Key|余额|配额|quota|模型不存在|not\s*found|上下文长度|context\s*length|max_tokens|token\s*上限)/i;
 
-  /* **开关不落库，也不进浏览器存储。** 这一条不是省事：三项选择的唯一真相源在
-     服务端（见 test_new_session_starts_from_the_last_choice——chat.js 里出现
-     浏览器存储就当场红），另存一份就是第二份真相，换个人登录会带着上一个人的
-     预选。而"自动继续"只是一个不改变权限的界面偏好：刷新回到默认开，正是它的语义
-     （这条功能默认就是开的，用户若关掉，是关掉**这一页**接下来那几轮）。 */
+  /* **开关落在服务端，不进浏览器存储。** 真相源只有一处：`chat_sessions.auto_drive`，
+     界面这颗胶囊只是它的投影（见 test_new_session_starts_from_the_last_choice——
+     chat.js 里出现浏览器存储就当场红；另存一份就是第二份真相，换个人登录会带着
+     上一个人的预选）。
+     `auto.on` 因此在两处出生：还没有会话时是本地默认（开），一旦这个会话的
+     config 回来了就由服务端那份说了算（`syncAutoFromConfig`）。 */
+
+  /** 把会话上存的那一份同步到界面上（`config.autoDrive` 是真相）。
+   *
+   *  只在**已经打开一个会话**时同步：新建会话还没有 id，那时开关就是本地意图，
+   *  发第一条消息时随请求体一起带走（见 `streamTurn`）。
+   */
+  function syncAutoFromConfig() {
+    if (!view.sessionId || !view.config) return;
+    const want = view.config.autoDrive === true;
+    if (auto.on === want) return;
+    auto.on = want;
+    renderAutoSwitch();
+    if (!auto.on) cancelAutoContinue();
+  }
 
   function renderAutoSwitch() {
     if (!dom.auto) return;
     dom.auto.setAttribute('aria-pressed', auto.on ? 'true' : 'false');
     dom.auto.title = auto.on
-      ? '这一轮失败后自动发送「继续」（点一下关掉）'
-      : '自动继续已关闭（点一下打开）';
+      ? '自动执行已开：这一轮失败后自动发送「继续」，正常收尾后也会自己接着开下一轮'
+        + '（点一下关掉）'
+      : '自动执行已关闭：失败恢复与"收尾后接着干"都不会自己发生（点一下打开）';
   }
 
   function showAutoNote(text) {
@@ -841,12 +859,12 @@
     if (!auto.on) return;
     const why = String(reason || '').trim();
     if (AUTO_PERMANENT.test(why)) {
-      showAutoNote('自动继续跳过：这次失败看起来不是暂时性的（'
+      showAutoNote('不自动执行：这次失败看起来不是暂时性的（'
         + why.slice(0, 60) + '），重试也不会变好。');
       return;
     }
     if (auto.attempts >= AUTO_MAX) {
-      showAutoNote('已自动继续 ' + AUTO_MAX + ' 次仍未成功，先停在这里——'
+      showAutoNote('已自动接着跑了 ' + AUTO_MAX + ' 次仍未成功，先停在这里——'
         + '请看一眼上面那条错误再决定。');
       return;
     }
@@ -870,16 +888,16 @@
   function fireAutoContinue(reason) {
     if (!auto.on) return;
     // 已经有人开了一轮（比如用户自己发了）：不再插话，也不算一次尝试。
-    // **但要说一句**：静默地丢掉这一次，看起来就是"自动继续没生效"。
+    // **但要说一句**：静默地丢掉这一次，看起来就是"自动执行没生效"。
     if (view.sending) {
       auto.attempts = Math.max(0, auto.attempts - 1);
-      showAutoNote('自动继续暂停：这个会话还有一轮在跑，等它结束再试。');
+      showAutoNote('自动执行暂停：这个会话还有一轮在跑，等它结束再试。');
       return;
     }
     // 没有可用模型时 `sendMessage` 会在入口直接返回——那一句"继续"就凭空消失了。
     // 这是最容易被误读成"功能没生效"的一种，所以在这里先拦下来并说清。
     if (!canSend()) {
-      showAutoNote('自动继续暂停：现在没有可用的模型，先到「设置」页签配置并启用一条。');
+      showAutoNote('自动执行暂停：现在没有可用的模型，先到「设置」页签配置并启用一条。');
       return;
     }
     hideAutoNote();
@@ -889,13 +907,18 @@
     sendMessage(text);
   }
 
-  /** 把三项选择提交到会话（或作为发送时的一次性参数带上）。 */
+  /** 把入口那几项提交到会话（或作为发送时的一次性参数带上）。
+   *
+   *  `autoDrive` 与三项一起走**同一个**往返：分开两次写会出现"权限存了、开关
+   *  没存"，而界面上两颗控件都长得像已经生效。
+   */
   async function commitEntry(force) {
     if (!view.sessionId) return view.config;
     const body = {
       agentId: (dom.agent && dom.agent.value) || '',
       modelId: (dom.modelSelect && dom.modelSelect.value) || '',
       policyId: (dom.policy && dom.policy.value) || '',
+      autoDrive: auto.on === true,
     };
     try {
       const payload = await ui().apiPost(
@@ -3315,7 +3338,7 @@
    *
    *  与 `send()` 的区别只有一处：不从输入框取值，所以不清框、不动焦点——使用者可能
    *  正在框里写别的，勾选项这件事不该把那半句话删掉。其余（模型闸、失败计数、取消
-   *  待发的自动继续）逐条照 `send()`，因为"人自己发"的语义完全一样。
+   *  待发的自动执行续跑）逐条照 `send()`，因为"人自己发"的语义完全一样。
    */
   function sendChoice() {
     if (view.sending) return;
@@ -3802,7 +3825,7 @@
     // 刹车踩的是**屏上这一轮**（`view.abort` 就是它的控制器）；这个会话若只在服务端
     // 跑着、本页没接上（`view.abort` 为空），仍然要发那一声 `/chat/stop`。
     if (!view.abort && !sessionId) return;
-    // 人按了停止：自动继续立刻作废。否则它会把这颗“刹车”当成一次失败，
+    // 人按了停止：自动执行的续跑立刻作废。否则它会把这颗“刹车”当成一次失败，
     // 三秒后再发一句“继续”——那是这条功能最坏的一种表现。
     cancelAutoContinue();
     ui().showError('已停止。这一轮会在当前这一步之后结束——已经下发的作业不会撤回，'
@@ -3846,7 +3869,7 @@
 
   /** 从输入框发一条。读框、清框，然后交给 `sendMessage`。
    *
-   *  拆成两层是为了**自动继续**：那一句"继续"也要走完全同一条发送路径（带三项、
+   *  拆成两层是为了**自动执行**：那一句"继续"也要走完全同一条发送路径（带三项、
    *  开流、失败分类、收尾），只是不经过输入框。两条路径各写一遍的话，必然有
    *  某一边少带一个参数、或者忘了 setSending——而症状是"自动续跑的那几轮界面不动"，
    *  看起来像它根本没跑。
@@ -4013,7 +4036,7 @@
         }
         auto.failed = true;
         ui().showError('对话请求失败：' + describeError(error));
-        // 失败是自动继续唯一关心的信号：分类、退避、倒计时都在这里开始。
+        // 失败是自动执行唯一关心的信号：分类、退避、倒计时都在这里开始。
         // **只在它正挂在屏上时**才续：切到别的对话之后这一轮的失败不该往那个
         // 会话里发「继续」（`sendMessage` 用的是 `view.sessionId`）。
         if (onScreenRun(run)) scheduleAutoContinue(describeError(error));
@@ -4058,10 +4081,10 @@
     /* 排队那块**不在这里再拉一次**：上面那次 `openSession` 末尾已经在
        `attachTurn` 之后拉过了（若服务端趁这一下自动开了队列里的下一条，接上的
        就是那一轮）。两处都拉只是每次收尾多一趟往返，而两份响应还会互相覆盖。 */
-    // **成功之后才清零**。放在这里而不是每次发送之前：自动继续要跨过这一趟
+    // **成功之后才清零**。放在这里而不是每次发送之前：自动执行要跨过这一趟
     // `openSession`（它会把这一轮的记录重新取回来），若在这里无条件清零，
     // 连续失败时计数永远是 1，退避也就永远停在第一档。
-    // 同理：后台那一轮的成败不该动自动继续的计数（那是屏上这一轮的状态）。
+    // 同理：后台那一轮的成败不该动自动执行的计数（那是屏上这一轮的状态）。
     if (onScreen && !auto.failed) { auto.attempts = 0; cancelAutoContinue(); }
   }
 
@@ -4395,6 +4418,8 @@
       agentId: (dom.agent && dom.agent.value) || '',
       modelId: (dom.modelSelect && dom.modelSelect.value) || '',
       policyId: (dom.policy && dom.policy.value) || '',
+      // 开关随消息一起带上：新会话就是在这里才落库的（建会话那一步会把它写进去）。
+      autoDrive: auto.on === true,
     }, controller.signal);
     // 带上 `run`：收尾要看的是**这一轮**有没有说出正文，而不是屏上那一轮。
     await consumeStream(response, controller, run);
@@ -4602,6 +4627,8 @@
         // 它自己的 id 记在 `live.sessionId` 里，切回来照用。
         if (shown) view.sessionId = actual;
         if (shown && data.config) view.config = data.config;
+        // 新会话在这里才第一次拿到 config（建会话那一刻它就已经带着开关落库了）。
+        if (shown) syncAutoFromConfig();
         live.maxSteps = data.maxSteps || live.maxSteps;
         live.stepsAtCeiling = data.stepsAtCeiling === true;
         live.policy = (data.config && data.config.policyId) || '';
@@ -4639,7 +4666,7 @@
         break;
       case 'error':
         live.error = data.error || '模型调用失败';
-        // 自动继续的另一个入口：服务端把失败作为**帧**发回来（模型调用失败、
+        // 自动执行的另一个入口：服务端把失败作为**帧**发回来（模型调用失败、
         // 步数到顶等），这时 `streamTurn` 的 promise 不会 reject —— 不在这里接，
         // 那一类失败就永远不会触发续跑，而这恰恰是线上最常见的一类。
         // 续跑只对**屏上那一轮**有意义：`sendMessage('继续')` 发往 `view.sessionId`，
@@ -5656,13 +5683,16 @@
     if (dom.policyBtn) dom.policyBtn.addEventListener('click', togglePolicyMenu);
     // 模型 chip：同一套（它只是原生 `#chat-model-select` 的皮，见 index.html 那段）。
     if (dom.modelBtn) dom.modelBtn.addEventListener('click', toggleModelMenu);
-    // 自动继续的开关：**默认开、只在内存里**（刷新回默认）。它只控制"失败后要不要自己
-    // 再发一句继续"，不改变任何门禁；关掉时把待发的那一次也撤销。
+    // 自动执行的开关：**落在服务端**（`chat_sessions.auto_drive`），它只控制"失败后
+    // 要不要自己再发一句继续"与"正常收尾后要不要自己接着开一轮"，不改变任何门禁；
+    // 关掉时把待发的那一次也撤销。已有会话当场落库，还没有会话时先记在界面上，
+    // 由第一条消息一起带走（同三项选择那套）。
     if (dom.auto) {
       dom.auto.addEventListener('click', () => {
         auto.on = !auto.on;
         renderAutoSwitch();
         if (!auto.on) cancelAutoContinue();
+        if (view.sessionId) commitEntry(false);
       });
     }
     if (dom.autoCancel) {
@@ -5759,7 +5789,7 @@
     if (view.abort) view.abort.abort('signout');
     view.abort = null;
     view.live = null;
-    // 自动继续是**按这台浏览器**记的开关，但待发的计时器属于上一个登录者的这一轮：
+    // 自动执行的开关**落在服务端**（会话级），但待发的计时器属于上一个登录者的这一轮：
     // 换人或退出时必须撤掉，否则它会对着"已签出"的页面发一句继续。
     cancelAutoContinue();
     auto.attempts = 0;

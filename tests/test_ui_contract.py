@@ -673,8 +673,8 @@ class UiContractTestCase(unittest.TestCase):
         # 文字退场之后，控件只剩图形：名字必须另有出处。
         auto = self.html[self.html.index('id="chat-auto"'):]
         auto = auto[:auto.index(">")]
-        self.assertIn('aria-label="自动继续"', auto,
-                      "≤522px 时「自动继续」四个字被收起，那颗开关只剩一个胶囊——"
+        self.assertIn('aria-label="自动执行"', auto,
+                      "≤522px 时「自动执行」四个字被收起，那颗开关只剩一个胶囊——"
                       "没有 aria-label，读屏与悬停都叫不出它的名字")
         self.assertIn("title=", auto, "同理，鼠标悬停也要有个名字")
         select = self.html[self.html.index('id="chat-model-select"'):]
@@ -2323,7 +2323,7 @@ class CssLayoutGuardTestCase(unittest.TestCase):
         #   .target-name              —— 漏洞页左栏那一行的目标名。同样是**声明式截断**
         #                                （ellipsis，完整值在 title 里）：左栏只有 300px，
         #                                IP / 域名 / 一长串 URL 取同样宽，不截会把条数挤掉。
-        #   .chat-auto-label          —— t82 新增：「自动继续」那颗开关的文字。**声明式
+        #   .chat-auto-label          —— t82 新增：「自动执行」那颗开关的文字。**声明式
         #                                截断**（ellipsis，完整值就是它自己，按钮另有
         #                                aria-label）：它和两颗目录入口挤在同一行，
         #                                360px 视口下那一行只有 256px，自然宽 271px——

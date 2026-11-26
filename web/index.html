@@ -408,7 +408,7 @@
           <!-- 审查单**不在这里**了：它现在画在对话记录里、那一轮气泡的位置上
                （DSH 桌面端也是这样，审批卡出现在对话里而不是输入框上方）。
                这个位置在 t80 之前挂的是 `#chat-review-slot`；挪走以后输入框上方
-               只剩两条"状态行"（上面的模型告警与自动继续倒计时），卡片不再把
+               只剩两条"状态行"（上面的模型告警与自动执行倒计时），卡片不再把
                输入框往下推。 -->
           <!-- 目录内容区：两颗入口展开出来的那一格，在输入框**正上方**。
                入口原先挂在页头的动作槽里——点完「可用能力」，视线要往下穿过一整
@@ -468,7 +468,7 @@
                挤出卡片，1436 宽时已经能看见它压在边界外）。id 不变，chat.js 照旧
                往里写；空着时靠 `:empty` 收起，不占一行。 -->
           <div class="chat-notice muted" id="chat-model"></div>
-          <!-- 自动继续的状态行：与上面那条告警同一层，也挂在卡片**上方**。
+          <!-- 自动执行的状态行：与上面那条告警同一层，也挂在卡片**上方**。
                它只在"这一轮失败之后、下一次自动发送之前"出现，说出**还要等几秒**
                以及为什么等 —— 一次没有解释的自动重发，看起来就是界面自己在乱动。 -->
           <div class="chat-auto-note" id="chat-auto-note" hidden>
@@ -535,7 +535,7 @@
                       placeholder="描述你要做的事，例如：扫描 10.0.0.0/24 的暴露面"
                       aria-label="对话输入" spellcheck="false"></textarea>
             <!-- 两颗目录入口在卡片最后一行、**靠左**（那一行的右侧是模型/权限/发送，
-                 见下边 .chat-actions；紧挨着它们的是「自动继续」那颗开关）。它们**不是**
+                 见下边 .chat-actions；紧挨着它们的是「自动执行」那颗开关）。它们**不是**
                  输入框的一部分，只是同处一张卡片：
                  键盘走到它们身上时焦点离开 textarea，与"点了一下按钮"的预期一致。
                  计数写在按钮里（可用能力 24 / 技能手册 5）：留在别处就等于同一件
@@ -554,7 +554,7 @@
                   class="dock-tab-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g fill="none"
                   stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 5.6c0-.9.7-1.6 1.6-1.6H10v16H5.6C4.7 20 4 19.3 4 18.4Z"/>
                   <path d="M20 5.6c0-.9-.7-1.6-1.6-1.6H14v16h4.4c.9 0 1.6-.7 1.6-1.6Z"/></g></svg>技能<span class="dock-count" id="chat-skills-count"></span></button>
-              <!-- 「自动继续」那颗开关：紧挨着两颗目录入口，同处这一行。
+              <!-- 「自动执行」那颗开关：紧挨着两颗目录入口，同处这一行。
                    ⚠️ t82 把它从右边那一行（模型 / 权限 / 发送）挪出来。原因是右边
                    那一行自己的宽度约 465px，而卡片的内容宽在 1440 下只有 390px
                    （详情栏开着时聊天列只有 414px）——整行溢出卡片，发送键落在卡片
@@ -568,15 +568,15 @@
                    于是被折成两行，卡片就比 `--chat-field-floor` 高出一整行（28px），
                    记录区的叠进深度随之错位。装进这一格之后由它自己 `nowrap` +
                    开关 `min-width: 0` 来收缩，行高恒等于 `--chat-dock-row`。
-                   开关**不落库**（chat.js 里不许出现 localStorage：三项选择的唯一
-                   真相源在服务端，另存一份就是第二份真相；这一项只是"这台机器这
-                   一页"的偏好，刷新回默认开）。 -->
+                   开关**落库**（`chat_sessions.auto_drive`），但 chat.js 里仍不许
+                   出现 localStorage：真相源只有服务端一处，浏览器里另存一份就是
+                   第二份真相，换个人登录会带着上一个人的预选。 -->
               <!-- ⚠️ `aria-label` 与 `title` 不能省：卡片窄到 522px 以下时
                    `.chat-auto-label` 会被 `@container chat-field` 收起来，
                    那时这颗开关在界面上只剩一个胶囊——名字只能来自这两个属性。 -->
               <button id="chat-auto" class="chat-auto" type="button" aria-pressed="true"
-                      aria-label="自动继续" title="自动继续">
-                <span class="chat-auto-label">自动继续</span>
+                      aria-label="自动执行" title="自动执行">
+                <span class="chat-auto-label">自动执行</span>
                 <span class="chat-auto-switch" aria-hidden="true"></span>
               </button>
             </div>
