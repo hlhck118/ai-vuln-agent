@@ -17,6 +17,7 @@
 import threading
 import time
 import unittest
+from unittest import mock
 
 from tests import support
 from pentestd import chat, orchestrator, policy, server, subagent
@@ -400,6 +401,42 @@ class TickTests(_Case):
         report = orchestrator.tick(self.plane, max_workers=0,
                                    engagement_id=self.eid)
         self.assertEqual(1, report["planned"])
+
+    def test_tick_runs_a_task_that_brought_its_own_model(self):
+        """任务行上单独指定的模型，后台必须认。
+
+        这一条钉的是「手动建的任务不会执行」：会话自带模型选择，所以会话里跑的
+        任务看着正常；而手建的任务全靠后台每一拍去解析模型，后台若只认全局启用项，
+        没配全局模型的机器上它每一拍都在第一句返回，任务页永远停在「未开始」。"""
+        self._intent("一")
+        own = self.store.save_profile(
+            "m-own", "这条任务自己的", "openai_compat", "http://127.0.0.1:9/v1",
+            "fake-1", "none", "", None, 0.2, 512, 20, "")
+        self.store.update_task(self.eid, {"llmProfileId": own["id"]})
+        self._rewind()
+        report = orchestrator.tick(self.plane, max_workers=1,
+                                   engagement_id=self.eid)
+        self.assertNotIn("模型配置", report["skipped"])
+        self.assertNotEqual([], self.spawn.roles)
+
+    def test_one_task_without_a_model_does_not_stop_the_others(self):
+        """一个目标没配模型，只该让它自己这一拍空转，不该把整拍按停。
+
+        模型取在循环外面的时候，`list_engagements` 里只要有一条配不上，
+        同一拍里**所有**目标一起不动——而症状是「有的任务跑、有的永远不跑」，
+        排查时最容易被当成那几条任务自己的问题。"""
+        self._intent("一")
+        bare = self.store.create_engagement("10.10.10.111", "拿下 111", "本人授权")["id"]
+        own = self.store.save_profile(
+            "m-own", "这条任务自己的", "openai_compat", "http://127.0.0.1:9/v1",
+            "fake-1", "none", "", None, 0.2, 512, 20, "")
+        self.store.update_task(self.eid, {"llmProfileId": own["id"]})
+        self._rewind()
+        orchestrator._state(bare)["lastPlan"] = time.time() - 30.0
+        self.assertIsNone(self.store.active_profile())
+        report = orchestrator.tick(self.plane, max_workers=1)
+        self.assertEqual(1, report["planned"])
+        self.assertEqual(self.eid, report["plans"][0]["engagementId"])
 
     def test_tick_does_not_wait_for_the_heartbeat_when_the_queue_is_empty(self):
         self._use_model()

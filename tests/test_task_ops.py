@@ -8,9 +8,10 @@
 """
 import types
 import unittest
+from unittest import mock
 
 from tests import support
-from pentestd import auth, intercept
+from pentestd import auth, intercept, orchestrator
 
 
 def _task(store, target="10.10.10.110"):
@@ -669,6 +670,19 @@ class TaskModelTests(_TaskOpsCase):
         self.yes(self.client.post("/api/v1/tasks/%s/llm" % eid,
                                  {"llmProfileId": ""}))
         self.assertEqual("global", self.store.resolve_task_profile(eid)["source"])
+
+    def test_changing_the_model_wakes_the_orchestrator(self):
+        """换完模型要当场叫醒后台。
+
+        不叫醒的话，这条任务上一拍可能刚因为「没有模型」被跳过，接下来一直停在
+        原地直到下一次心跳（`PLAN_HEARTBEAT_SECONDS`，600 秒）——而人刚在界面上
+        配好了模型，看到的是「配了还是不动」。"""
+        eid = _task(self.store)
+        own = _profile(self.store, "换上去的那份")
+        with mock.patch.object(orchestrator, "kick") as kick:
+            self.yes(self.client.post("/api/v1/tasks/%s/llm" % eid,
+                                     {"llmProfileId": own["id"]}))
+        kick.assert_called_once_with(eid)
 
     def test_unknown_profile_is_404_not_a_silent_fallback(self):
         eid = _task(self.store)
