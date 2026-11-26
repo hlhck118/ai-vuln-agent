@@ -178,8 +178,11 @@
         const row = el('div', 'dash-row');
         row.append(el('span', 'dash-row-main',
           jobView.kindLabel(job.kind) + ' · ' + (job.target || '—')));
+        // 状态词表是**对象**（`jobView.label`），不是函数：照函数调会在有历史作业
+        // 的那一秒抛 TypeError，把整屏剩下的块一起带走。归一走 `jobView.statusOf`，
+        // 后端哪天多出一个状态也只落到「待执行」，不会印出裸英文。
         row.append(el('span', 'dash-row-meta',
-          jobView.label(job.status) + ' · ' + formatTime(job.createdAt)));
+          jobView.label[jobView.statusOf(job)] + ' · ' + formatTime(job.createdAt)));
         jobList.append(row);
       });
       jobCard.append(jobList);
@@ -1598,7 +1601,7 @@
       const row = el('div', 'dash-row');
       row.append(el('span', 'dash-row-main',
         jobView.kindLabel(job.kind || job.kindLabel || '') + ' · ' + (job.target || '')));
-      row.append(el('span', 'dash-row-meta', jobView.label(job.status)
+      row.append(el('span', 'dash-row-meta', jobView.label[jobView.statusOf(job)]
         + ' · ' + formatTime(job.createdAt || 0)));
       list.append(row);
     });

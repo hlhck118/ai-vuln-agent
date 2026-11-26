@@ -8521,6 +8521,24 @@ class PanelsWiringTestCase(unittest.TestCase):
         self.assertNotIn("kvRow(assetList, key,", self._code,
                          "资产类型那一行还在直接印原始键")
 
+    def test_the_job_status_table_is_read_not_called(self):
+        """作业状态词表是**对象**（`jobView.label`），不是函数。
+
+        `app.js` 导出的 `jobView` 里 `label` 是那张四键表（`pending` / `running` /
+        `done` / `failed`），`statusOf` 才是把任意输入归一成四个键之一的那个函数。
+        仪表盘与任务详情把 `label` 当函数调，于是只要响应里**有一条作业**，那一行就抛
+        `TypeError: jobView.label is not a function`——而它抛在 `loadDashboard` 的
+        同步段里，后面整屏的块（探索链路、任务状态、系统读数、资产、漏洞）**一个都
+        不会画出来**。空库时看不见，因为 `recentJobs` 为空时那一支根本不进；这正是
+        它活到今天的原因。
+
+        判据钉下标写法：`jobView.label[jobView.statusOf(job)]`。走 `statusOf` 而不是
+        直接用 `job.status`，是为了让后端多出来的状态落到「待执行」，而不是印裸英文。
+        """
+        self.assertNotIn("jobView.label(", self._code,
+                         "又把状态词表当函数调了（有作业时整屏后面都不渲染）")
+        self.assertIn("jobView.label[jobView.statusOf(job)]", self._code,
+                      "作业状态没有走共享词表 + 共享归一")
     def test_the_active_task_counts_each_finding_once(self):
         """当前任务卡那一行「发现」要读 `total`，不能把分档明细再加一遍。
 
