@@ -234,5 +234,64 @@ class AutoDriveConfigApiTestCase(unittest.TestCase):
         self.assertEqual({}, self.store.chat_entry_choice(admin))
 
 
+class LooseEngagementTests(unittest.TestCase):
+    """没绑目标时读工具挑哪一个：活着、干着、最近动过的那个。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(os.path.join(self.tmp.name, "loose.db"))
+        self.plane = server.ControlPlane(self.store, WEB_DIR, auth_required=False)
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def _pick(self):
+        return chat._pick_loose_engagement(self.plane,
+                                           self.store.list_engagements())
+
+    def test_it_skips_a_paused_target(self):
+        """暂停的目标是"不要再往这儿写东西"，读它只会让模型对着旧账下结论。"""
+        live = self.store.create_engagement("10.10.10.1", "还在做")["id"]
+        paused = self.store.create_engagement("10.10.10.2", "先放着")["id"]
+        self.store.set_engagement_paused(paused, True)
+        self.assertEqual(live, self._pick())
+
+    def test_it_skips_a_target_whose_goal_is_already_met(self):
+        """做完了的目标不再"正在干活"，把它挑出来等于读一份不动的旧账。"""
+        met = self.store.create_engagement("10.10.10.3", "做完了")["id"]
+        live = self.store.create_engagement("10.10.10.4", "刚开始")["id"]
+        self.store.update_node_state(met, "goal-1", "met")
+        self.assertEqual(live, self._pick())
+
+    def test_it_prefers_the_target_that_moved_most_recently(self):
+        """list_engagements 是按**创建时间**倒序的，最近动过的却是另一个。
+
+        旧写法直接取第一条，于是"别人刚建的目标"成了默认，而它可能是几天没动的。
+        """
+        old = self.store.create_engagement("10.10.10.5", "一直在推")["id"]
+        self.store.create_engagement("10.10.10.6", "刚建、还没动")
+        # 往那个目标上写一条意图：add_node 会推它的 updated_at，
+        # 这正是"最近动过"要读的那一列。
+        self.store.add_node(old, "intent", {"title": "再推一步", "goalId": "goal-1",
+                                            "priority": 5})
+        self.assertEqual(old, self._pick())
+
+    def test_it_falls_back_to_something_rather_than_failing(self):
+        """全都做完了也不报错：读历史总比"什么都没有"好。
+
+        报错的话，一次 list_jobs 就会在会话里抛出来，模型会把它读成
+        "这个工作台是空的"，然后开始重复建目标。
+        """
+        done = self.store.create_engagement("10.10.10.7", "做完了")["id"]
+        self.store.update_node_state(done, "goal-1", "met")
+        self.assertEqual(done, self._pick())
+
+    def test_an_empty_workbench_says_what_to_do_next(self):
+        with self.assertRaises(ValueError) as caught:
+            self._pick()
+        self.assertIn("start_scan", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
