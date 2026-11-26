@@ -8451,6 +8451,21 @@ class PanelsWiringTestCase(unittest.TestCase):
         self.assertNotIn("kvRow(assetList, key,", self._code,
                          "资产类型那一行还在直接印原始键")
 
+    def test_the_active_task_counts_each_finding_once(self):
+        """当前任务卡那一行「发现」要读 `total`，不能把分档明细再加一遍。
+
+        `active.findings` 是 `{total, critical, high, medium, low}` —— 分档是 total 的
+        拆分，不是另外几批。`countOf` 会把整张表加起来，于是真实库里 6 条漏洞在那张卡
+        上印成 12，而同一屏上面那张统计卡写的是 6：同一个数在同一屏里出现两次、两个值，
+        看的人只会以为哪边算错了。有 `total` 就用 `total`。
+        """
+        self.assertIn("kvRow(list, '发现', formatCount(findTotal))", self._code,
+                      "「发现」那一行没有改读 total")
+        self.assertNotIn("kvRow(list, '发现', countOf(", self._code,
+                         "「发现」还在把 total 与分档明细一起加")
+        self.assertIn("activeFindings.total", self._code,
+                      "没有优先取 total，缺了它才该退回分档求和")
+
     def test_the_archived_bucket_has_a_word_on_both_sides(self):
         """`archived` 这一档在界面与后端都要有中文说法。
 

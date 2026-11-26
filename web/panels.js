@@ -128,7 +128,13 @@
       if (active.goal) activeCard.append(el('p', 'muted', '目标：' + active.goal));
       const list = el('div', 'dash-list');
       kvRow(list, '目标达成', formatCount(active.goalsMet || 0) + ' / ' + formatCount(active.goalsTotal || 0));
-      kvRow(list, '发现', countOf(active.findings || {}));
+      // `active.findings` 里**既有 `total` 又有分档明细**（critical / high / medium /
+      // low），`countOf` 会把同一批漏洞加两遍——真实库 6 条在这里印成 12，而同一屏
+      // 上面那张卡写的是 6。有 `total` 就用 `total`，缺了才退回分档求和。
+      const activeFindings = active.findings || {};
+      const findTotal = Number.isFinite(activeFindings.total) ? activeFindings.total
+        : countOf(activeFindings);
+      kvRow(list, '发现', formatCount(findTotal));
       kvRow(list, '在途作业', formatCount(active.inFlight || 0));
       // `runSeconds` 是**秒**（作业 finished_at 减 created_at 的累加），不是毫秒。
       // 走 formatSeconds 而不是 formatDuration：后者吃毫秒，95 秒会被画成「95 ms」。
