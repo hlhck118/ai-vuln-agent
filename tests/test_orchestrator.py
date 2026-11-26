@@ -37,9 +37,12 @@ def _drive(runner):
 class FakeSpawn:
     """假 `subagent.spawn`：记账、扣预算、按开关回成功或失败，不碰网络。"""
 
-    def __init__(self, ok=True, charges=1):
+    def __init__(self, ok=True, charges=1, errors=None):
         self.ok = ok
         self.charges = charges
+        # 指定"第几个孩子失败"：批量派活里失败的那一条要单独标 blocked，
+        # 全都成功或全都失败都验证不到这个分支。
+        self.errors = dict(errors or {})
         self.roles = []
         self.objectives = []
         self.budgets = []
@@ -51,25 +54,42 @@ class FakeSpawn:
         budget = kwargs["budget"]
         self.budgets.append(budget)
         self.arguments.append(dict(kwargs))
+        # **一个 spec 一个孩子**。真 spawn 就是这么回的，而这里曾经不管
+        # 传进来几条都只回一条 —— 那样一来，按 spec 逐条对齐孩子的调用方
+        # （work_batch 的 zip）在夹具下永远只验证得到第一条，
+        # 而"派了两条却只落一条"这种错会安静地躲过所有断言。
+        total = max(1, len(specs))
         ok = self.ok
         charges = max(0, int(self.charges))
+        children = []
+        for index in range(total):
+            role = specs[index].role if index < len(specs) else ""
+            errors = self.errors
+            child_ok = ok if index + 1 not in errors else False
+            children.append({"index": index + 1, "role": role, "ok": child_ok,
+                             "steps": charges, "durationMs": 12,
+                             "summary": "结论" if child_ok else "",
+                             "evidence": "证据" if child_ok else "",
+                             "error": "" if child_ok
+                                      else (errors.get(index + 1) or "子智能体超时")})
 
         def generator():
-            for _ in range(charges):
-                budget.take()
-            role = specs[0].role if specs else ""
-            yield {"type": "subagent", "phase": "start", "index": 1, "total": 1,
-                   "role": role}
-            yield {"type": "subagent", "phase": "done", "index": 1, "total": 1,
-                   "role": role, "ok": ok, "summary": "结论"}
-            child = {"index": 1, "role": role, "ok": ok, "steps": charges,
-                     "durationMs": 12, "summary": "结论" if ok else "",
-                     "evidence": "证据" if ok else "",
-                     "error": "" if ok else "子智能体超时"}
-            return {"ok": ok, "summary": "汇总", "spawned": 1,
-                    "succeeded": 1 if ok else 0, "failed": 0 if ok else 1,
-                    "concurrency": 1, "budget": budget.public(),
-                    "children": [child]}
+            # 每个孩子各自扣自己那 share 的账：不带 index 的 take 会全部记在
+            # 第 0 个槽上，共享预算里「谁花掉了额度」就分不清了。
+            for index in range(total):
+                for _ in range(charges):
+                    budget.take(index + 1)
+            for child in children:
+                yield {"type": "subagent", "phase": "start", "index": child["index"],
+                       "total": total, "role": child["role"]}
+                yield {"type": "subagent", "phase": "done", "index": child["index"],
+                       "total": total, "role": child["role"], "ok": child["ok"],
+                       "summary": child["summary"]}
+            failed = [child for child in children if not child["ok"]]
+            return {"ok": not failed, "summary": "汇总", "spawned": total,
+                    "succeeded": total - len(failed), "failed": len(failed),
+                    "concurrency": total, "budget": budget.public(),
+                    "children": children}
 
         return generator()
 
@@ -448,6 +468,121 @@ class TickTests(_Case):
                                    engagement_id=self.eid)
         self.assertEqual(1, report["planned"])
 
+    def test_tick_takes_the_task_worker_count_as_how_many_run_at_once(self):
+        """任务行上配的并发数，后台必须认。
+
+        那个列此前只被任务面读写（建任务、改任务、行上显示），编排侧一次都没
+        读过——于是界面上写着 3，实际永远一条一条跑，而"为什么我的任务这么慢"
+        在那条链路上查不出来：库里那个数看着是对的。
+        """
+        for index in range(3):
+            self._intent("第 %d 件" % (index + 1), priority=index)
+        self._use_model()
+        self._rewind()
+        self.store.update_task(self.eid, {"workerCount": 3})
+        report = orchestrator.tick(self.plane, max_workers=1,
+                                   engagement_id=self.eid)
+        self.assertEqual(3, report["worked"], "配了 3 并发却只跑了一条")
+        # 三条意图各成一个 spec、**同一次 spawn 里一起派**：分三次 spawn 也对，
+        # 但那不是这里要的（那等于串行三次，只是没等前一次跑完）。
+        # 只看"执行"那一批：这一拍末尾还会规划一次（那是另一条路）。
+        batches = [roles for roles in self.spawn.roles if roles[0] == "执行"]
+        self.assertEqual([["执行"] * 3], batches)
+        self.assertEqual(3, len(self.spawn.objectives[0]))
+        self.assertEqual(3, len(set(self.spawn.objectives[0])), "三条意图派成了同一个活")
+
+    def test_a_task_worker_count_of_one_stays_on_the_serial_path(self):
+        """1 是默认值，语义是"一次一条"，不该被当成"没配"而走批量那条路。
+
+        两条路的分界要是写成 >= 1，串行那条就永远走不到了；而串行与批量的
+        差别不只是快慢——串行一次只领一条，规划器下一拍看到的是"剩下的还在队列里"。
+        """
+        for index in range(3):
+            self._intent("第 %d 件" % (index + 1), priority=index)
+        self._use_model()
+        self._rewind()
+        self.store.update_task(self.eid, {"workerCount": 1})
+        report = orchestrator.tick(self.plane, max_workers=1,
+                                   engagement_id=self.eid)
+        self.assertEqual(1, report["worked"])
+        self.assertEqual([["执行"]],
+                         [roles for roles in self.spawn.roles if roles[0] == "执行"])
+
+
+class BatchWorkTests(_Case):
+    """一次领 N 条一起派：并行不是把同一条活派三次。"""
+
+    def setUp(self):
+        super().setUp()
+        self._use_model()
+
+    def test_work_batch_claims_one_intent_per_route(self):
+        first = self._intent("先看后台", priority=9)
+        second = self._intent("再试弱口令", priority=8)
+        results = orchestrator.work_batch(
+            self.plane, self.eid, routes=2, profile={"model": "fake-1"},
+            api_key="k", policy_id="full")
+        self.assertEqual(2, len(results))
+        self.assertEqual({first["id"], second["id"]},
+                         {item["intentId"] for item in results})
+        self.assertEqual(2, len(self.spawn.objectives[0]),
+                         "两条路由只派了一个子智能体")
+        self.assertIn(first["id"], self.spawn.objectives[0][0])
+        self.assertIn(second["id"], self.spawn.objectives[0][1])
+
+    def test_every_batched_intent_leaves_the_queue_with_its_own_state(self):
+        """成与败都各有各的落点：一条失败不能把别的那条也算成做完。
+
+        批量最容易写错的地方就是"按整批一个结果记"——那会让一条走不通的意图
+        在库里显示 done，而它其实什么都没产出。
+        """
+        self._intent("能走通", priority=9)
+        self._intent("走不通", priority=8)
+        self.spawn.errors = {2: "子智能体超时"}
+        results = orchestrator.work_batch(
+            self.plane, self.eid, routes=2, profile={"model": "fake-1"},
+            api_key="k", policy_id="full")
+        self.assertEqual([True, False], [item["ok"] for item in results])
+        self.assertEqual([], self.store.frontier(self.eid),
+                         "领出来的意图必须离开 frontier，不能等下一拍再领一次")
+        nodes = self.store.list_nodes(self.eid, kind="intent")
+        states = sorted(node["state"] for node in nodes)
+        self.assertEqual(["blocked", "done"], states,
+                         "一条失败应该标 blocked，另一条标 done")
+
+    def test_work_batch_releases_the_claim_even_when_the_child_fails(self):
+        """认领过的意图要放手。
+
+        不放的话那条意图的 owner 一直挂着，进程重启前谁也再领不动它；
+        而界面上它只是"一条正在跑的意图"，看起来完全正常。
+        """
+        intent = self._intent("一")
+        self.spawn.errors = {1: "子智能体超时"}
+        orchestrator.work_batch(self.plane, self.eid, routes=1,
+                                profile={"model": "fake-1"}, api_key="k",
+                                policy_id="full")
+        node = self.store.get_node(self.eid, intent["id"])
+        self.assertEqual("", node.get("owner") or "")
+
+    def test_work_batch_spreads_the_budget_across_the_specs(self):
+        """预算按条数放大，不是几条共用一份。
+
+        不放大时三条意图挤在一份额度里：第一条跑满、后两条连开头都开不了，
+        症状是"并行之后反而更慢了"——因为后两条是空转的。
+        """
+        for index in range(3):
+            self._intent("第 %d 件" % (index + 1), priority=index)
+        results = orchestrator.work_batch(
+            self.plane, self.eid, routes=3, profile={"model": "fake-1"},
+            api_key="k", policy_id="full", budget=4)
+        self.assertEqual(12, self.spawn.budgets[0].limit)
+        self.assertEqual(3, sum(item["charged"] for item in results))
+
+    def test_work_batch_returns_nothing_when_the_queue_is_empty(self):
+        self.assertEqual([], orchestrator.work_batch(
+            self.plane, self.eid, routes=4, profile={"model": "fake-1"},
+            api_key="k", policy_id="full"))
+        self.assertEqual([], self.spawn.roles, "队列空时不该派子智能体")
 
 class RunTests(_Case):
     """对话里点"推进编排"：事件、预算与失败口径。"""
