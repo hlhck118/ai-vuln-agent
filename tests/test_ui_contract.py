@@ -5268,6 +5268,76 @@ class ChatSidebarAndGlobalGraphTestCase(unittest.TestCase):
         body = self._graph_fn("renderNodeDetail")
         self.assertIn("EDGE_SORT_ORDER", body, "renderNodeDetail 没按这张表排")
         self.assertIn(".sort(", body, "关联边没有排序，仍按数据到达顺序")
+
+    # -------------------------------- 第14轮：缩放的锚点 / 整幅档的降级
+
+    def test_the_zoom_button_anchors_on_the_content_not_the_screen(self):
+        """加号/减号的锚点要落在**这一屏真有的内容**上。
+
+        真实库那张链路布局是 2960×29316：178 张卡只占 `x` 从 251 到 316 的 65 个
+        屏幕像素。锚点钉在屏幕中心时，放大一次就按比例把这条竖条推出画布，第三下
+        整屏空白，`visibleUserRect` 顺手把 178 张卡全裁掉——看上去像「图整个没了」。
+        滚轮缩放不走这条路（锚点就是光标），只有按钮需要自己找参照物。
+        """
+        body = self._graph_fn("zoomByFactor")
+        self.assertIn("visibleContentCenter(", body, "缩放按钮又锚回屏幕中心了")
+        self.assertIn("toUserSpace(", body, "锚点没换算成用户坐标：缩放会绕着屏幕左上角转")
+        self.assertIn("zoomAt(", body, "没走那条共用的缩放：与滚轮各算一套")
+
+        center = self._graph_fn("visibleContentCenter")
+        self.assertIn("graphNodePoints()", center, "可见内容中心没从卡片坐标算")
+        self.assertIn("isFinite(", center, "一张卡都不在屏内时没有回退")
+
+    def test_a_card_too_small_on_screen_drops_its_text(self):
+        """缩到整幅时卡上只剩底色与描边。
+
+        178 张卡的时候每张卡要十几个路径加三五次量字；缩到整幅时那些字只有两三个
+        像素高，画上去只是一团糊。省掉它们，人看到的仍是「这里有一张卡、什么类型、
+        选没选中」——正好是缩到这么小还读得出的全部信息。放大过门槛就一张不差地画
+        回来，所以它不是「简版模式」，只是一层按像素尺寸的事实判定。
+        """
+        body = self._graph_fn("drawNodeCard")
+        self.assertIn("GRAPH_CARD_PX", body, "卡片的像素宽度门槛没接到降级判定上")
+        self.assertIn("graphIndex.k", body, "降级判定没读这一帧的缩放：整幅档下永远画字")
+        self.assertIn("if (!detail)", body, "没有提前收工的分岔")
+        self.assertLess(body.index("if (!detail)"), body.index("ctx.clip()"),
+                        "降级收工在裁剪之后：那一段已经白画了")
+
+        paint = self._graph_fn("paintGraph")
+        self.assertIn("graphIndex.k = k || 0;", paint,
+                      "paintGraph 没留下这一帧的比例：卡片读不到缩放倍数")
+
+    def test_the_arrow_and_the_edge_label_drop_out_when_they_shrink(self):
+        """箭头与边标签缩到看不见的尺寸就不再画；箭头也不再进出一次状态。
+
+        一条边一个箭头，一两百条边就是一两百次 `save` / `translate` / `rotate` /
+        `restore`，而这里要的自始至终只是一次 cos/sin 的乘法，三角形还是同一个。
+        """
+        arrow = self._graph_fn("drawArrow")
+        self.assertNotIn("ctx.save()", arrow, "箭头又回到 save/restore 里算：每条边四次状态进出")
+        self.assertNotIn("ctx.translate(", arrow, "箭头又靠 translate 定位")
+        self.assertNotIn("ctx.rotate(", arrow, "箭头又靠 rotate 转向")
+        self.assertIn("Math.cos(angle)", arrow, "三个角没自己转")
+
+        render = self._graph_fn("drawEdges")
+        self.assertIn("GRAPH_ARROW_MIN_PX", render, "箭头没有屏幕尺寸门槛")
+        self.assertIn("GRAPH_EDGE_LABEL_MIN_PX", render, "边标签没有屏幕尺寸门槛")
+
+    def test_the_badge_and_the_chip_measure_through_the_cache(self):
+        """状态徽章与优先级胶囊的字宽走缓存：同一段字每帧量的都是同一个答案。
+
+        它们的位置靠自己的字宽算，所以每帧都要量一次，而内容与字体在主题不变时一个字
+        都不会变——178 张卡就是每帧 356 次 `measureText`，全花在同一个答案上。
+        """
+        body = self._graph_fn("drawNodeCard")
+        self.assertIn("textWidth(ctx, chipText)", body, "优先级胶囊还在直接量字")
+        self.assertIn("textWidth(ctx, stateText)", body, "状态徽章还在直接量字")
+        self.assertNotIn("measureText(", body, "卡上还有漏掉的直接量字")
+
+        measure = self._graph_fn("textWidth")
+        self.assertIn("graphWidthCache", measure, "字宽缓存没接上")
+        self.assertIn("ctx.font", measure, "缓存的键没带字体：换主题会取到旧宽度的字")
+
 class LiveStepBadgeTestCase(unittest.TestCase):
     """气泡上那个步数徽章：报**实际**步数，上限只在它真会拦人时才报。
 

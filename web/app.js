@@ -405,7 +405,22 @@ const graphView = { scale: 1, tx: 0, ty: 0, ceiling: BASE_SCALE * BASE_HEADROOM,
 // `hidden` 是被类型芯片关掉的那些 id，`hoverId` 是光标停在哪张卡上。
 // 原来那些 `*-Items` 是 SVG 元素句柄，画布上一并不存在。
 const graphIndex = { nodes: [], edges: [], boxes: null, neighbors: new Map(), liveIds: null,
-                     hidden: new Set(), hoverId: null, keep: null, minimapSize: null };
+                     hidden: new Set(), hoverId: null, keep: null, minimapSize: null,
+                     // 这一帧可见的用户坐标矩形（见 `paintGraph`）：绘制拿它跳掉框外的卡与边。
+                     // 放大之后屏幕上的卡反而更少，但每张卡占的屏幕像素按平方长——不裁的话
+                     // "看不见的卡照样逐张量字、描边、裁剪"，那是放大后拖动掉帧的主因。
+                     view: null,
+                     // 这一帧「一个用户单位等于多少屏幕像素」（`fit * scale`）。绘制拿它决定
+                     // 一张卡画到哪一层：卡只剩十来个像素宽时，卡上的字画上去是一团糊，
+                     // 扔掉它换来的是整幅档也拖得动（见 `GRAPH_CARD_PX` 与 `drawNodeCard`）。
+                     k: 0,
+                     // 缩略图里那块 svg 的位置与尺寸（相对缩略图这张卡）。它由 CSS 定死
+                     // （180×120 的卡、四周 4px 内缩），布局怎么变都不动，所以量一次就够
+                     // ——见 `minimapGeometry`。
+                     minimapGeom: null,
+                     // 视野框上一次写到 DOM 上的四个值：只写变了的那个（理由见
+                     // `syncMinimapWindow`）。
+                     minimapBox: null }
 
 /* ------------------------------------------------- 5. 错误条与状态栏 ---- */
 let errorTimer = null;
@@ -990,13 +1005,43 @@ function zoomAt(ux, uy, factor) {
   graphView.ty = uy - ratio * (uy - graphView.ty);
   graphView.scale = next;
   graphView.touched = true;
-  paintGraph();
+  // 触控板一次捏合能发几十个 wheel 事件，逐事件重画等于自己在跟自己抢帧。
+  // 与拖动共用一个帧边界：同一帧里连滚十格，画的还是最后那一格。
+  scheduleTransform();
+}
+/** 加号/减号的锚点：**这一屏真有的内容的中心**，而不是屏幕中心。
+ *
+ *  起因是一个真实症状。链路常常是一条又窄又长的竖条：真实库那张布局 2960×29316，
+ *  178 张卡只占 `x` 从 251 到 316 的那 65 个屏幕像素。锚点钉在屏幕中心时，放大
+ *  一次就按比例把这条竖条甩到画布外侧——第一下还剩几个像素，第三下就是整屏空白，
+ *  同时 `visibleUserRect` 把 178 张卡全裁掉，看上去像"图整个没了"。
+ *
+ *  所以先算可见卡的包围盒中心，一张都不在屏内（或量不到画布）才退回屏幕中心：
+ *  那种情况下没有更好的参照物，而缩小键正是把人从空白里带回来的那一颗。
+ *
+ *  滚轮缩放不走这条路——它的锚点就是光标，落点天然在内容上。 */
+function visibleContentCenter(rect) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  graphNodePoints().forEach((point) => {
+    if (point.x < rect.left || point.x > rect.left + rect.width) return;
+    if (point.y < rect.top || point.y > rect.top + rect.height) return;
+    if (point.x < minX) minX = point.x;
+    if (point.x > maxX) maxX = point.x;
+    if (point.y < minY) minY = point.y;
+    if (point.y > maxY) maxY = point.y;
+  });
+  if (!isFinite(minX) || !isFinite(maxX)) return null;
+  if (!isFinite(minY) || !isFinite(maxY)) return null;
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
 }
 function zoomByFactor(factor) {
   const metrics = surfaceMetrics();
   if (!metrics) return;
   const rect = metrics.rect;
-  const point = toUserSpace(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  const anchor = visibleContentCenter(rect);
+  const point = toUserSpace(
+    anchor ? anchor.x : rect.left + rect.width / 2,
+    anchor ? anchor.y : rect.top + rect.height / 2);
   if (point) zoomAt(point.x, point.y, factor);
 }
 /** 适应窗口：整幅可见 = `scale = 1`（`fit` 就是"整幅塞进画布"）。 */
@@ -1157,6 +1202,98 @@ function scheduleTransform() {
  *  跑；画布上同样的效果要每帧整张重绘，350 张卡时那一帧是几十毫秒，会与拖动抢帧。
  *  现在"在跑"这条信息由两处静态表达承担：连向它的边是虚线且更亮，它的图标块带一圈
  *  强调色描边。读得出来，而且不花帧。 */
+/* ---- 一帧要画的东西比屏幕上多得多 ----------------------------------------
+ *
+ *  放大之后**屏幕上的卡反而更少**，但每张卡占的屏幕像素按平方长：一样是 350 张卡，
+ *  6 倍时只有十来张落进视野，可这十来张每张都要铺满一两千像素的边。整张重画却不看
+ *  视野，等于把 340 张看不见的卡也逐张描边、裁剪、量字——放大后拖动掉帧的主因就在
+ *  这里，与"卡变大了"其实是同一件事的两面。
+ *
+ *  所以每帧先算一次**可见的用户坐标矩形**（带一圈余量：拖卡的偏移、卡外的描边与阴影
+ *  都落在框外一点点），绘制时按它跳过。算法与 `toUserSpace` 同源：
+ *  `screen = fit * (scale * u + t)`，屏幕 [0, W] 反解成 u ∈ [-t/s, W/(fit*s) - t/s]。
+ *
+ *  余量取"一张卡"而不是 0：卡是按锚点偏移过的（`pins`），贴边那张的描边、选中光环都
+ *  在框外，裁早了会出现"边缘那张卡闪烁"。多画一张卡的代价远小于闪一下。
+ *
+ *  **但余量必须随缩放在用户坐标里反过来缩**：它是一个卡宽（用户单位 320 ≈ 一张卡），
+ *  而这个余量最终乘上 `k` 才是屏幕像素。放大到 20 倍时，固定的 320 用户单位等于屏幕
+ *  上 6400 像素的余量——一圈比屏幕宽六倍的画布，裁了等于没裁，放大后拖动又回到"每张
+ *  卡都画"。所以这里给的是**屏幕像素**的余量（一张卡的屏幕宽度上限），除以 `k` 换算
+ *  成用户单位：缩小时它撑得住贴边那张卡，放大时它跟着缩回去。 */
+const GRAPH_CULL_PAD_PX = 320;
+const GRAPH_CULL_PAD_MIN = 24;
+/** 一张卡在屏幕上窄到这个宽度（像素）时只画底色与描边，卡上的字全部省掉。
+ *
+ *  这是「整幅档」那一层的降级：178 张卡的时候，每张卡要十几个路径加三五次量字，
+ *  而缩到整幅时那些字只有两三个像素高，画上去是一团糊。省掉它们，人看到的仍然是
+ *  这里有一张卡、它是哪个类型、有没有被选中——正好是缩到这么小还读得出的全部信息。
+ *  放大过这个门槛就一张不差地画回来，所以它不是「简版模式」，只是一层按像素尺寸的
+ *  事实判定。 */
+const GRAPH_CARD_PX = 46;
+/** 箭头的屏幕长度低于这么多像素就不画：缩到整幅时它不到一个像素。 */
+const GRAPH_ARROW_MIN_PX = 6;
+/** 边标签的屏幕字号低于这么多像素就不画（同 GRAPH_CARD_PX 的道理）。 */
+const GRAPH_EDGE_LABEL_MIN_PX = 9;
+/** 这一帧的可见用户坐标矩形（含余量）。量不到画布时返回 null = 不裁。 */
+function visibleUserRect(rect, fit, k) {
+  const scale = graphView.scale || 1;
+  if (!rect || !fit || !k) return null;
+  // 余量：屏幕像素 / k（见上面 `GRAPH_CULL_PAD_PX`）。下限 24 用户单位兜住
+  // "k 极大"那种极端，否则余量会缩到亚像素、贴边那张卡的描边被裁掉一半。
+  const pad = Math.max(GRAPH_CULL_PAD_MIN, GRAPH_CULL_PAD_PX / k);
+  const x0 = -graphView.tx / scale, y0 = -graphView.ty / scale;
+  return { x0: x0 - pad, y0: y0 - pad,
+           x1: x0 + rect.width / k + pad,
+           y1: y0 + rect.height / k + pad };
+}
+/** 框与可见矩形有没有交集。`view` 为 null（量不到画布）时一律算可见。 */
+function boxInView(view, box) {
+  if (!view || !box) return true;
+  return box.x <= view.x1 && box.x + box.w >= view.x0
+      && box.y <= view.y1 && box.y + box.h >= view.y0;
+}
+/** 两端框的并集与可见矩形有没有交集：边会绕到卡外，按并集判比按端点判稳。 */
+function edgeInView(view, from, to) {
+  if (!view || !from || !to) return true;
+  const x0 = Math.min(from.x, to.x), x1 = Math.max(from.x + from.w, to.x + to.w);
+  const y0 = Math.min(from.y, to.y), y1 = Math.max(from.y + from.h, to.y + to.h);
+  return x0 <= view.x1 && x1 >= view.x0 && y0 <= view.y1 && y1 >= view.y0;
+}
+/* ---- 量字与折行的缓存 ----------------------------------------------------
+ *
+ *  `clipText` / `wrapText` 是这张画布上最贵的一段：`clipText` 超宽时逐字回退，每退
+ *  一个字就是一次 `measureText`；`wrapText` 折三行能把同一段摘要量上百次。重画是整
+ *  张的，于是**同一张卡的同一个标题，每帧都被重新量一遍**——内容没变、字宽没变、字号
+ *  也没变（`palette` 按主题缓存），量出来的当然也一样。
+ *
+ *  缓存键是 `ctx.font + 宽度 + 原文`：字体换一套主题就换一个键，所以不需要失效逻辑；
+ *  宽度是卡的内部宽（布局没变就不会变）。两条都带上，同一段文字在标题位与摘要位不会
+ *  互相串用。上限一到整表清空——缓存的是"这一屏的字"，攒到几千条时清一次比按 LRU
+ *  逐条淘汰便宜，也不会漏掉真正在用的那些。 */
+const GRAPH_TEXT_CACHE_MAX = 4000;
+const graphClipCache = new Map();
+const graphWrapCache = new Map();
+const graphWidthCache = new Map();
+function textCacheKey(ctx, text, maxWidth) {
+  return ctx.font + '\u0000' + Math.round(maxWidth) + '\u0000' + text;
+}
+/** 量一段文字的宽度，按 `字体 + 原文` 缓存结果。
+ *
+ *  状态徽章与优先级胶囊每帧都要量一次自己的字宽（位置靠它算），而它们的内容与
+ *  字体在主题不变时一个字都不会变。178 张卡就是每帧 356 次 `measureText`，
+ *  全花在同一个答案上。 */
+function textWidth(ctx, text) {
+  const key = ctx.font + '\u0000' + String(text === null || text === undefined ? '' : text);
+  const hit = graphWidthCache.get(key);
+  if (hit !== undefined) return hit;
+  return cachePut(graphWidthCache, key, ctx.measureText(String(text)).width);
+}
+function cachePut(cache, key, value) {
+  if (cache.size >= GRAPH_TEXT_CACHE_MAX) cache.clear();
+  cache.set(key, value);
+  return value;
+}
 function roundRectPath(ctx, x, y, w, h, r) {
   const radius = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
   ctx.beginPath();
@@ -1172,49 +1309,69 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.quadraticCurveTo(x, y, x + radius, y);
   ctx.closePath();
 }
+/** 二分找"塞得进 `maxWidth` 的最长前缀"，返回字符数（一个都塞不进时返 0）。
+ *
+ *  旧版是从尾往前一个字一个字试的：一段 88 字的摘要量八十来次。字宽随前缀长度单调
+ *  增长，所以可以直接二分——七次就到同一个答案，而答案与逐字试出来的完全一致。 */
+function fitChars(ctx, str, maxWidth, suffix) {
+  let lo = 1, hi = str.length, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (ctx.measureText(str.slice(0, mid) + suffix).width <= maxWidth) { best = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return best;
+}
 /** 按像素宽度截断并补省略号（画布上没有排版引擎替我们折行）。 */
 function clipText(ctx, text, maxWidth) {
   const str = String(text === null || text === undefined ? '' : text);
   if (!str) return '';
-  if (ctx.measureText(str).width <= maxWidth) return str;
-  let cut = str.length;
-  while (cut > 1) {
-    cut -= 1;
-    const candidate = str.slice(0, cut) + '…';
-    if (ctx.measureText(candidate).width <= maxWidth) return candidate;
-  }
-  return '…';
+  // **先查缓存，再量字。** 旧顺序是「量一遍整串、放不下才查缓存」，于是"放得下"的
+  // 标题每帧仍然一次 `measureText`——而重画是整张的，178 张卡就是 178 次白量。
+  // 缓存键里带着 `ctx.font` 与宽度，换主题或换布局自然 miss，所以提前查是安全的；
+  // 命中之后连"放不放得下"都不用再问一遍（"原样返回"也已经缓存下来了）。
+  const key = textCacheKey(ctx, str, maxWidth);
+  const hit = graphClipCache.get(key);
+  if (hit !== undefined) return hit;
+  if (ctx.measureText(str).width <= maxWidth) return cachePut(graphClipCache, key, str);
+  const cut = fitChars(ctx, str, maxWidth, '…');
+  return cachePut(graphClipCache, key, cut > 0 ? str.slice(0, cut) + '…' : '…');
 }
 /** 按宽度折行，最多 `limit` 行，最后一行超出的部分用省略号。 */
 function wrapText(ctx, text, maxWidth, limit) {
   const str = String(text === null || text === undefined ? '' : text);
   if (!str) return [];
+  const key = textCacheKey(ctx, str, maxWidth) + '\u0000' + limit;
+  const hit = graphWrapCache.get(key);
+  if (hit !== undefined) return hit;
   const out = [];
   let rest = str;
   while (rest && out.length < limit) {
     if (ctx.measureText(rest).width <= maxWidth) { out.push(rest); rest = ''; break; }
-    let cut = rest.length;
-    while (cut > 1 && ctx.measureText(rest.slice(0, cut)).width > maxWidth) cut -= 1;
+    // 一个字符都塞不进时仍切一个：切零字会让 `rest` 原地不动，变成死循环
+    // （旧版把 cut 停在 1，正是这个道理）。
+    const cut = Math.max(1, fitChars(ctx, rest, maxWidth, ''));
     out.push(rest.slice(0, cut));
     rest = rest.slice(cut);
   }
   if (rest) out[out.length - 1] = clipText(ctx, out[out.length - 1] + rest, maxWidth);
-  return out;
+  return cachePut(graphWrapCache, key, out);
 }
 /** 箭头：14×14 的闭合三角（照 ARTEX 的 `MarkerType.ArrowClosed, 14`），尖端落在端点。 */
 function drawArrow(ctx, geo) {
   const angle = Math.atan2(geo.y2 - geo.cy2, geo.x2 - geo.cx2);
   if (!isFinite(angle)) return;
-  ctx.save();
-  ctx.translate(geo.x2, geo.y2);
-  ctx.rotate(angle);
+  // 三个角自己转，不走 save/translate/rotate：一条边一个箭头，一两百条边就是
+  // 一两百次状态进出，而这里要的只是一次 cos/sin 的乘法。三角形还是同一个——
+  // 尖端 (0,0)、两翼 (-14,±5)，绕尖端转 `angle` 再平移到端点。
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  const bx = geo.x2 - 14 * cos, by = geo.y2 - 14 * sin;
   ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(-14, -5);
-  ctx.lineTo(-14, 5);
+  ctx.moveTo(geo.x2, geo.y2);
+  ctx.lineTo(bx + 5 * sin, by - 5 * cos);
+  ctx.lineTo(bx - 5 * sin, by + 5 * cos);
   ctx.closePath();
   ctx.fill();
-  ctx.restore();
 }
 /** 画所有边。`graphIndex.keep` 是 hover 时的"相关集"（本人 + 邻居）。 */
 function drawEdges(ctx, palette) {
@@ -1222,12 +1379,17 @@ function drawEdges(ctx, palette) {
   if (!boxes || !edges.length) return;
   const hidden = graphIndex.hidden || new Set();
   const hoverId = graphIndex.hoverId;
+  const view = graphIndex.view;
   edges.forEach((edge) => {
     if (EDGE_HIDDEN_KINDS.indexOf(edge.kind) >= 0) return;
     if (hidden.has(edge.source) || hidden.has(edge.target)) return;
     const from = boxes.get(edge.source), to = boxes.get(edge.target);
     if (!from || !to) return;
-    const geo = edgeGeometry(boxWithPin(from, edge.source), boxWithPin(to, edge.target));
+    const a = boxWithPin(from, edge.source), b = boxWithPin(to, edge.target);
+    // 放大之后大半条边连两端都在框外：算几何、描边、填标签全是白花的
+    // （见 `visibleUserRect` 那段）。按两端框的并集判，回边绕到卡下方也算得到。
+    if (!edgeInView(view, a, b)) return;
+    const geo = edgeGeometry(a, b);
     const kind = EDGE_KINDS.indexOf(edge.kind) >= 0 ? edge.kind : EDGE_FALLBACK_KIND;
     const related = !hoverId || edge.source === hoverId || edge.target === hoverId;
     const live = graphIndex.liveIds && graphIndex.liveIds.has(edge.target);
@@ -1243,9 +1405,12 @@ function drawEdges(ctx, palette) {
     ctx.bezierCurveTo(geo.cx1, geo.cy1, geo.cx2, geo.cy2, geo.x2, geo.y2);
     ctx.stroke();
     ctx.setLineDash([]);
-    drawArrow(ctx, geo);
+    // 箭头占 14 个用户单位。缩到整幅时它不到一个像素：画了看不见，却在吃一次
+    // beginPath / fill，外加三个角的三角函数——一张两百条边的图就是两百次白画。
+    if (GRAPH_ARROW_MIN_PX <= graphIndex.k * 14) drawArrow(ctx, geo);
     // 标签：拖动期间整段跳过（344 条边各描一次边再填一次字，是这一帧最贵的一段）。
-    if (!graphView.dragging && related) {
+    // 缩到整幅时一起跳过：字号乘上 k 只剩几个像素，描边加填字两次都看不见。
+    if (!graphView.dragging && related && GRAPH_EDGE_LABEL_MIN_PX <= graphIndex.k * palette.fsCaption) {
       ctx.globalAlpha = hoverId ? 0.95 : 0.85;
       ctx.font = palette.fsCaption + 'px ' + palette.fontSans;
       ctx.textAlign = 'center';
@@ -1326,6 +1491,9 @@ function drawNodeCard(ctx, palette, node, box) {
   const x = box.x, y = box.y, w = box.w, h = box.h;
   const padX = 11, padY = 9;
   const innerW = w - padX * 2;
+  // 这一帧这张卡在屏幕上有多少像素宽（见 GRAPH_CARD_PX）。整幅档下它是 false，
+  // 于是下面那一整段文字与徽章都不画：省下的是每卡十几个路径与三五次量字。
+  const detail = graphIndex.k * Math.abs(w) >= GRAPH_CARD_PX;
 
   ctx.save();
   // 悬停时无关的卡压暗：整张画布读起来就只剩"这一条链"。
@@ -1352,6 +1520,9 @@ function drawNodeCard(ctx, palette, node, box) {
     ctx.strokeStyle = palette.accent;
     ctx.stroke();
   }
+  // 降级提前收工：底色与描边已经画完（上面那两步），框外那圈选中光环也在。
+  // 这里手上只压着最外层那一次 save（第二层 save 就在下面），所以只 restore 一次。
+  if (!detail) { ctx.restore(); return; }
   ctx.save();
   roundRectPath(ctx, x, y, w, h, 12);
   ctx.clip();
@@ -1389,7 +1560,7 @@ function drawNodeCard(ctx, palette, node, box) {
     const tone = priorityTone(priority);
     ctx.font = '600 ' + palette.fsCaption + 'px ' + palette.fontMono;
     const chipText = 'P' + priority;
-    const chipW = ctx.measureText(chipText).width + 12;
+    const chipW = textWidth(ctx, chipText) + 12;
     const chipH = palette.fsCaption + 6;
     roundRectPath(ctx, x + w - padX - chipW, glyphY - 1, chipW, chipH, 6);
     ctx.fillStyle = palette.prioBg[tone] || palette.border;
@@ -1434,7 +1605,7 @@ function drawNodeCard(ctx, palette, node, box) {
   }
   if (stateText) {
     ctx.font = '600 ' + palette.fsCaption + 'px ' + palette.fontSans;
-    const badgeW = ctx.measureText(stateText).width + 14;
+    const badgeW = textWidth(ctx, stateText) + 14;
     roundRectPath(ctx, x + padX, footY, badgeW, footH, footH / 2);
     ctx.fillStyle = palette.stateBg[stateName] || palette.border;
     ctx.fill();
@@ -1457,10 +1628,14 @@ function drawNodes(ctx, palette) {
   const boxes = graphIndex.boxes, nodes = graphIndex.nodes || [];
   if (!boxes) return;
   const hidden = graphIndex.hidden || new Set();
+  const view = graphIndex.view;
   nodes.forEach((node) => {
     if (hidden.has(node.id)) return;
     const box = boxWithPin(boxes.get(node.id), node.id);
     if (!box) return;
+    // 框外的卡不画：一张卡是十几个路径 + 三到五次量字（`drawNodeCard`），
+    // 放大后它们全在屏幕外，画了也看不见。
+    if (!boxInView(view, box)) return;
     drawNodeCard(ctx, palette, node, box);
   });
 }
@@ -1472,17 +1647,20 @@ function drawNodes(ctx, palette) {
 function paintGraph() {
   const surface = $('#graph-surface');
   if (!surface || surface.classList.contains('hidden')) { syncMinimapWindow(); return; }
-  const rect = surface.getBoundingClientRect();
-  const width = Number(surface.dataset.width) || 0, height = Number(surface.dataset.height) || 0;
-  if (!rect.width || !rect.height || !width || !height) { syncMinimapWindow(); return; }
+  // 画布读数只量这一次：`surfaceMetrics` 就是"画布元素 + 它的矩形 + fit/k"那一步，
+  // 命中测试、拖动、缩略图全都吃它，重画不该自己再量一遍。量不到（页签还没露出来）
+  // 时返回 null，与原来那两条早退同义。
+  const metrics = surfaceMetrics();
+  if (!metrics) { syncMinimapWindow(); return; }
+  const rect = metrics.rect, width = metrics.width, height = metrics.height;
   const dpr = window.devicePixelRatio || 1;
   const pxW = Math.max(1, Math.round(rect.width * dpr)), pxH = Math.max(1, Math.round(rect.height * dpr));
   if (surface.width !== pxW) surface.width = pxW;
   if (surface.height !== pxH) surface.height = pxH;
   const ctx = surface.getContext('2d');
   if (!ctx) return;
-  const fit = Math.min(rect.width / width, rect.height / height);
-  const k = fit * graphView.scale;
+  const fit = metrics.fit;
+  const k = metrics.k;
   const palette = graphPalette();
   // hover 的"相关集"：本人 + 直接邻居。边与卡都读它，不必各自再查一遍。
   const keep = new Set();
@@ -1491,6 +1669,12 @@ function paintGraph() {
     (graphIndex.neighbors.get(graphIndex.hoverId) || new Set()).forEach((id) => keep.add(id));
   }
   graphIndex.keep = keep;
+  // 这一帧可见的用户坐标矩形：绘制按它跳过框外的卡与边（理由见 `visibleUserRect`）。
+  // 算在这里而不是绘制函数里，是因为三个绘制函数要用同一份，而 `rect`/`fit`/`k`
+  // 只在这一次重画里有效——视角一动它们就全变了。
+  graphIndex.view = visibleUserRect(rect, fit, k);
+  // 同一帧的"用户单位 → 屏幕像素"。卡与箭头拿它判自己画到哪一层，与上面那个矩形同源。
+  graphIndex.k = k || 0;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, pxW, pxH);
   ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * fit * graphView.tx, dpr * fit * graphView.ty);
@@ -1498,7 +1682,9 @@ function paintGraph() {
   drawNodes(ctx, palette);
   drawLinkBand(ctx, palette);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  syncMinimapWindow();
+  // 把这一帧量到的读数带过去：视野框要的正是同一个矩形与 `fit`（理由见
+  // `syncMinimapWindow`）。
+  syncMinimapWindow(metrics);
 }
 /** `paintGraph` 的旧名字：`applyTransform` 是"把视角写出去"的那一步，而画布上写视角
  *  与重画是同一件事。留着这个薄封装是为了让 `loadGraph` / 心跳那条路径读起来不变。 */
@@ -1614,34 +1800,82 @@ function renderMinimap(nodes, boxes, width, height) {
   });
   graphIndex.minimapSize = { width, height };
 }
+/** 缩略图里那块 svg 相对缩略图卡的位置与尺寸——**量一次就够**。
+ *
+ *  这块几何全由 CSS 定死：卡是 180×120 的绝对定位块，svg 是 `top/left: 4px` +
+ *  `width/height: calc(100% - 8px)`。画布怎么缩放、分栏怎么拖、窗口怎么变，这两条
+ *  规则里的数字一个都不动——变的只是"卡在屏幕上的哪儿"，而那个偏移由
+ *  `left - hRect.left` 算出来，正好抵消。
+ *
+ *  之所以要缓存：`syncMinimapWindow` 跟着**每一帧**重画跑，而它原来每帧现量三次
+ *  （画布、svg、缩略图卡）。`getBoundingClientRect()` 紧跟在上一次写样式之后等于当场
+ *  把布局做完，一帧三次就是三倍代价，而三次里量到的相对几何从来没变过。
+ *
+ *  失效条件只有"缩略图卡尺寸变了"（改 CSS、换主题、窗口缩小到让 `calc` 算出别的值）。
+ *  那种情况下 `width/height` 会变，按它自己校验一次即可；位置偏移不缓存，
+ *  每次都从卡与 svg 的**当前**矩形里取（那一次不强制布局，因为这两次读都在同一帧内
+ *  且中间没有写样式）。 */
+function minimapGeometry(svg, host, rect) {
+  if (!svg || !host) return null;
+  const cached = graphIndex.minimapGeom;
+  // 缓存键是**画布的尺寸**，不是缩略图自己的矩形：缩略图钉在画布右下角
+  // （`right:10px; bottom:10px`），画布一变它才可能变，画布内平移缩放它一动都不动。
+  //  这一条是"每秒若干次强制布局"的根：缩略图视野框每帧都写 left/top/width/height，
+  //  而写样式会让那一帧的布局失效；下一帧开头再 `getBoundingClientRect()` 就等于
+  //  当场把布局做一遍（正是拖动路径里被清掉的那个代价，只是换了个地方）。按画布尺寸
+  //  当键之后，平移缩放期间这一次读整个消失，只剩画布变宽变窄时才量。
+  if (cached && rect && cached.canvasW === rect.width && cached.canvasH === rect.height) {
+    return cached.geom;
+  }
+  const sRect = svg.getBoundingClientRect();
+  const hRect = host.getBoundingClientRect();
+  if (!sRect.width || !sRect.height || !hRect.width || !hRect.height) return null;
+  const geom = { width: sRect.width, height: sRect.height,
+                 left: sRect.left - hRect.left, top: sRect.top - hRect.top };
+  graphIndex.minimapGeom = { canvasW: rect ? rect.width : 0, canvasH: rect ? rect.height : 0, geom };
+  return geom;
+}
 /** 缩略图上的视野框：把当前视角换算成缩略图里的一个矩形。
  *
  *  三套坐标要对齐：**缩略图元素**（180×120 的卡里 inset 4px）、它按 `xMidYMid meet`
  *  装 viewBox 后的实际画布（`fit`）、主画布的屏幕像素。任何一步漏了都会让框偏小或
- *  偏在角落（漏 `fit` 时框只有真实的四成；漏主画布的 `fit` 时框不随缩放变）。 */
-function syncMinimapWindow() {
-  const mask = $('#minimap-window'), canvas = $('#graph-canvas'), svg = $('#minimap-svg');
+ *  偏在角落（漏 `fit` 时框只有真实的四成；漏主画布的 `fit` 时框不随缩放变）。
+ *
+ *  `metrics` 是 `paintGraph` 那一帧已经量好的画布读数（矩形 + `fit`）：传进来就不必
+ *  再量一次，而重画是每一帧都跑的。 */
+function syncMinimapWindow(metrics) {
+  const mask = $('#minimap-window'), svg = $('#minimap-svg');
   const size = graphIndex.minimapSize;
-  if (!mask || !canvas || !svg || !size) { if (mask) mask.classList.add('hidden'); return; }
-  const cRect = canvas.getBoundingClientRect();
-  const sRect = svg.getBoundingClientRect();
-  const hRect = mask.parentElement ? mask.parentElement.getBoundingClientRect() : null;
-  if (!cRect.width || !cRect.height || !sRect.width || !sRect.height || !hRect) { mask.classList.add('hidden'); return; }
+  if (!mask || !svg || !size) { if (mask) mask.classList.add('hidden'); return; }
+  // `metrics` 由 `paintGraph` 传进来——它那一帧刚量过画布，这里再量一次等于
+  // 让重画多等一次布局。不传（早期退出那两条路）时现量一次，那两条本来就少见。
+  const m = metrics || surfaceMetrics();
+  const geom = minimapGeometry(svg, mask.parentElement, m ? m.rect : null);
+  if (!m || !geom || !m.rect.width || !m.rect.height) { mask.classList.add('hidden'); return; }
   if (!size.width || !size.height) { mask.classList.add('hidden'); return; }
-  const fit = Math.min(sRect.width / size.width, sRect.height / size.height);
+  const fit = Math.min(geom.width / size.width, geom.height / size.height);
   if (!fit) { mask.classList.add('hidden'); return; }
-  const ox = sRect.left - hRect.left + (sRect.width - size.width * fit) / 2;
-  const oy = sRect.top - hRect.top + (sRect.height - size.height * fit) / 2;
+  const ox = geom.left + (geom.width - size.width * fit) / 2;
+  const oy = geom.top + (geom.height - size.height * fit) / 2;
   // 主画布那层"整幅塞进元素框"的系数：视野宽 = 元素宽 / (scale * 它)。
-  const metrics = surfaceMetrics();
-  const base = metrics ? metrics.fit : 0;
+  const base = m.fit;
   if (!base) { mask.classList.add('hidden'); return; }
   const left = -graphView.tx / graphView.scale, top = -graphView.ty / graphView.scale;
-  const viewW = cRect.width / (graphView.scale * base), viewH = cRect.height / (graphView.scale * base);
-  mask.style.left = (ox + left * fit) + 'px';
-  mask.style.top = (oy + top * fit) + 'px';
-  mask.style.width = (viewW * fit) + 'px';
-  mask.style.height = (viewH * fit) + 'px';
+  const viewW = m.rect.width / (graphView.scale * base), viewH = m.rect.height / (graphView.scale * base);
+  // **只写变了的那个**。写 style 会让布局失效，而布局失效之后下一个读矩形的地方就得
+  // 当场算一遍——拖动时平移量每帧都变、缩放不变，但视野框的宽高那一半是常量；
+  // 反过来放大缩小的时候 left/top 也没变。四个属性里一半是白的，就别写。
+  const box = { left: (ox + left * fit), top: (oy + top * fit), width: (viewW * fit), height: (viewH * fit) };
+  const last = graphIndex.minimapBox;
+  const near = (a, b) => Math.abs(a - b) < 0.5;
+  if (!last || !near(last.left, box.left) || !near(last.top, box.top)
+      || !near(last.width, box.width) || !near(last.height, box.height)) {
+    mask.style.left = box.left + 'px';
+    mask.style.top = box.top + 'px';
+    mask.style.width = box.width + 'px';
+    mask.style.height = box.height + 'px';
+    graphIndex.minimapBox = box;
+  }
   mask.classList.remove('hidden');
 }
 /** 邻接表：hover 时高亮"这一条链"要用（无向，因为读图时两边都算关联）。 */
